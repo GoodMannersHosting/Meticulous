@@ -1,13 +1,26 @@
 //! Security bundle collection and per-job PKI.
 
 use std::process::Command;
+use std::time::Duration;
 
+use if_addrs::IfAddr;
 use met_secrets::pki::{EncryptedEnvelope, HybridDecryption};
 use rand::rngs::OsRng;
-use rcgen::{CertificateParams, KeyPair};
+use rcgen::KeyPair;
+use sysinfo::System;
 use tracing::{debug, warn};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
+
+/// Map Rust target arch names to common CI labels (`amd64` / `arm64`).
+#[must_use]
+pub fn normalize_arch(arch: &str) -> String {
+    match arch {
+        "x86_64" => "amd64".to_string(),
+        "aarch64" => "arm64".to_string(),
+        a => a.to_string(),
+    }
+}
 
 /// Collected security bundle for registration.
 #[derive(Debug)]
@@ -23,6 +36,12 @@ pub struct CollectedSecurityBundle {
     pub container_runtime_version: String,
     pub environment_type: EnvironmentType,
     pub x509_public_key: Vec<u8>,
+    /// Stable machine identifier where available (e.g. Linux machine-id, macOS serial).
+    pub machine_id: String,
+    pub logical_cpus: u32,
+    pub memory_total_bytes: u64,
+    /// Outbound public IP (egress), when discoverable.
+    pub egress_public_ip: String,
 }
 
 /// Environment type.
@@ -54,9 +73,26 @@ impl SecurityBundleCollector {
             .unwrap_or_else(|| "unknown".to_string());
 
         let os = std::env::consts::OS.to_string();
-        let arch = std::env::consts::ARCH.to_string();
+        let arch = normalize_arch(std::env::consts::ARCH);
+        let machine_id = read_machine_id();
         let kernel_version = self.get_kernel_version();
-        let (public_ips, private_ips) = self.get_ip_addresses();
+        let (logical_cpus, memory_total_bytes) = self.sysinfo_resources();
+        let (public_from_iface, mut private_ips) = collect_interface_ips();
+        let egress_public_ip = fetch_egress_public_ip().await;
+
+        let mut public_ips = Vec::new();
+        if !egress_public_ip.is_empty() {
+            public_ips.push(egress_public_ip.clone());
+        }
+        for p in public_from_iface {
+            if !public_ips.contains(&p) {
+                public_ips.push(p);
+            }
+        }
+
+        private_ips.sort();
+        private_ips.dedup();
+
         let ntp_synchronized = self.check_ntp_sync();
         let (container_runtime, container_runtime_version) = self.detect_container_runtime();
         let environment_type = self.detect_environment_type();
@@ -77,7 +113,20 @@ impl SecurityBundleCollector {
             container_runtime_version,
             environment_type,
             x509_public_key,
+            machine_id,
+            logical_cpus,
+            memory_total_bytes,
+            egress_public_ip,
         }
+    }
+
+    fn sysinfo_resources(&self) -> (u32, u64) {
+        let mut sys = System::new();
+        sys.refresh_memory();
+        let memory_total_bytes = sys.total_memory();
+        sys.refresh_cpu_all();
+        let logical_cpus = sys.cpus().len() as u32;
+        (logical_cpus, memory_total_bytes)
     }
 
     /// Get the kernel version.
@@ -101,37 +150,6 @@ impl SecurityBundleCollector {
                 .map(|s| s.trim().to_string())
                 .unwrap_or_default()
         }
-    }
-
-    /// Get IP addresses.
-    fn get_ip_addresses(&self) -> (Vec<String>, Vec<String>) {
-        let mut public_ips = Vec::new();
-        let mut private_ips = Vec::new();
-
-        // Use sysinfo for network interfaces
-        // For now, just try to get the hostname IP
-        if let Ok(addrs) = std::net::ToSocketAddrs::to_socket_addrs(&(
-            hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "localhost".to_string()),
-            0u16,
-        )) {
-            for addr in addrs {
-                let ip = addr.ip();
-                let ip_str = ip.to_string();
-                if ip.is_loopback() {
-                    continue;
-                }
-                if is_private_ip(&ip) {
-                    private_ips.push(ip_str);
-                } else {
-                    public_ips.push(ip_str);
-                }
-            }
-        }
-
-        (public_ips, private_ips)
     }
 
     /// Check if NTP is synchronized.
@@ -243,19 +261,114 @@ impl SecurityBundleCollector {
     }
 }
 
-impl Default for SecurityBundleCollector {
-    fn default() -> Self {
-        Self::new()
+fn read_machine_id() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/etc/machine-id")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        machine_id_macos()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        String::new()
     }
 }
 
-/// Check if an IP address is private.
-fn is_private_ip(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(ipv4) => {
-            ipv4.is_private() || ipv4.is_link_local() || ipv4.is_loopback()
+#[cfg(target_os = "macos")]
+fn machine_id_macos() -> String {
+    Command::new("system_profiler")
+        .args(["SPHardwareDataType"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| {
+            for line in s.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("Serial Number (system):") {
+                    let v = rest.trim();
+                    if !v.is_empty() && v != "Not Available" {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or_default()
+}
+
+fn collect_interface_ips() -> (Vec<String>, Vec<String>) {
+    let mut public = Vec::new();
+    let mut private = Vec::new();
+    let ifs = if_addrs::get_if_addrs().unwrap_or_default();
+    for iface in ifs {
+        let ip = match iface.addr {
+            IfAddr::V4(a) => std::net::IpAddr::V4(a.ip),
+            IfAddr::V6(a) => std::net::IpAddr::V6(a.ip),
+        };
+        if ip.is_loopback() {
+            continue;
         }
-        std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
+        let s = ip.to_string();
+        if is_private_or_local_ip(&ip) {
+            private.push(s);
+        } else {
+            public.push(s);
+        }
+    }
+    public.sort();
+    public.dedup();
+    private.sort();
+    private.dedup();
+    (public, private)
+}
+
+fn is_private_or_local_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local()
+        }
+    }
+}
+
+async fn fetch_egress_public_ip() -> String {
+    let url = std::env::var("MET_AGENT_EGRESS_IP_URL")
+        .unwrap_or_else(|_| "https://api.ipify.org".to_string());
+    if url.is_empty() {
+        return String::new();
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "failed to build HTTP client for egress IP discovery");
+            return String::new();
+        }
+    };
+    match client.get(url).send().await {
+        Ok(resp) => match resp.text().await {
+            Ok(body) => body.trim().to_string(),
+            Err(e) => {
+                warn!(error = %e, "egress IP response body error");
+                String::new()
+            }
+        },
+        Err(e) => {
+            debug!(error = %e, "egress public IP fetch failed (offline or blocked)");
+            String::new()
+        }
+    }
+}
+
+impl Default for SecurityBundleCollector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

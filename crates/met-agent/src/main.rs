@@ -3,17 +3,21 @@
 //! The agent connects to the controller, receives job assignments,
 //! and executes steps in isolated environments.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use dialoguer::{theme::ColorfulTheme, Input, Password};
 use met_agent::backend;
-use met_agent::config::AgentConfig;
+use met_agent::config::{AgentConfig, JoinTokenSource};
 use met_agent::executor::JobExecutor;
 use met_agent::heartbeat::{spawn_heartbeat_loop, HeartbeatState};
 use met_agent::error::AgentError;
-use met_agent::registration::{AgentRegistration, RegistrationSource};
+use met_agent::registration::{
+    registration_needs_join_token, AgentRegistration, RegistrationSource,
+};
 use met_proto::agent::v1::HeartbeatAction;
 use nkeys::KeyPair;
 use tokio::signal;
@@ -24,7 +28,7 @@ use tracing::{error, info, warn};
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
 #[command(
-    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path."
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential."
 )]
 #[command(version)]
 struct Args {
@@ -69,6 +73,10 @@ struct Args {
     /// Ignore cached identity and register again (requires a valid `MET_JOIN_TOKEN`).
     #[arg(long, env = "MET_FORCE_REGISTER")]
     force_register: bool,
+
+    /// Do not write `~/.met/agentconfig.toml` after successful registration (when enrollment used a CLI/env/interactive token).
+    #[arg(long = "no-save-config", env = "MET_AGENT_NO_SAVE_CONFIG")]
+    no_save_config: bool,
 }
 
 #[tokio::main]
@@ -94,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Load configuration
-    let config = AgentConfig::load(
+    let (mut config, mut join_token_source) = AgentConfig::load(
         agent_config_path.as_deref(),
         Some(args.controller_url.clone()),
         args.join_token.clone(),
@@ -103,16 +111,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.tags.clone(),
     )?;
 
+    let force_register = args.force_register
+        || std::env::var("MET_FORCE_REGISTER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+    let no_save_config = args.no_save_config
+        || std::env::var("MET_AGENT_NO_SAVE_CONFIG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+    if registration_needs_join_token(&config, force_register)? {
+        if config.join_token.is_none() {
+            if std::io::stdin().is_terminal() {
+                let theme = ColorfulTheme::default();
+                let url: String = Input::with_theme(&theme)
+                    .with_prompt("Controller gRPC URL")
+                    .default(config.controller_url.clone())
+                    .interact_text()?;
+                config.controller_url = url;
+                let token = Password::with_theme(&theme)
+                    .with_prompt("Join token")
+                    .interact()?;
+                if token.is_empty() {
+                    return Err(AgentError::Config(
+                        "join token cannot be empty".to_string(),
+                    )
+                    .into());
+                }
+                config.join_token = Some(token);
+                let name_opt: String = Input::with_theme(&theme)
+                    .with_prompt("Agent display name (optional, empty to skip)")
+                    .allow_empty(true)
+                    .interact_text()?;
+                if !name_opt.is_empty() {
+                    config.name = Some(name_opt);
+                }
+                let pool_opt: String = Input::with_theme(&theme)
+                    .with_prompt("Agent pool (optional, empty to skip)")
+                    .allow_empty(true)
+                    .interact_text()?;
+                if !pool_opt.is_empty() {
+                    config.pool = Some(pool_opt);
+                }
+                join_token_source = JoinTokenSource::FromInteractive;
+            } else {
+                return Err(AgentError::Config(
+                    "join token required: set MET_JOIN_TOKEN or run in an interactive terminal"
+                        .to_string(),
+                )
+                .into());
+            }
+        }
+    }
+
     // Create shutdown channel (full process exit) and job-pause (drain: stop NATS pulls).
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (job_pause_tx, job_pause_rx) = watch::channel(false);
 
     // Register with controller
     let mut registration = AgentRegistration::new(config.clone()).await?;
-    let force_register = args.force_register
-        || std::env::var("MET_FORCE_REGISTER")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
 
     let (identity, registration_source) = match registration.register_or_load(force_register).await {
         Ok(pair) => pair,
@@ -137,6 +195,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nats_subjects = ?identity.nats_subjects,
                 "registered with controller and saved identity"
             );
+        }
+    }
+
+    if registration_source == RegistrationSource::RegisteredWithController
+        && join_token_source.should_persist_registration_config()
+        && !no_save_config
+    {
+        match config.write_user_registration_file() {
+            Ok(path) => info!(path = %path.display(), "saved registration config for future runs"),
+            Err(e) => warn!(error = %e, "failed to save registration config"),
         }
     }
 
@@ -207,6 +275,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match action {
                     Some(HeartbeatAction::Drain) => {
                         info!("received DRAIN command, no longer accepting new jobs from NATS");
+                    }
+                    Some(HeartbeatAction::Resume) => {
+                        info!("received RESUME command, accepting new jobs from NATS again");
                     }
                     Some(HeartbeatAction::Terminate) => {
                         warn!("received TERMINATE command, shutting down immediately");

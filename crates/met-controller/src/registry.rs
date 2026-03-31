@@ -53,7 +53,9 @@ pub struct ResourceSnapshot {
 /// Build in-memory state from a persisted [`Agent`] row (e.g. after controller restart).
 #[must_use]
 pub fn agent_state_from_db_row(agent: &Agent) -> AgentState {
-    let pool_tags = if let Some(ref p) = agent.pool {
+    let pool_tags = if !agent.pool_tags.is_empty() {
+        agent.pool_tags.clone()
+    } else if let Some(ref p) = agent.pool {
         vec![p.clone()]
     } else {
         vec!["_default".to_string()]

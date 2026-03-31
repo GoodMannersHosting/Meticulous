@@ -51,6 +51,14 @@ message SecurityBundle {
     EnvironmentType environment_type = 10;
     // Agent's long-term X509 public key for identity.
     bytes agent_x509_public_key = 11;
+    // Stable machine identifier (e.g. Linux /etc/machine-id, macOS hardware serial).
+    string machine_id = 12;
+    // Logical CPU count (vCPUs visible to the agent).
+    uint32 logical_cpus = 13;
+    // Total physical memory in bytes.
+    uint64 memory_total_bytes = 14;
+    // Outbound (egress) public IPv4/IPv6 as seen by an external service, when discoverable.
+    string egress_public_ip = 15;
 }
 
 // Type of execution environment.

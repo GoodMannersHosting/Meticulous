@@ -21,7 +21,6 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -29,7 +28,9 @@ mod tests {
     use met_agent::backend::{default_backend, ExecutionBackend, NativeBackend, StepSpec};
     use met_agent::config::{AgentConfig, AgentIdentity};
     use met_agent::heartbeat::HeartbeatState;
-    use met_agent::security::{CollectedSecurityBundle, EnvironmentType, JobPki, SecurityBundleCollector};
+    use met_agent::security::{
+        normalize_arch, EnvironmentType, JobPki, SecurityBundleCollector,
+    };
     use met_proto::AgentStatus;
     use tokio::sync::RwLock;
 
@@ -49,7 +50,10 @@ mod tests {
 
         // Verify OS/arch match Rust constants
         assert_eq!(bundle.os, std::env::consts::OS);
-        assert_eq!(bundle.arch, std::env::consts::ARCH);
+        assert_eq!(
+            bundle.arch,
+            normalize_arch(std::env::consts::ARCH)
+        );
 
         // Verify environment type is set
         assert!(matches!(
@@ -137,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_config_load_with_overrides() {
-        let config = AgentConfig::load(
+        let (config, _) = AgentConfig::load(
             None,
             Some("http://custom:9999".to_string()),
             Some("test-token".to_string()),
@@ -177,7 +181,7 @@ mod tests {
         // Default config should be valid
         assert!(result.is_ok());
 
-        let config = result.unwrap();
+        let (config, _) = result.unwrap();
         assert!(config.concurrency >= 1);
     }
 

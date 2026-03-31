@@ -14,10 +14,22 @@ use crate::error::{ControllerError, Result};
 pub mod subjects {
     use met_core::ids::OrganizationId;
 
-    /// Job dispatch subject pattern.
+    /// Job dispatch subject pattern (pool-wide; avoid multiple JetStream consumers on WorkQueue).
     /// Format: met.jobs.{tenant_id}.{pool_tag}
     pub fn job_dispatch(org_id: OrganizationId, pool_tag: &str) -> String {
         format!("met.jobs.{}.{}", org_id.as_uuid(), pool_tag)
+    }
+
+    /// Dispatch to a specific agent inbox (WorkQueue-safe: one consumer per unique filter).
+    /// Format: met.jobs.{tenant_id}.{pool_tag}.{agent_id}
+    pub fn job_dispatch_to_agent(org_id: OrganizationId, pool_tag: &str, agent_id: &str) -> String {
+        format!("met.jobs.{}.{}.{}", org_id.as_uuid(), pool_tag, agent_id)
+    }
+
+    /// Pull consumer filter: all pool tags for this agent (`*` = single subject token).
+    /// Format: met.jobs.{tenant_id}.*.{agent_id}
+    pub fn job_inbox_filter(org_id: OrganizationId, agent_id: &str) -> String {
+        format!("met.jobs.{}.*.{}", org_id.as_uuid(), agent_id)
     }
 
     /// Default pool job dispatch subject.
@@ -153,13 +165,15 @@ impl NatsDispatcher {
         &self,
         org_id: OrganizationId,
         pool_tag: &str,
+        agent_id: &str,
         message: &met_proto::controller::v1::JobDispatch,
     ) -> Result<()> {
-        let subject = if pool_tag.is_empty() {
-            subjects::job_dispatch_default(org_id)
+        let pool = if pool_tag.is_empty() {
+            "_default"
         } else {
-            subjects::job_dispatch(org_id, pool_tag)
+            pool_tag
         };
+        let subject = subjects::job_dispatch_to_agent(org_id, pool, agent_id);
 
         let payload = message.encode_to_vec();
 
@@ -217,14 +231,15 @@ impl NatsDispatcher {
         &self,
         org_id: OrganizationId,
         pool_tag: &str,
+        agent_id: &str,
     ) -> Result<PullConsumer> {
         let stream = self.jetstream
             .get_stream(subjects::JOBS_STREAM)
             .await
             .map_err(|e| ControllerError::Nats(e.to_string()))?;
 
-        let consumer_name = format!("pool-{}-{}", org_id.as_uuid(), pool_tag);
-        let filter = subjects::job_dispatch(org_id, pool_tag);
+        let consumer_name = format!("pool-{}-{}-{}", org_id.as_uuid(), pool_tag, agent_id);
+        let filter = subjects::job_dispatch_to_agent(org_id, pool_tag, agent_id);
 
         let config = jetstream::consumer::pull::Config {
             name: Some(consumer_name.clone()),
@@ -292,5 +307,13 @@ mod tests {
 
         let default_subject = subjects::job_dispatch_default(org_id);
         assert!(default_subject.ends_with("._default"));
+
+        let aid = met_core::ids::AgentId::new();
+        let aid_s = aid.to_string();
+        let to_agent = subjects::job_dispatch_to_agent(org_id, "docker", &aid_s);
+        assert!(to_agent.ends_with(&format!(".docker.{}", aid_s)));
+
+        let inbox = subjects::job_inbox_filter(org_id, &aid_s);
+        assert!(inbox.contains(".*."));
     }
 }

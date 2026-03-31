@@ -12,7 +12,7 @@ use crate::error::{ControllerError, Result};
 /// Build a NATS user JWT and NKey seed for an agent, scoped to org job subjects and JetStream APIs.
 pub fn issue_agent_nats_credentials(
     org_id: OrganizationId,
-    pool_tags: &[String],
+    _pool_tags: &[String],
     agent_id: AgentId,
     account_signing_seed: &str,
     issuer_account_pubkey: Option<&str>,
@@ -24,15 +24,15 @@ pub fn issue_agent_nats_credentials(
     let user_kp = KeyPair::new_user();
 
     let org = org_id.as_uuid().to_string();
-    let mut allow_sub: Vec<String> = vec![
+    let agent = agent_id.as_uuid().to_string();
+    let allow_sub: Vec<String> = vec![
         "_INBOX.>".to_string(),
         "$JS.API.>".to_string(),
         "$JS.ACK.>".to_string(),
         format!("met.broadcast.{org}"),
+        // Per-agent job inbox (`*` = pool tag). WorkQueue streams require non-overlapping filters.
+        format!("met.jobs.{org}.*.{agent}"),
     ];
-    for tag in pool_tags {
-        allow_sub.push(format!("met.jobs.{org}.{tag}"));
-    }
 
     let allow_pub = vec![
         "$JS.API.>".to_string(),

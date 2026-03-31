@@ -14,11 +14,12 @@ pub struct AgentRepo<'a> {
 
 /// Columns selected / returned for [`Agent`] (`sqlx::FromRow` must match the row).
 pub(crate) const AGENT_ROW_SELECT: &str = r#"
-    id, org_id, name, status, pool, tags, capabilities, os, arch, version, ip_address,
+    id, org_id, name, status, pool, pool_tags, tags, capabilities, os, arch, version, ip_address,
     max_jobs, running_jobs, last_heartbeat_at, created_at,
     environment_type, kernel_version, public_ips, private_ips, ntp_synchronized,
     container_runtime, container_runtime_version, x509_public_key, join_token_id,
-    jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at
+    jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at,
+    last_security_bundle
 "#;
 
 impl<'a> AgentRepo<'a> {
@@ -33,20 +34,22 @@ impl<'a> AgentRepo<'a> {
         let sql = format!(
             r#"
             INSERT INTO agents (
-                id, org_id, name, status, pool, tags, capabilities, os, arch, version, ip_address,
+                id, org_id, name, status, pool, pool_tags, tags, capabilities, os, arch, version, ip_address,
                 max_jobs, running_jobs, last_heartbeat_at, created_at,
                 environment_type, kernel_version, public_ips, private_ips, ntp_synchronized,
                 container_runtime, container_runtime_version, x509_public_key, join_token_id,
-                jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at
+                jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at,
+                last_security_bundle
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 status = EXCLUDED.status,
                 pool = EXCLUDED.pool,
+                pool_tags = EXCLUDED.pool_tags,
                 tags = EXCLUDED.tags,
                 capabilities = EXCLUDED.capabilities,
                 os = EXCLUDED.os,
@@ -68,7 +71,8 @@ impl<'a> AgentRepo<'a> {
                 jwt_expires_at = EXCLUDED.jwt_expires_at,
                 jwt_renewable = EXCLUDED.jwt_renewable,
                 drain_missed_heartbeats = EXCLUDED.drain_missed_heartbeats,
-                deregistered_at = EXCLUDED.deregistered_at
+                deregistered_at = EXCLUDED.deregistered_at,
+                last_security_bundle = EXCLUDED.last_security_bundle
             RETURNING {AGENT_ROW_SELECT}
             "#,
             AGENT_ROW_SELECT = AGENT_ROW_SELECT
@@ -79,6 +83,7 @@ impl<'a> AgentRepo<'a> {
         .bind(&agent.name)
         .bind(&agent.status)
         .bind(&agent.pool)
+        .bind(&agent.pool_tags)
         .bind(&agent.tags)
         .bind(&agent.capabilities)
         .bind(&agent.os)
@@ -102,6 +107,7 @@ impl<'a> AgentRepo<'a> {
         .bind(agent.jwt_renewable)
         .bind(agent.drain_missed_heartbeats)
         .bind(agent.deregistered_at)
+        .bind(&agent.last_security_bundle)
         .fetch_one(self.pool)
         .await?;
 
@@ -171,6 +177,36 @@ impl<'a> AgentRepo<'a> {
         ))
         .bind(org_id.as_uuid())
         .bind(tags)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(agents)
+    }
+
+    /// List agents that can run a job on the given pool (online, capacity, tag superset, pool membership).
+    pub async fn list_available_for_dispatch(
+        &self,
+        org_id: OrganizationId,
+        pool_tag: &str,
+        tags: &[String],
+    ) -> Result<Vec<Agent>> {
+        let agents = sqlx::query_as::<_, Agent>(&format!(
+            r#"
+            SELECT {AGENT_ROW_SELECT}
+            FROM agents
+            WHERE org_id = $1
+                AND deregistered_at IS NULL
+                AND status IN ('online', 'busy')
+                AND running_jobs < max_jobs
+                AND tags @> $2
+                AND $3::text = ANY(pool_tags)
+            ORDER BY running_jobs ASC, last_heartbeat_at DESC NULLS LAST
+            "#,
+            AGENT_ROW_SELECT = AGENT_ROW_SELECT
+        ))
+        .bind(org_id.as_uuid())
+        .bind(tags)
+        .bind(pool_tag)
         .fetch_all(self.pool)
         .await?;
 
@@ -260,6 +296,9 @@ impl<'a> AgentRepo<'a> {
                     WHEN agents.status = 'draining'::agent_status
                         AND ($3::agent_status IS DISTINCT FROM 'draining'::agent_status)
                         THEN agents.status
+                    WHEN agents.status IN ('online'::agent_status, 'busy'::agent_status)
+                        AND $3::agent_status = 'draining'::agent_status
+                        THEN agents.status
                     ELSE $3::agent_status
                 END,
                 drain_missed_heartbeats = CASE
@@ -267,6 +306,9 @@ impl<'a> AgentRepo<'a> {
                         AND ($3::agent_status IS DISTINCT FROM 'draining'::agent_status)
                         THEN LEAST(agents.drain_missed_heartbeats + 1, 10000)
                     WHEN $3::agent_status = 'draining'::agent_status
+                        THEN 0
+                    WHEN agents.status IN ('online'::agent_status, 'busy'::agent_status)
+                        AND $3::agent_status = 'draining'::agent_status
                         THEN 0
                     ELSE agents.drain_missed_heartbeats
                 END

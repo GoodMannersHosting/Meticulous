@@ -61,14 +61,41 @@ impl JobExecutor {
         }
     }
 
-    /// Run the executor loop.
+    /// Run the executor loop (re-enters NATS pull after drain/resume).
     pub async fn run(mut self, nats_client: async_nats::Client) -> Result<()> {
         info!("starting job executor");
-
-        // Create JetStream context
         let jetstream = async_nats::jetstream::new(nats_client);
 
-        // Get the JOBS stream
+        loop {
+            while *self.job_pause_rx.borrow() {
+                if *self.shutdown_rx.borrow() {
+                    info!("executor shutting down");
+                    return Ok(());
+                }
+                if self.job_pause_rx.changed().await.is_err() {
+                    return Ok(());
+                }
+            }
+
+            if *self.shutdown_rx.borrow() {
+                info!("executor shutting down");
+                return Ok(());
+            }
+
+            self.run_pull_session(&jetstream).await?;
+
+            if *self.shutdown_rx.borrow() {
+                info!("executor shutting down");
+                return Ok(());
+            }
+        }
+    }
+
+    /// One pull-consumer session until drain, shutdown, or stream end.
+    async fn run_pull_session(
+        &mut self,
+        jetstream: &async_nats::jetstream::Context,
+    ) -> Result<()> {
         let stream = match jetstream.get_stream("JOBS").await {
             Ok(s) => s,
             Err(e) => {
@@ -77,8 +104,6 @@ impl JobExecutor {
             }
         };
 
-        // Create a consumer for our subjects
-        // For simplicity, consume from the first subject
         let subject = self
             .identity
             .nats_subjects
@@ -87,23 +112,23 @@ impl JobExecutor {
             .unwrap_or_else(|| "met.jobs.*._default".to_string());
 
         let consumer_name = format!("agent-{}", self.identity.agent_id);
+        let pull_config = async_nats::jetstream::consumer::pull::Config {
+            name: Some(consumer_name.clone()),
+            durable_name: Some(consumer_name.clone()),
+            filter_subject: subject.clone(),
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ack_wait: Duration::from_secs(30),
+            max_deliver: 3,
+            ..Default::default()
+        };
 
         let consumer = stream
-            .create_consumer(async_nats::jetstream::consumer::pull::Config {
-                name: Some(consumer_name.clone()),
-                durable_name: Some(consumer_name),
-                filter_subject: subject.clone(),
-                ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
-                ack_wait: Duration::from_secs(30),
-                max_deliver: 3,
-                ..Default::default()
-            })
+            .get_or_create_consumer(&consumer_name, pull_config)
             .await
             .map_err(|e| AgentError::Nats(e.into()))?;
 
         info!(subject = %subject, "subscribed to job dispatch");
 
-        // Pull messages
         let mut messages = consumer
             .messages()
             .await
@@ -119,22 +144,18 @@ impl JobExecutor {
                 msg = messages.next() => {
                     match msg {
                         Some(Ok(message)) => {
-                            // Parse job dispatch
                             match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref()) {
                                 Ok(job) => {
-                                    // Ack receipt
                                     if let Err(e) = message.ack().await {
                                         warn!(error = %e, "failed to ack message");
                                     }
 
-                                    // Execute job
                                     if let Err(e) = self.execute_job(job).await {
                                         error!(error = %e, "job execution failed");
                                     }
                                 }
                                 Err(e) => {
                                     warn!(error = %e, "failed to decode job dispatch");
-                                    // Ack anyway to prevent redelivery of bad messages
                                     let _ = message.ack().await;
                                 }
                             }
@@ -144,26 +165,24 @@ impl JobExecutor {
                         }
                         None => {
                             info!("message stream ended");
-                            break;
+                            return Ok(());
                         }
                     }
                 }
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
                         info!("executor shutting down");
-                        break;
+                        return Ok(());
                     }
                 }
                 _ = self.job_pause_rx.changed() => {
                     if *self.job_pause_rx.borrow() {
                         info!("draining: stopped pulling new jobs from NATS");
-                        break;
+                        return Ok(());
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Execute a single job.

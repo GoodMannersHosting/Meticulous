@@ -108,6 +108,8 @@ enum HeartbeatAction {
     HEARTBEAT_ACTION_TERMINATE = 3;
     // Apply configuration update.
     HEARTBEAT_ACTION_UPDATE_CONFIG = 4;
+    // Controller cleared drain (e.g. API resume): agent should report ready and pull jobs again.
+    HEARTBEAT_ACTION_RESUME = 5;
 }
 
 // Configuration patch for agent.

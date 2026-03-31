@@ -10,6 +10,7 @@
 		type?: 'button' | 'submit' | 'reset';
 		href?: string;
 		class?: string;
+		title?: string;
 		onclick?: (event: MouseEvent) => void;
 	}
 </script>
@@ -25,6 +26,7 @@
 		type = 'button',
 		href,
 		class: className = '',
+		title,
 		onclick,
 		children
 	}: ButtonProps & { children?: import('svelte').Snippet } = $props();
@@ -85,7 +87,7 @@
 </script>
 
 {#if href && !isDisabled}
-	<a {href} class={classes} aria-disabled={isDisabled}>
+	<a {href} class={classes} aria-disabled={isDisabled} {title}>
 		{#if loading}
 			<Loader2 class="h-4 w-4 animate-spin" aria-hidden="true" />
 		{/if}
@@ -98,6 +100,7 @@
 		disabled={isDisabled}
 		aria-disabled={isDisabled}
 		aria-busy={loading}
+		{title}
 		{onclick}
 	>
 		{#if loading}

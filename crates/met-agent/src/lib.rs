@@ -34,11 +34,11 @@ pub mod process_watcher;
 pub mod registration;
 pub mod security;
 
-pub use config::AgentConfig;
+pub use config::{AgentConfig, JoinTokenSource};
 pub use error::{AgentError, Result};
 pub use executor::JobExecutor;
 pub use process_watcher::{
     compute_file_sha256, merge_execution_metadata, ExecutedBinary, ExecutedBinaryRecord,
     JobExecutionMetadata, ProcessWatcher,
 };
-pub use registration::{AgentRegistration, RegistrationSource};
+pub use registration::{registration_needs_join_token, AgentRegistration, RegistrationSource};

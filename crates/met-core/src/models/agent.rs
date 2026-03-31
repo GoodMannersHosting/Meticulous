@@ -6,6 +6,13 @@ use serde_json::Value as JsonValue;
 
 use crate::ids::{AgentId, AgentPoolId, JoinTokenId, OrganizationId};
 
+/// JSONB column for `agents.last_security_bundle`: SQL `NULL` decodes to `None`.
+/// With `sqlx`, use [`sqlx::types::Json`] so nullable JSONB is supported; without `sqlx`, plain [`JsonValue`].
+#[cfg(feature = "sqlx")]
+pub type LastSecurityBundleSnapshot = sqlx::types::Json<JsonValue>;
+#[cfg(not(feature = "sqlx"))]
+pub type LastSecurityBundleSnapshot = JsonValue;
+
 /// Environment type for an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
@@ -36,6 +43,10 @@ pub struct Agent {
     /// Pool membership (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
+    /// Pools this agent may receive work for (from join token + capabilities).
+    #[serde(default = "default_pool_tags")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub pool_tags: Vec<String>,
     /// Tags for job matching.
     pub tags: Vec<String>,
     /// Agent capabilities (JSON).
@@ -104,10 +115,24 @@ pub struct Agent {
     /// When the agent was deregistered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deregistered_at: Option<DateTime<Utc>>,
+    /// Snapshot of the registration security bundle (audit / debugging).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_security_bundle: Option<LastSecurityBundleSnapshot>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_pool_tags() -> Vec<String> {
+    vec!["_default".to_string()]
+}
+
+/// Wrap registration bundle JSON for persistence (`agents.last_security_bundle`).
+#[cfg(feature = "sqlx")]
+#[must_use]
+pub fn pack_last_security_bundle(v: JsonValue) -> Option<LastSecurityBundleSnapshot> {
+    Some(sqlx::types::Json(v))
 }
 
 impl Agent {
@@ -126,6 +151,7 @@ impl Agent {
             name: name.into(),
             status: AgentStatus::Offline,
             pool: None,
+            pool_tags: default_pool_tags(),
             tags: Vec::new(),
             capabilities: JsonValue::Object(serde_json::Map::new()),
             os: os.into(),
@@ -149,6 +175,7 @@ impl Agent {
             jwt_renewable: true,
             drain_missed_heartbeats: 0,
             deregistered_at: None,
+            last_security_bundle: None,
         }
     }
 

@@ -3,6 +3,7 @@
 use async_nats::jetstream::Context as JetStreamContext;
 use indexmap::IndexMap;
 use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, RunId, StepRunId};
+use met_store::repos::AgentRepo;
 use met_parser::{JobIR, Shell, StepCommand};
 use prost::Message;
 use sqlx::PgPool;
@@ -150,6 +151,17 @@ impl Scheduler {
             .cloned()
             .collect();
 
+        let repo = AgentRepo::new(&self.pool);
+        let candidates = repo
+            .list_available_for_dispatch(ctx.org_id(), &pool_tag, &required_tags)
+            .await?;
+        let Some(chosen) = candidates.first() else {
+            return Err(EngineError::NoAvailableAgents {
+                job: job.name.clone(),
+                tags: required_tags.clone(),
+            });
+        };
+
         let message = self.build_dispatch_message(
             ctx,
             job,
@@ -162,7 +174,12 @@ impl Scheduler {
         run_state.mark_job_queued(&job.id).await;
 
         let proto_message = self.to_proto_message(&message)?;
-        let subject = format!("met.jobs.{}.{}", ctx.org_id().as_uuid(), pool_tag);
+        let subject = format!(
+            "met.jobs.{}.{}.{}",
+            ctx.org_id().as_uuid(),
+            pool_tag,
+            chosen.id
+        );
         let payload = proto_message.encode_to_vec();
 
         debug!(subject = %subject, job = %job.name, "publishing job dispatch");

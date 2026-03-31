@@ -8,6 +8,32 @@ use tracing::info;
 
 use crate::error::{AgentError, Result};
 
+/// Where the effective join token came from (used to decide whether to write `~/.met/agentconfig.toml`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinTokenSource {
+    /// No join token in the merged configuration.
+    None,
+    /// Read from a config file on disk.
+    FromFile(PathBuf),
+    /// Set via `MET_JOIN_TOKEN`.
+    FromEnv,
+    /// Set via CLI (`--join-token`).
+    FromCli,
+    /// Entered interactively at startup.
+    FromInteractive,
+}
+
+impl JoinTokenSource {
+    /// Whether to write `~/.met/agentconfig.toml` after successful registration.
+    #[must_use]
+    pub fn should_persist_registration_config(&self) -> bool {
+        matches!(
+            self,
+            Self::FromCli | Self::FromEnv | Self::FromInteractive
+        )
+    }
+}
+
 /// Agent configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -121,7 +147,7 @@ impl AgentConfig {
         name: Option<String>,
         pool: Option<String>,
         tags: Vec<String>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, JoinTokenSource)> {
         // Start with defaults
         let mut config = Self::default();
 
@@ -129,6 +155,8 @@ impl AgentConfig {
         let config_file = explicit_path
             .clone()
             .or_else(Self::default_config_path);
+
+        let mut loaded_from_path: Option<PathBuf> = None;
 
         if let Some(path) = config_file {
             if explicit_path.as_ref().is_some_and(|p| p == &path) && !path.exists() {
@@ -138,11 +166,17 @@ impl AgentConfig {
                 )));
             }
             if path.exists() {
+                loaded_from_path = Some(path.clone());
                 info!(path = %path.display(), "loading config file");
                 let contents = std::fs::read_to_string(&path)?;
                 config = parse_config_file(&path, &contents)?;
             }
         }
+
+        let env_set_token = std::env::var("MET_JOIN_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_some();
 
         // Apply environment variables
         config.apply_env();
@@ -151,7 +185,7 @@ impl AgentConfig {
         if let Some(url) = controller_url {
             config.controller_url = url;
         }
-        if let Some(token) = join_token {
+        if let Some(token) = join_token.clone() {
             config.join_token = Some(token);
         }
         if let Some(n) = name {
@@ -164,10 +198,86 @@ impl AgentConfig {
             config.pool_tags = tags;
         }
 
+        let join_token_source = if join_token.clone().is_some() {
+            JoinTokenSource::FromCli
+        } else if env_set_token {
+            JoinTokenSource::FromEnv
+        } else if config.join_token.is_some() {
+            loaded_from_path
+                .map(JoinTokenSource::FromFile)
+                .unwrap_or(JoinTokenSource::None)
+        } else {
+            JoinTokenSource::None
+        };
+
         // Validate
         config.validate()?;
 
-        Ok(config)
+        Ok((config, join_token_source))
+    }
+
+    /// Default path for a user-writable registration config (TOML).
+    #[must_use]
+    pub fn user_registration_config_path() -> Option<PathBuf> {
+        directories::BaseDirs::new().map(|b| b.home_dir().join(".met").join("agentconfig.toml"))
+    }
+
+    /// Write the current config (including join token) to [`user_registration_config_path`].
+    ///
+    /// Creates `~/.met` with restrictive permissions on Unix. The file is written with mode `0600`
+    /// on Unix. Does not log secret values.
+    pub fn write_user_registration_file(&self) -> Result<PathBuf> {
+        let path = Self::user_registration_config_path().ok_or_else(|| {
+            AgentError::Config("cannot resolve home directory for agent config".to_string())
+        })?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(AgentError::from)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        #[derive(Serialize)]
+        struct Persisted {
+            controller_url: String,
+            join_token: Option<String>,
+            name: Option<String>,
+            pool: Option<String>,
+            pool_tags: Vec<String>,
+            labels: Vec<String>,
+            concurrency: i32,
+            workspace_dir: PathBuf,
+            log_level: String,
+            tls: TlsConfig,
+        }
+
+        let body = Persisted {
+            controller_url: self.controller_url.clone(),
+            join_token: self.join_token.clone(),
+            name: self.name.clone(),
+            pool: self.pool.clone(),
+            pool_tags: self.pool_tags.clone(),
+            labels: self.labels.clone(),
+            concurrency: self.concurrency,
+            workspace_dir: self.workspace_dir.clone(),
+            log_level: self.log_level.clone(),
+            tls: self.tls.clone(),
+        };
+
+        let toml = toml::to_string_pretty(&body).map_err(|e| AgentError::Config(e.to_string()))?;
+        std::fs::write(&path, toml).map_err(AgentError::from)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(AgentError::from)?;
+        }
+
+        info!(path = %path.display(), "wrote agent registration config");
+        Ok(path)
     }
 
     /// Get the default config file path (first existing).
@@ -353,7 +463,7 @@ mod tests {
     fn load_toml_file() {
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, r#"controller_url = "http://example:9090""#).unwrap();
-        let c = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
+        let (c, _) = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
         assert_eq!(c.controller_url, "http://example:9090");
     }
 
@@ -362,7 +472,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent.yaml");
         std::fs::write(&path, "controller_url: http://yaml:9090\n").unwrap();
-        let c = AgentConfig::load(Some(&path), None, None, None, None, vec![]).unwrap();
+        let (c, _) = AgentConfig::load(Some(&path), None, None, None, None, vec![]).unwrap();
         assert_eq!(c.controller_url, "http://yaml:9090");
     }
 
@@ -370,7 +480,7 @@ mod tests {
     fn load_extensionless_as_yaml() {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(b"controller_url: http://extless:9090\n").unwrap();
-        let c = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
+        let (c, _) = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
         assert_eq!(c.controller_url, "http://extless:9090");
     }
 
@@ -379,7 +489,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.toml");
         std::fs::write(&path, r#"controller_url = "http://from-file:9090""#).unwrap();
-        let c = AgentConfig::load(
+        let (c, _) = AgentConfig::load(
             Some(&path),
             Some("http://from-cli:9090".to_string()),
             None,

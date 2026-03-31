@@ -48,6 +48,8 @@ pub struct AgentResponse {
     #[schema(value_type = String)]
     pub status: AgentStatus,
     pub pool: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pool_tags: Vec<String>,
     pub tags: Vec<String>,
     pub os: String,
     pub arch: String,
@@ -57,17 +59,25 @@ pub struct AgentResponse {
     pub available_capacity: i32,
     pub last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Snapshot of registration-time host / security fields (JSON object).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object)]
+    pub last_security_bundle: Option<serde_json::Value>,
 }
 
 impl From<Agent> for AgentResponse {
     fn from(a: Agent) -> Self {
         let available_capacity = a.max_jobs - a.running_jobs;
+        let last_security_bundle = a
+            .last_security_bundle
+            .map(|j| j.0.clone());
         Self {
             id: a.id,
             org_id: a.org_id,
             name: a.name,
             status: a.status,
             pool: a.pool,
+            pool_tags: a.pool_tags,
             tags: a.tags,
             os: a.os,
             arch: a.arch,
@@ -77,6 +87,7 @@ impl From<Agent> for AgentResponse {
             available_capacity,
             last_heartbeat_at: a.last_heartbeat_at,
             created_at: a.created_at,
+            last_security_bundle,
         }
     }
 }

@@ -99,15 +99,16 @@ async fn insert_agent_tx(
     let sql = format!(
         r#"
             INSERT INTO agents (
-                id, org_id, name, status, pool, tags, capabilities, os, arch, version, ip_address,
+                id, org_id, name, status, pool, pool_tags, tags, capabilities, os, arch, version, ip_address,
                 max_jobs, running_jobs, last_heartbeat_at, created_at,
                 environment_type, kernel_version, public_ips, private_ips, ntp_synchronized,
                 container_runtime, container_runtime_version, x509_public_key, join_token_id,
-                jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at
+                jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at,
+                last_security_bundle
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
             )
             RETURNING {AGENT_ROW_SELECT}
             "#,
@@ -119,6 +120,7 @@ async fn insert_agent_tx(
         .bind(&agent.name)
         .bind(&agent.status)
         .bind(&agent.pool)
+        .bind(&agent.pool_tags)
         .bind(&agent.tags)
         .bind(&agent.capabilities)
         .bind(&agent.os)
@@ -142,6 +144,7 @@ async fn insert_agent_tx(
         .bind(agent.jwt_renewable)
         .bind(agent.drain_missed_heartbeats)
         .bind(agent.deregistered_at)
+        .bind(&agent.last_security_bundle)
         .fetch_one(&mut **tx)
         .await?;
 

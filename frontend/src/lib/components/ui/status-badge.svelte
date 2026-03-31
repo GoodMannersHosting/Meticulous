@@ -11,7 +11,8 @@
 		| 'online'
 		| 'offline'
 		| 'busy'
-		| 'draining';
+		| 'draining'
+		| 'paused';
 
 	export interface StatusBadgeProps {
 		status: StatusType | string;
@@ -109,6 +110,11 @@
 		draining: {
 			bg: 'bg-warning-100 dark:bg-warning-900/30',
 			text: 'text-warning-700 dark:text-warning-400',
+			icon: Power
+		},
+		paused: {
+			bg: 'bg-secondary-100 dark:bg-secondary-800',
+			text: 'text-secondary-700 dark:text-secondary-300',
 			icon: Power
 		}
 	};

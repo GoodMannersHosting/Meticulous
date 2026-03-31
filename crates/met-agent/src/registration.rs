@@ -8,7 +8,34 @@ use tracing::{debug, info, warn};
 
 use crate::config::{AgentConfig, AgentIdentity};
 use crate::error::{AgentError, Result};
-use crate::security::SecurityBundleCollector;
+use crate::security::{normalize_arch, SecurityBundleCollector};
+
+/// Returns `true` if a join token is required to proceed (interactive prompt or env/CLI) before
+/// connecting to the controller.
+pub fn registration_needs_join_token(
+    config: &AgentConfig,
+    force_register: bool,
+) -> Result<bool> {
+    if config.join_token.is_some() {
+        return Ok(false);
+    }
+    if force_register {
+        return Ok(true);
+    }
+    let path = config.identity_path();
+    match AgentIdentity::load(&path)? {
+        None => Ok(true),
+        Some(id) => {
+            if !id.is_jwt_expired() {
+                Ok(false)
+            } else if id.renewable {
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }
+    }
+}
 
 /// How the agent obtained its identity for this run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,7 +130,7 @@ impl AgentRegistration {
         // Build capabilities
         let capabilities = AgentCapabilities {
             os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
+            arch: normalize_arch(std::env::consts::ARCH),
             labels: self.config.labels.clone(),
             pool_tags: self.config.pool_tags.clone(),
         };
@@ -121,6 +148,10 @@ impl AgentRegistration {
             container_runtime_version: bundle.container_runtime_version,
             environment_type: bundle.environment_type as i32,
             agent_x509_public_key: bundle.x509_public_key,
+            machine_id: bundle.machine_id,
+            logical_cpus: bundle.logical_cpus,
+            memory_total_bytes: bundle.memory_total_bytes,
+            egress_public_ip: bundle.egress_public_ip.clone(),
         };
 
         // Send registration request

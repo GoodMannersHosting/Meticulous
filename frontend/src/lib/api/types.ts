@@ -201,6 +201,8 @@ export interface Agent {
 	name: string;
 	status: AgentStatus;
 	pool?: string;
+	/** Pools this agent can receive jobs for (enrollment). */
+	pool_tags?: string[];
 	tags: string[];
 	os: string;
 	arch: string;
@@ -210,6 +212,8 @@ export interface Agent {
 	available_capacity: number;
 	last_heartbeat_at?: string;
 	created_at: string;
+	/** Registration-time host / security snapshot from the agent. */
+	last_security_bundle?: Record<string, unknown> | null;
 }
 
 // Dashboard Stats

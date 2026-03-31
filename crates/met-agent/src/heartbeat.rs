@@ -212,6 +212,16 @@ impl HeartbeatLoop {
             let _ = self.job_pause_tx.send(true);
         }
 
+        if action == HeartbeatAction::Resume {
+            let mut s = self.state.write().await;
+            s.status = if s.running_jobs > 0 {
+                AgentStatus::Busy
+            } else {
+                AgentStatus::Online
+            };
+            let _ = self.job_pause_tx.send(false);
+        }
+
         Ok(action)
     }
 }

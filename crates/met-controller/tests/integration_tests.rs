@@ -244,19 +244,18 @@ mod tests {
             attempt: 1,
         };
 
-        // Dispatch the job
+        let agent_id = AgentId::new().to_string();
+
+        let _consumer = dispatcher
+            .create_job_consumer(org_id, "docker", &agent_id)
+            .await
+            .unwrap();
+
         dispatcher
-            .dispatch_job(org_id, "docker", &job)
+            .dispatch_job(org_id, "docker", &agent_id, &job)
             .await
             .unwrap();
 
-        // Create consumer and verify message
-        let consumer = dispatcher
-            .create_job_consumer(org_id, "docker")
-            .await
-            .unwrap();
-
-        // Close dispatcher
         dispatcher.close().await;
     }
 
@@ -580,14 +579,13 @@ mod tests {
 
         let org_id = OrganizationId::new();
         let pool_tag = "test-pool";
+        let agent_id = AgentId::new().to_string();
 
-        // Create consumer first
-        let consumer = dispatcher
-            .create_job_consumer(org_id, pool_tag)
+        let _consumer = dispatcher
+            .create_job_consumer(org_id, pool_tag, &agent_id)
             .await
             .unwrap();
 
-        // Dispatch a job
         let job = met_proto::controller::v1::JobDispatch {
             job_run_id: uuid::Uuid::new_v4().to_string(),
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -624,12 +622,9 @@ mod tests {
         };
 
         dispatcher
-            .dispatch_job(org_id, pool_tag, &job)
+            .dispatch_job(org_id, pool_tag, &agent_id, &job)
             .await
             .unwrap();
-
-        // The consumer should be able to receive the message
-        // (In a real test, we'd pull and verify)
 
         dispatcher.close().await;
     }
@@ -660,8 +655,8 @@ mod tests {
             .unwrap();
 
         let org_id = OrganizationId::new();
+        let agent_id = AgentId::new().to_string();
 
-        // Dispatch should succeed
         let job = met_proto::controller::v1::JobDispatch {
             job_run_id: "reconnect-test".to_string(),
             run_id: "reconnect-run".to_string(),
@@ -683,7 +678,7 @@ mod tests {
         };
 
         dispatcher
-            .dispatch_job(org_id, "_default", &job)
+            .dispatch_job(org_id, "_default", &agent_id, &job)
             .await
             .unwrap();
 

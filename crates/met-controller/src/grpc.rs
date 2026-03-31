@@ -14,7 +14,7 @@ use met_proto::agent::v1::{
     agent_service_server::AgentService, DeregisterRequest, DeregisterResponse,
     EncryptedSecretValue, HeartbeatAction, HeartbeatRequest, HeartbeatResponse, JobKeyExchange,
     JobSecretsPayload, JobStatusAck, JobStatusUpdate, LogAck, LogChunk, RegisterRequest,
-    RegisterResponse, StepStatusAck, StepStatusUpdate,
+    RegisterResponse, SecurityBundle, StepStatusAck, StepStatusUpdate,
 };
 use met_proto::common::v1::RunStatus as ProtoRunStatus;
 use met_secrets::pki::encryption::HybridEncryption;
@@ -39,6 +39,31 @@ use crate::registry::{agent_state_from_db_row, AgentRegistry, AgentState, Resour
 
 /// After this many heartbeats without the agent reporting `draining` while drain is requested, delete its NATS consumer.
 const DRAIN_FORCE_EJECT_MISSED_HEARTBEATS: i32 = 3;
+
+const MAX_SECURITY_MACHINE_ID_LEN: usize = 256;
+const MAX_SECURITY_EGRESS_IP_LEN: usize = 45;
+const MAX_SECURITY_LOGICAL_CPUS: u32 = 65_536;
+const MAX_SECURITY_MEMORY_BYTES: u64 = 1 << 50;
+
+fn security_bundle_to_json(bundle: &SecurityBundle) -> serde_json::Value {
+    serde_json::json!({
+        "hostname": bundle.hostname,
+        "os": bundle.os,
+        "arch": bundle.arch,
+        "kernel_version": bundle.kernel_version,
+        "public_ips": bundle.public_ips,
+        "private_ips": bundle.private_ips,
+        "ntp_synchronized": bundle.ntp_synchronized,
+        "container_runtime": bundle.container_runtime,
+        "container_runtime_version": bundle.container_runtime_version,
+        "environment_type": bundle.environment_type,
+        "agent_x509_public_key_hex": hex::encode(&bundle.agent_x509_public_key),
+        "machine_id": bundle.machine_id,
+        "logical_cpus": bundle.logical_cpus,
+        "memory_total_bytes": bundle.memory_total_bytes,
+        "egress_public_ip": bundle.egress_public_ip,
+    })
+}
 
 /// gRPC implementation of the AgentService.
 pub struct AgentServiceImpl {
@@ -103,7 +128,7 @@ impl AgentServiceImpl {
     /// Validate the security bundle from the agent.
     fn validate_security_bundle(
         &self,
-        bundle: &met_proto::agent::v1::SecurityBundle,
+        bundle: &SecurityBundle,
     ) -> Result<(), ControllerError> {
         // Check NTP synchronization
         if self.config.require_ntp_sync && !bundle.ntp_synchronized {
@@ -118,6 +143,28 @@ impl AgentServiceImpl {
                     "platform {platform} not allowed"
                 )));
             }
+        }
+
+        if bundle.machine_id.len() > MAX_SECURITY_MACHINE_ID_LEN {
+            return Err(ControllerError::ValidationFailed(format!(
+                "machine_id exceeds max length {}",
+                MAX_SECURITY_MACHINE_ID_LEN
+            )));
+        }
+        if bundle.egress_public_ip.len() > MAX_SECURITY_EGRESS_IP_LEN {
+            return Err(ControllerError::ValidationFailed(
+                "egress_public_ip too long".to_string(),
+            ));
+        }
+        if bundle.logical_cpus > MAX_SECURITY_LOGICAL_CPUS {
+            return Err(ControllerError::ValidationFailed(
+                "logical_cpus out of range".to_string(),
+            ));
+        }
+        if bundle.memory_total_bytes > MAX_SECURITY_MEMORY_BYTES {
+            return Err(ControllerError::ValidationFailed(
+                "memory_total_bytes out of range".to_string(),
+            ));
         }
 
         Ok(())
@@ -253,8 +300,12 @@ impl AgentService for AgentServiceImpl {
             Some(bundle.container_runtime_version.clone()).filter(|s| !s.is_empty());
         agent.x509_public_key = Some(bundle.agent_x509_public_key.clone())
             .filter(|b| !b.is_empty());
+        agent.last_security_bundle =
+            met_core::models::pack_last_security_bundle(security_bundle_to_json(bundle));
         agent.join_token_id = Some(join_record.id);
         agent.last_heartbeat_at = Some(Utc::now());
+        agent.pool_tags = pool_tags.clone();
+        agent.pool = pool_tags.first().cloned();
 
         // Issue JWT
         let (jwt_token, jwt_expires_at) = self
@@ -313,10 +364,9 @@ impl AgentService for AgentServiceImpl {
         };
         self.registry.register(state).await;
 
-        // Build NATS subjects for agent to subscribe
-        let nats_subjects: Vec<String> = pool_tags
-            .iter()
-            .map(|tag| crate::nats::subjects::job_dispatch(org_id, tag))
+        // JetStream pull: one non-overlapping inbox per agent (pool is `*` in the subject).
+        let job_inbox = crate::nats::subjects::job_inbox_filter(org_id, &agent_id.to_string());
+        let nats_subjects: Vec<String> = std::iter::once(job_inbox)
             .chain(std::iter::once(crate::nats::subjects::broadcast(org_id)))
             .collect();
 
@@ -476,6 +526,11 @@ impl AgentService for AgentServiceImpl {
         } else if db_row.status == AgentStatus::Draining && status != AgentStatus::Draining {
             // API requested drain; agent has not yet reported draining — tell it to stop accepting work.
             response.action = HeartbeatAction::Drain.into();
+        } else if matches!(db_row.status, AgentStatus::Online | AgentStatus::Busy)
+            && status == AgentStatus::Draining
+        {
+            // API resumed (or never was draining) but agent still reports draining — clear local drain.
+            response.action = HeartbeatAction::Resume.into();
         }
 
         debug!(
