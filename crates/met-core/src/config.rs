@@ -189,6 +189,10 @@ pub struct HttpConfig {
     pub body_limit_bytes: usize,
     /// Request timeout in seconds.
     pub request_timeout_secs: u64,
+    /// Mark agents offline in the database if their last heartbeat is older than this (API sweep).
+    pub agent_stale_after_secs: u64,
+    /// How often the API runs the stale-agent sweep.
+    pub agent_stale_sweep_interval_secs: u64,
 }
 
 impl Default for HttpConfig {
@@ -198,6 +202,8 @@ impl Default for HttpConfig {
             cors_origins: vec!["http://localhost:5173".to_string()],
             body_limit_bytes: 10 * 1024 * 1024, // 10 MB
             request_timeout_secs: 30,
+            agent_stale_after_secs: 90,
+            agent_stale_sweep_interval_secs: 30,
         }
     }
 }

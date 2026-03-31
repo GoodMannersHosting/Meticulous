@@ -18,6 +18,10 @@ pub enum AgentError {
     #[error("failed to parse config: {0}")]
     ConfigParse(#[from] toml::de::Error),
 
+    /// Failed to parse configuration as YAML.
+    #[error("failed to parse config as YAML: {0}")]
+    ConfigParseYaml(#[from] serde_yaml::Error),
+
     /// gRPC error.
     #[error("gRPC error: {0}")]
     Grpc(#[from] tonic::Status),
@@ -72,6 +76,10 @@ pub enum AgentError {
     /// Secret verification failed (checksum mismatch).
     #[error("secret verification failed for key: {0}")]
     SecretVerification(String),
+
+    /// General security error.
+    #[error("security error: {0}")]
+    Security(String),
 
     /// Workspace error.
     #[error("workspace error: {0}")]

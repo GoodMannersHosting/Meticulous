@@ -72,10 +72,6 @@ pub enum ControllerError {
     #[error("JWT encoding error: {0}")]
     JwtEncode(#[from] jsonwebtoken::errors::Error),
 
-    /// Bcrypt error.
-    #[error("bcrypt error: {0}")]
-    Bcrypt(#[from] bcrypt::BcryptError),
-
     /// Internal error.
     #[error("internal error: {0}")]
     Internal(String),

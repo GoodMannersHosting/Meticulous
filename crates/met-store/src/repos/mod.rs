@@ -19,6 +19,8 @@ mod runs;
 mod users;
 mod workflows;
 mod audit_log;
+mod run_logs;
+mod log_cache;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
 pub use agents::AgentRepo;
@@ -36,3 +38,7 @@ pub use roles::RoleRepo;
 pub use runs::{JobRunRepo, RunRepo, RunWithJobs, StepRunRepo};
 pub use users::UserRepo;
 pub use workflows::{CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowScope};
+pub use run_logs::{LogEntry, RunLogRepo};
+pub use log_cache::{
+    project_run_for_job_run, LazyCacheLine, LogArchiveRow, LogCacheEntry, LogCacheRepo,
+};

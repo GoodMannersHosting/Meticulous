@@ -1,7 +1,6 @@
 //! Agent configuration loading.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -36,15 +35,16 @@ pub struct AgentConfig {
     pub tls: TlsConfig,
 }
 
+fn default_data_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.data_local_dir().join("meticulous"))
+        .unwrap_or_else(|| PathBuf::from("./data"))
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
-        let workspace_dir = if cfg!(unix) {
-            PathBuf::from("/var/lib/meticulous/workspaces")
-        } else {
-            directories::BaseDirs::new()
-                .map(|d| d.data_local_dir().join("meticulous").join("workspaces"))
-                .unwrap_or_else(|| PathBuf::from("./workspaces"))
-        };
+        let root = default_data_dir();
+        let workspace_dir = root.join("workspaces");
 
         Self {
             controller_url: "http://localhost:9090".to_string(),
@@ -73,6 +73,39 @@ pub struct TlsConfig {
     pub client_key: Option<PathBuf>,
 }
 
+/// Paths to probe for a basename like `agentconfig` (no extension → try `.toml`, `.yaml`, `.yml`).
+fn agentconfig_path_variants(dir: &Path, basename: &str) -> Vec<PathBuf> {
+    let base = dir.join(basename);
+    vec![
+        base.clone(),
+        base.with_extension("toml"),
+        base.with_extension("yaml"),
+        base.with_extension("yml"),
+    ]
+}
+
+fn parse_config_file(path: &Path, contents: &str) -> Result<AgentConfig> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+
+    match ext.as_deref() {
+        Some("yaml") | Some("yml") => serde_yaml::from_str(contents).map_err(Into::into),
+        Some("toml") => toml::from_str(contents).map_err(Into::into),
+        _ => match toml::from_str::<AgentConfig>(contents) {
+            Ok(parsed) => Ok(parsed),
+            Err(toml_err) => match serde_yaml::from_str::<AgentConfig>(contents) {
+                Ok(parsed) => Ok(parsed),
+                Err(yaml_err) => Err(AgentError::Config(format!(
+                    "{}: could not parse as TOML ({toml_err}) or YAML ({yaml_err})",
+                    path.display()
+                ))),
+            },
+        },
+    }
+}
+
 impl AgentConfig {
     /// Load configuration from file, environment, and CLI args.
     ///
@@ -92,16 +125,22 @@ impl AgentConfig {
         // Start with defaults
         let mut config = Self::default();
 
-        // Try to load from config file
-        let config_file = config_path
-            .map(PathBuf::from)
+        let explicit_path = config_path.map(PathBuf::from);
+        let config_file = explicit_path
+            .clone()
             .or_else(Self::default_config_path);
 
         if let Some(path) = config_file {
+            if explicit_path.as_ref().is_some_and(|p| p == &path) && !path.exists() {
+                return Err(AgentError::Config(format!(
+                    "config file not found: {}",
+                    path.display()
+                )));
+            }
             if path.exists() {
                 info!(path = %path.display(), "loading config file");
                 let contents = std::fs::read_to_string(&path)?;
-                config = toml::from_str(&contents)?;
+                config = parse_config_file(&path, &contents)?;
             }
         }
 
@@ -131,23 +170,31 @@ impl AgentConfig {
         Ok(config)
     }
 
-    /// Get the default config file path.
+    /// Get the default config file path (first existing).
+    ///
+    /// Order: `./meticulous-agent.toml`, `~/.met/agentconfig*`, XDG `agent.toml`,
+    /// `/opt/met-agent/agentconfig*`, `/etc/meticulous/agent.toml`.
     fn default_config_path() -> Option<PathBuf> {
-        // Check platform-specific locations
-        let paths: Vec<PathBuf> = vec![
-            // System-wide
-            PathBuf::from("/etc/meticulous/agent.toml"),
-            // Current directory
-            PathBuf::from("./meticulous-agent.toml"),
-        ];
+        let mut candidates: Vec<PathBuf> = Vec::new();
 
-        // Add user-specific path if available
-        let mut all_paths = paths;
-        if let Some(dirs) = ProjectDirs::from("dev", "meticulous", "agent") {
-            all_paths.insert(1, dirs.config_dir().join("agent.toml"));
+        candidates.push(PathBuf::from("./meticulous-agent.toml"));
+
+        if let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) {
+            candidates.extend(agentconfig_path_variants(&home.join(".met"), "agentconfig"));
         }
 
-        for path in all_paths {
+        if let Some(dirs) = ProjectDirs::from("dev", "meticulous", "agent") {
+            candidates.push(dirs.config_dir().join("agent.toml"));
+        }
+
+        candidates.extend(agentconfig_path_variants(
+            Path::new("/opt/met-agent"),
+            "agentconfig",
+        ));
+
+        candidates.push(PathBuf::from("/etc/meticulous/agent.toml"));
+
+        for path in candidates {
             if path.exists() {
                 return Some(path);
             }
@@ -212,15 +259,15 @@ impl AgentConfig {
                 .unwrap_or_else(|| "unknown".to_string()))
     }
 
-    /// Get the data directory for storing agent state.
+    /// Get the data directory for storing agent state (e.g. identity file).
+    ///
+    /// Override with `MET_AGENT_DATA_DIR`. For systemd deployments that should use
+    /// `/var/lib/meticulous`, set that explicitly in the service environment.
     pub fn data_dir(&self) -> PathBuf {
-        if cfg!(unix) {
-            PathBuf::from("/var/lib/meticulous")
-        } else {
-            directories::BaseDirs::new()
-                .map(|d| d.data_local_dir().join("meticulous"))
-                .unwrap_or_else(|| PathBuf::from("./data"))
+        if let Ok(p) = std::env::var("MET_AGENT_DATA_DIR") {
+            return PathBuf::from(p);
         }
+        default_data_dir()
     }
 
     /// Get the path to the agent identity file.
@@ -284,5 +331,88 @@ impl AgentIdentity {
         let remaining = self.jwt_expires_at - now;
         let total = 24 * 60 * 60; // Assume 24h validity
         remaining <= (total as f64 * 0.1) as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::error::AgentError;
+
+    #[test]
+    fn load_toml_file() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, r#"controller_url = "http://example:9090""#).unwrap();
+        let c = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
+        assert_eq!(c.controller_url, "http://example:9090");
+    }
+
+    #[test]
+    fn load_yaml_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.yaml");
+        std::fs::write(&path, "controller_url: http://yaml:9090\n").unwrap();
+        let c = AgentConfig::load(Some(&path), None, None, None, None, vec![]).unwrap();
+        assert_eq!(c.controller_url, "http://yaml:9090");
+    }
+
+    #[test]
+    fn load_extensionless_as_yaml() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"controller_url: http://extless:9090\n").unwrap();
+        let c = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
+        assert_eq!(c.controller_url, "http://extless:9090");
+    }
+
+    #[test]
+    fn cli_overrides_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.toml");
+        std::fs::write(&path, r#"controller_url = "http://from-file:9090""#).unwrap();
+        let c = AgentConfig::load(
+            Some(&path),
+            Some("http://from-cli:9090".to_string()),
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(c.controller_url, "http://from-cli:9090");
+    }
+
+    #[test]
+    fn rejects_empty_controller_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, r#"controller_url = """#).unwrap();
+        let err = AgentConfig::load(Some(&path), None, None, None, None, vec![]).unwrap_err();
+        match err {
+            AgentError::Config(msg) => assert!(msg.contains("controller")),
+            _ => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_path_missing_errors() {
+        let err = AgentConfig::load(
+            Some(Path::new("/nonexistent/met-agent-config.toml")),
+            None,
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap_err();
+        match err {
+            AgentError::Config(msg) => {
+                assert!(msg.contains("not found"), "{msg}");
+            }
+            _ => panic!("unexpected error: {err:?}"),
+        }
     }
 }

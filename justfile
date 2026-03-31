@@ -565,7 +565,11 @@ agent-build-binary-amd64:
 agent-run:
     cargo run --bin met-agent
 
-# Run agent with specific controller URL
+# Run agent controller gRPC server (needs Postgres, NATS, MET_CONTROLLER_JWT_SECRET)
+controller-run:
+    cargo run --bin met-controller
+
+# Run agent with specific controller URL (gRPC, default port 9090 — not the REST API on 8080)
 agent-run-with-controller url:
     MET_CONTROLLER_URL={{ url }} cargo run --bin met-agent
 

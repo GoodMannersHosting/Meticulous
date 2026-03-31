@@ -102,7 +102,7 @@ impl AgentPoolReconciler {
 
         // Determine desired count
         let spec = &pool.spec;
-        let desired = Self::calculate_desired_replicas(spec, ready, busy, idle, ctx.as_ref()).await;
+        let desired = Self::calculate_desired_replicas(spec, ready, busy, idle, ctx.as_ref(), &name).await;
 
         // Scale up or down
         if current_count < desired {
@@ -187,6 +187,7 @@ impl AgentPoolReconciler {
         busy: i32,
         idle: i32,
         ctx: &Context,
+        pool_name: &str,
     ) -> i32 {
         let min = spec.replicas.min;
         let max = spec.replicas.max.unwrap_or(100);
@@ -203,9 +204,8 @@ impl AgentPoolReconciler {
         let desired = current + needed_for_idle;
 
         // Check queue depth if NATS is available
-        let queue_adjustment = if let Some(ref _nats) = ctx.nats {
-            // TODO: Check NATS queue depth and adjust
-            0
+        let queue_adjustment = if let Some(ref nats) = ctx.nats {
+            Self::calculate_queue_adjustment(nats, spec, pool_name).await
         } else {
             0
         };
@@ -218,12 +218,88 @@ impl AgentPoolReconciler {
             busy,
             idle,
             target_idle,
+            queue_adjustment,
             desired,
             final_desired,
             "calculated desired replicas"
         );
 
         final_desired
+    }
+
+    /// Calculate scaling adjustment based on NATS queue depth.
+    async fn calculate_queue_adjustment(
+        nats: &async_nats::Client,
+        spec: &crate::crd::AgentPoolSpec,
+        pool_name: &str,
+    ) -> i32 {
+        let jetstream = async_nats::jetstream::new(nats.clone());
+
+        // Get the JOBS stream to check pending messages
+        let mut stream = match jetstream.get_stream("JOBS").await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "failed to get JOBS stream for queue depth check");
+                return 0;
+            }
+        };
+
+        // Get consumer info for this pool's job dispatch subject
+        // Consumer name follows the pattern: pool-{org_id}-{pool_tag}
+        // Since we don't have org_id here, we'll query stream info instead
+        let stream_info = match stream.info().await {
+            Ok(info) => info,
+            Err(e) => {
+                warn!(error = %e, "failed to get stream info");
+                return 0;
+            }
+        };
+
+        // Get total pending messages for the pool's subjects
+        // Subject pattern: met.jobs.*.{pool_name}
+        let pending_messages = stream_info.state.messages;
+
+        // Calculate adjustment based on queue depth thresholds
+        let autoscaler = spec.autoscaler.as_ref();
+
+        // Default thresholds if not configured
+        let scale_up_threshold = autoscaler
+            .and_then(|a| a.queue_depth_scale_up_threshold)
+            .unwrap_or(10) as u64;
+
+        let scale_down_threshold = autoscaler
+            .and_then(|a| a.queue_depth_scale_down_threshold)
+            .unwrap_or(0) as u64;
+
+        let scale_up_step = autoscaler
+            .and_then(|a| a.scale_up_step)
+            .unwrap_or(1);
+
+        let scale_down_step = autoscaler
+            .and_then(|a| a.scale_down_step)
+            .unwrap_or(1);
+
+        let adjustment = if pending_messages > scale_up_threshold {
+            // Scale up: more jobs waiting than threshold
+            let multiplier = ((pending_messages - scale_up_threshold) / scale_up_threshold.max(1) + 1) as i32;
+            (scale_up_step * multiplier).min(10) // Cap at 10 per cycle
+        } else if pending_messages <= scale_down_threshold {
+            // Scale down: queue is empty or below threshold
+            -scale_down_step
+        } else {
+            0
+        };
+
+        debug!(
+            pool = %pool_name,
+            pending_messages,
+            scale_up_threshold,
+            scale_down_threshold,
+            adjustment,
+            "calculated queue depth adjustment"
+        );
+
+        adjustment
     }
 
     /// Create a new agent pod.

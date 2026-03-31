@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use met_core::ids::{AgentId, JobRunId, OrganizationId};
-use met_core::models::AgentStatus;
+use met_core::models::{Agent, AgentStatus};
 use tokio::sync::RwLock;
 
 /// In-memory state for a registered agent.
@@ -48,6 +48,35 @@ pub struct ResourceSnapshot {
     pub cpu_percent: f32,
     pub memory_percent: f32,
     pub disk_percent: f32,
+}
+
+/// Build in-memory state from a persisted [`Agent`] row (e.g. after controller restart).
+#[must_use]
+pub fn agent_state_from_db_row(agent: &Agent) -> AgentState {
+    let pool_tags = if let Some(ref p) = agent.pool {
+        vec![p.clone()]
+    } else {
+        vec!["_default".to_string()]
+    };
+    let labels = agent.tags.clone();
+    let jwt_expires_at = agent.jwt_expires_at.unwrap_or_else(|| Utc::now() + chrono::Duration::hours(24));
+
+    AgentState {
+        agent_id: agent.id,
+        org_id: agent.org_id,
+        status: agent.status,
+        last_heartbeat: Instant::now(),
+        last_heartbeat_at: agent.last_heartbeat_at.unwrap_or_else(Utc::now),
+        os: agent.os.clone(),
+        arch: agent.arch.clone(),
+        pool_tags,
+        labels,
+        max_jobs: agent.max_jobs,
+        running_jobs: agent.running_jobs,
+        current_job: None,
+        jwt_expires_at,
+        resources: None,
+    }
 }
 
 impl AgentState {
@@ -111,6 +140,35 @@ impl AgentRegistry {
                 by_pool.entry(tag).or_default().push(agent_id);
             }
         }
+    }
+
+    /// Insert an agent only if not already present (used to rehydrate after process restart).
+    pub async fn register_if_missing(&self, state: AgentState) -> bool {
+        let agent_id = state.agent_id;
+        let org_id = state.org_id;
+        let pool_tags = state.pool_tags.clone();
+
+        {
+            let mut agents = self.agents.write().await;
+            if agents.contains_key(&agent_id) {
+                return false;
+            }
+            agents.insert(agent_id, state);
+        }
+
+        {
+            let mut by_org = self.by_org.write().await;
+            by_org.entry(org_id).or_default().push(agent_id);
+        }
+
+        {
+            let mut by_pool = self.by_pool.write().await;
+            for tag in pool_tags {
+                by_pool.entry(tag).or_default().push(agent_id);
+            }
+        }
+
+        true
     }
 
     /// Get an agent by ID.

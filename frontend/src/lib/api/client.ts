@@ -263,7 +263,8 @@ export const apiMethods = {
 			api.get<import('./types').PaginatedResponse<import('./types').Agent>>('/api/v1/agents', { params }),
 		get: (id: string) => api.get<import('./types').Agent>(`/api/v1/agents/${id}`),
 		drain: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/drain`),
-		resume: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/resume`)
+		resume: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/resume`),
+		delete: (id: string) => api.delete<{ message: string; agent_id: string }>(`/api/v1/agents/${id}`)
 	},
 
 	// Admin

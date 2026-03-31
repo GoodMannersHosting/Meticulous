@@ -139,6 +139,8 @@ tracing-opentelemetry = "0.28"
 
 ### 3.2 Architecture
 
+**SeaweedFS is the source of truth. PostgreSQL is a 24-hour cache for active/recently-viewed logs.**
+
 ```mermaid
 graph TB
   subgraph agentSide [Agent]
@@ -152,9 +154,10 @@ graph TB
   subgraph controlPlane [Control Plane]
     Aggregator[Log Aggregator]
     WS["WebSocket Streamer"]
-    PG["PostgreSQL - hot, 30d TTL"]
+    PG["PostgreSQL - 24h cache"]
     Archiver[Archiver]
-    S3["S3 Archive - cold, compressed"]
+    S3["SeaweedFS - source of truth"]
+    LazyLoader["Lazy Loader"]
   end
 
   subgraph clients [Clients]
@@ -168,10 +171,13 @@ graph TB
   Aggregator --> PG
   Aggregator --> WS
   Aggregator -->|"on job complete"| Archiver
-  Archiver --> S3
+  Archiver -->|"gzip + upload"| S3
+  Archiver -->|"delete from cache"| PG
 
   Frontend -->|WebSocket| WS
-  Frontend -->|REST| PG
+  Frontend -->|REST old logs| LazyLoader
+  LazyLoader -->|"cache miss"| S3
+  LazyLoader -->|"load with 24h TTL"| PG
 ```
 
 
@@ -189,9 +195,11 @@ crates/met-logging/
     wal.rs             # Write-ahead log for agent-side durability
     aggregator.rs      # Control-plane side: consumes NATS, fans out
     streamer.rs        # WebSocket fan-out for live log viewing
-    archiver.rs        # Compresses and ships to S3 on job completion
+    archiver.rs        # Compresses and uploads to SeaweedFS on job completion
+    loader.rs          # Lazy loader: fetch from SeaweedFS, cache to PostgreSQL
+    cache.rs           # PostgreSQL cache operations with TTL
     models.rs          # LogLine, LogChunk, LogMetadata types
-    retention.rs       # TTL-based cleanup from Postgres, lifecycle rules for S3
+    cleanup.rs         # Background task to purge expired cache entries
 ```
 
 ### 3.4 Log Data Model
@@ -258,7 +266,7 @@ impl SecretRedactor {
 Runs as a component inside the API server process (or as a standalone sidecar, configurable):
 
 1. Subscribe to NATS JetStream `logs.>` (wildcard for all runs).
-2. For each `LogChunk`: verify HMAC-SHA256 integrity, insert into PostgreSQL `run_logs` table (indexed by `run_id`, `job_id`, `step_index`, `line_number`), fan out to any active WebSocket subscribers for that `run_id`.
+2. For each `LogChunk`: verify HMAC-SHA256 integrity, insert into PostgreSQL `log_cache` table (temporary), fan out to any active WebSocket subscribers for that `run_id`.
 3. On job completion event, trigger the archiver.
 
 ### 3.8 WebSocket Log Streaming
@@ -266,25 +274,84 @@ Runs as a component inside the API server process (or as a standalone sidecar, c
 The API server exposes `GET /ws/runs/{run_id}/logs?job_id=&step_index=` for live log streaming.
 
 - Client connects, optionally sends a `since_line` to resume from a specific line number.
-- Server replays buffered lines from PostgreSQL, then switches to live NATS-fed streaming.
+- For active jobs: replay buffered lines from PostgreSQL cache, then switch to live NATS-fed streaming.
+- For completed jobs: trigger lazy load from SeaweedFS if not in cache.
 - Messages are JSON: `{ "job_id": "...", "step_index": 0, "lines": [...] }`.
 - Heartbeat pings every 15 seconds to detect stale connections.
 
-### 3.9 Log Archival and Retention
+### 3.9 Log Storage and Lifecycle
 
-- **Hot tier**: PostgreSQL `run_logs` table, 30 days (configurable), rows per line.
-- **Cold tier**: S3-compatible object storage, indefinite (lifecycle policy), gzip-compressed JSONL per job.
-- On job completion, the archiver compresses all log lines for the job into a single `.jsonl.gz` file and uploads to S3 at `logs/{project_id}/{run_id}/{job_id}.jsonl.gz`.
-- A background task runs daily to purge PostgreSQL rows older than the hot retention window.
-- S3 lifecycle policies are documented but managed externally (Terraform/Helm values).
+**SeaweedFS is the source of truth. PostgreSQL is a temporary cache.**
+
+#### On Job Completion (Archiver):
+```rust
+async fn archive_job_logs(job_id: JobId) {
+    // 1. Fetch all log lines from PostgreSQL cache
+    let logs = log_repo.get_all_for_job(job_id).await?;
+    
+    // 2. Compress to JSONL + gzip
+    let compressed = gzip_compress(logs.to_jsonl())?;
+    
+    // 3. Upload to SeaweedFS (source of truth)
+    objstore.put(&format!("logs/{project}/{run}/{job}.jsonl.gz"), compressed).await?;
+    
+    // 4. Delete from PostgreSQL cache immediately
+    log_repo.delete_for_job(job_id).await?;
+}
+```
+
+#### Lazy Reload (for viewing old logs):
+```rust
+async fn get_logs(job_id: JobId, range: LineRange) -> Result<Vec<LogLine>> {
+    // 1. Check PostgreSQL cache first
+    if let Some(logs) = log_repo.get_cached(job_id, range).await? {
+        return Ok(logs);
+    }
+    
+    // 2. Cache miss - fetch from SeaweedFS
+    let compressed = objstore.get(&log_path(job_id)).await?;
+    let logs = gzip_decompress(compressed)?.parse_jsonl()?;
+    
+    // 3. Load into PostgreSQL with 24h TTL
+    log_repo.cache_with_ttl(job_id, &logs, Duration::hours(24)).await?;
+    
+    // 4. Return requested range
+    Ok(logs.filter_range(range))
+}
+```
+
+#### PostgreSQL Cache Schema:
+```sql
+CREATE TABLE log_cache (
+    job_id      UUID NOT NULL,
+    line_number BIGINT NOT NULL,
+    timestamp   TIMESTAMPTZ NOT NULL,
+    stream      TEXT NOT NULL,  -- 'stdout' | 'stderr'
+    content     TEXT NOT NULL,
+    cached_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL,  -- cached_at + 24h
+    PRIMARY KEY (job_id, line_number)
+);
+
+CREATE INDEX idx_log_cache_job ON log_cache(job_id);
+CREATE INDEX idx_log_cache_expires ON log_cache(expires_at);
+```
+
+#### Background Cache Cleanup:
+- Runs every 5 minutes: `DELETE FROM log_cache WHERE expires_at < NOW()`
+- Lightweight operation since expired rows are indexed
+
+#### Retention:
+- **PostgreSQL cache**: 24 hours (automatic expiry)
+- **SeaweedFS**: Indefinite (S3 lifecycle policies for compliance if needed)
 
 ### 3.10 Write-Once Log Integrity
 
 To address the concern of bad actors deleting or modifying logs (ref: [design/notes/open-questions.md](../../design/notes/open-questions.md)):
 
-- **PostgreSQL**: the `run_logs` table uses row-level security. Only the aggregator service role can INSERT. No UPDATE or DELETE is granted to application roles until the retention sweeper runs (which operates under a separate, audited role).
-- **S3**: recommend enabling Object Lock (WORM) on the logs bucket with a governance-mode retention period. Document this in the deployment guide.
-- **Integrity**: Each `LogChunk` shipped from the agent includes an HMAC-SHA256 digest (keyed with the job's ephemeral PKI key) so the control plane can verify integrity on receipt.
+- **SeaweedFS (source of truth)**: Enable Object Lock (WORM) on the logs bucket with a governance-mode retention period. Once archived, logs cannot be modified or deleted until the retention period expires. Document this in the deployment guide.
+- **PostgreSQL (cache only)**: The `log_cache` table is ephemeral and not the authoritative record. Cache entries can be deleted (they expire after 24h anyway). Security focus is on SeaweedFS.
+- **Integrity**: Each `LogChunk` shipped from the agent includes an HMAC-SHA256 digest (keyed with the job's ephemeral PKI key). The control plane verifies integrity on receipt before archiving to SeaweedFS. The archived `.jsonl.gz` file includes a manifest with all chunk HMACs for later verification.
 
 ---
 

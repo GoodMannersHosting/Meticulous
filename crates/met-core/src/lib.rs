@@ -12,7 +12,9 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod models;
+pub mod tokens;
 
 pub use config::MetConfig;
+pub use tokens::hash_join_token;
 pub use error::{MetError, Result};
 pub use ids::*;

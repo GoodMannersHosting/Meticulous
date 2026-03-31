@@ -28,7 +28,7 @@ pub enum JoinTokenScope {
 pub struct JoinToken {
     /// Unique identifier.
     pub id: JoinTokenId,
-    /// Bcrypt hash of the token (plaintext never stored).
+    /// SHA-256 hex hash of the token (plaintext never stored).
     pub token_hash: String,
     /// Scope of the token.
     pub scope: JoinTokenScope,

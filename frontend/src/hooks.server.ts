@@ -1,28 +1,73 @@
 import type { Handle } from '@sveltejs/kit';
+import { PUBLIC_API_URL } from '$env/static/public';
+
+interface MeResponse {
+	id: string;
+	email: string;
+	name: string;
+	org_id: string;
+	role: string;
+	created_at: string;
+}
+
+async function validateToken(token: string, fetch: typeof globalThis.fetch): Promise<MeResponse | null> {
+	const apiUrl = PUBLIC_API_URL || 'http://localhost:8080';
+	
+	try {
+		const response = await fetch(`${apiUrl}/auth/me`, {
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json'
+			}
+		});
+
+		if (!response.ok) {
+			return null;
+		}
+
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const token = event.cookies.get('auth_token');
 
 	if (token) {
-		// TODO: Validate token with backend and extract user info
-		// For now, we just check if a token exists
-		// In production, verify JWT signature and expiration
 		try {
-			// Placeholder: decode token and set user
-			// const user = await validateToken(token);
-			// event.locals.user = user;
-			event.locals.user = undefined;
+			const userData = await validateToken(token, event.fetch);
+			
+			if (userData) {
+				event.locals.user = {
+					id: userData.id,
+					name: userData.name,
+					email: userData.email,
+					avatar: undefined
+				};
+			} else {
+				event.cookies.delete('auth_token', { path: '/' });
+				event.locals.user = undefined;
+			}
 		} catch {
-			// Invalid token - clear it
 			event.cookies.delete('auth_token', { path: '/' });
+			event.locals.user = undefined;
 		}
 	}
 
 	const response = await resolve(event, {
 		transformPageChunk: ({ html }) => {
-			// Inject theme class based on cookie or default
 			const theme = event.cookies.get('theme') || 'light';
-			return html.replace('<html lang="en"', `<html lang="en" class="${theme === 'dark' ? 'dark' : ''}"`);
+			const wantDark = theme === 'dark';
+			return html.replace(/(<html[^>]*\bclass=")([^"]*)(")/, (_, prefix, classes, suffix) => {
+				const set = new Set(classes.split(/\s+/).filter(Boolean));
+				if (wantDark) {
+					set.add('dark');
+				} else {
+					set.delete('dark');
+				}
+				return `${prefix}${[...set].join(' ')}${suffix}`;
+			});
 		}
 	});
 

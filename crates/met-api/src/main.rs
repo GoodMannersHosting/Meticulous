@@ -6,8 +6,10 @@
 use clap::Parser;
 use met_api::{ApiDoc, config::ApiConfig, routes, state::AppState};
 use met_core::MetConfig;
+use met_store::repos::AgentRepo;
 use met_store::{PoolConfig, create_pool};
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use utoipa::OpenApi;
@@ -78,6 +80,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(url = %pool_config.url, "connecting to database");
     let db = create_pool(&pool_config).await?;
+
+    let stale_after = api_config.agent_stale_after_secs;
+    let sweep_secs = api_config.agent_stale_sweep_interval_secs.max(5);
+    let db_stale = db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(sweep_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let repo = AgentRepo::new(&db_stale);
+            match repo.mark_stale_offline(stale_after as i64).await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(count = n, "marked stale agents offline");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "agent stale sweep failed"),
+            }
+        }
+    });
 
     // Build application state
     let state = AppState::new(db, api_config.clone());

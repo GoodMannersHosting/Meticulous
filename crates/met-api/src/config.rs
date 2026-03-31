@@ -31,6 +31,14 @@ pub struct ApiConfig {
 
     /// Rate limiting configuration.
     pub rate_limit: RateLimitConfig,
+
+    /// Auth configuration.
+    pub auth: AuthConfig,
+
+    /// Mark agents offline if last heartbeat is older than this (matches [`met_core::config::HttpConfig::agent_stale_after_secs`]).
+    pub agent_stale_after_secs: u64,
+    /// Interval for the stale-agent sweep background task.
+    pub agent_stale_sweep_interval_secs: u64,
 }
 
 impl Default for ApiConfig {
@@ -43,6 +51,9 @@ impl Default for ApiConfig {
             request_timeout: Duration::from_secs(30),
             jwt: JwtConfig::default(),
             rate_limit: RateLimitConfig::default(),
+            auth: AuthConfig::default(),
+            agent_stale_after_secs: 90,
+            agent_stale_sweep_interval_secs: 30,
         }
     }
 }
@@ -54,6 +65,9 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             cors_origins: http.cors_origins.clone(),
             body_limit_bytes: http.body_limit_bytes,
             request_timeout: Duration::from_secs(http.request_timeout_secs),
+            agent_stale_after_secs: http.agent_stale_after_secs,
+            agent_stale_sweep_interval_secs: http.agent_stale_sweep_interval_secs,
+            auth: AuthConfig::default(),
             ..Default::default()
         }
     }
@@ -109,6 +123,31 @@ impl Default for RateLimitConfig {
             enabled: true,
             requests_per_second: 100,
             burst_size: 200,
+        }
+    }
+}
+
+/// Authentication configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Enable password-based authentication.
+    /// When false, users must use SSO/OIDC providers.
+    pub password_enabled: bool,
+
+    /// Require email verification for new accounts.
+    pub require_email_verification: bool,
+
+    /// Minimum password length.
+    pub min_password_length: usize,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            password_enabled: true,
+            require_email_verification: false,
+            min_password_length: 8,
         }
     }
 }

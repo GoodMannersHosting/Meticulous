@@ -21,6 +21,9 @@ use tracing::{error, info, warn};
 #[derive(Parser)]
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
+#[command(
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path."
+)]
 #[command(version)]
 struct Args {
     /// Controller address
@@ -47,9 +50,15 @@ struct Args {
     #[arg(long, env = "MET_AGENT_TAGS", value_delimiter = ',')]
     tags: Vec<String>,
 
-    /// Configuration file path
-    #[arg(short, long, env = "MET_CONFIG")]
-    config: Option<PathBuf>,
+    /// Agent configuration file (TOML or YAML). If unset, searches defaults (see help).
+    #[arg(
+        short = 'c',
+        long = "agent-config",
+        visible_alias = "config",
+        env = "MET_AGENT_CONFIG",
+        value_name = "PATH"
+    )]
+    agent_config: Option<PathBuf>,
 
     /// Log level
     #[arg(long, env = "MET_LOG_LEVEL", default_value = "info")]
@@ -59,6 +68,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let agent_config_path = args
+        .agent_config
+        .or_else(|| std::env::var_os("MET_CONFIG").map(PathBuf::from));
 
     // Initialize logging
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -77,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let config = AgentConfig::load(
-        args.config.as_deref(),
+        agent_config_path.as_deref(),
         Some(args.controller_url.clone()),
         args.join_token.clone(),
         args.name.clone(),
@@ -154,16 +166,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Signal shutdown
+    // Signal shutdown (executor + heartbeat respond and exit their loops).
     let _ = shutdown_tx.send(true);
     let _ = heartbeat_shutdown.send(true);
 
-    // Wait for tasks to complete
-    let _ = tokio::time::timeout(Duration::from_secs(30), async {
-        let _ = heartbeat_handle.await;
-        let _ = executor_handle.await;
-    })
-    .await;
+    // Wait for tasks to finish. Do not wrap in `timeout` + drop: that cancels the await and
+    // leaves work running until runtime teardown, which often surfaces as noisy errors/panics.
+    match heartbeat_handle.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!(error = %e, "heartbeat loop exited with error"),
+        Err(e) => warn!(error = %e, "heartbeat task panicked or was cancelled"),
+    }
+    match executor_handle.await {
+        Ok(()) => {}
+        Err(e) => warn!(error = %e, "executor task panicked or was cancelled"),
+    }
 
     info!("agent shutdown complete");
     Ok(())

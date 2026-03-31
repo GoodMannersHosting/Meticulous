@@ -74,20 +74,41 @@ impl HeartbeatLoop {
         let mut interval = tokio::time::interval(self.interval);
         let mut system = System::new_all();
 
-        loop {
+        'hb: loop {
+            if *self.shutdown_rx.borrow() {
+                info!("heartbeat loop shutting down");
+                break;
+            }
+
             tokio::select! {
                 _ = interval.tick() => {
-                    match self.send_heartbeat(&mut system).await {
-                        Ok(action) => {
-                            if action != HeartbeatAction::Continue {
-                                info!(action = ?action, "received heartbeat action");
-                                if self.action_tx.send(action).await.is_err() {
-                                    break;
-                                }
+                    if *self.shutdown_rx.borrow() {
+                        break 'hb;
+                    }
+                    // Do not block shutdown on a slow gRPC heartbeat: use a cloned watch receiver
+                    // so this `select!` does not borrow `self` mutably for `changed()` and `send_heartbeat` at once.
+                    let mut shutdown_wake = self.shutdown_rx.clone();
+                    tokio::select! {
+                        _ = shutdown_wake.changed() => {
+                            if *shutdown_wake.borrow() {
+                                info!("heartbeat loop shutting down");
+                                break 'hb;
                             }
                         }
-                        Err(e) => {
-                            error!(error = %e, "heartbeat failed");
+                        res = self.send_heartbeat(&mut system) => {
+                            match res {
+                                Ok(action) => {
+                                    if action != HeartbeatAction::Continue {
+                                        info!(action = ?action, "received heartbeat action");
+                                        if self.action_tx.send(action).await.is_err() {
+                                            break 'hb;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "heartbeat failed");
+                                }
+                            }
                         }
                     }
                 }

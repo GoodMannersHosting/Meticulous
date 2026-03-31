@@ -157,13 +157,186 @@ impl DatabaseWorkflowProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::{RawJob, RawStep};
+    use indexmap::IndexMap;
 
-    #[test]
-    fn test_provider_creation() {
+    /// Create a test workflow definition.
+    fn test_workflow_def() -> RawWorkflowDef {
+        RawWorkflowDef {
+            name: "Test Workflow".to_string(),
+            description: Some("A test workflow".to_string()),
+            version: Some("1.0.0".to_string()),
+            inputs: IndexMap::new(),
+            outputs: IndexMap::new(),
+            jobs: vec![RawJob {
+                id: "test-job".to_string(),
+                name: "Test Job".to_string(),
+                runs_on: None,
+                steps: vec![RawStep {
+                    name: "Test Step".to_string(),
+                    id: Some("step1".to_string()),
+                    run: Some("echo 'hello'".to_string()),
+                    shell: None,
+                    uses: None,
+                    action_inputs: IndexMap::new(),
+                    env: IndexMap::new(),
+                    working_directory: None,
+                    timeout: None,
+                    continue_on_error: false,
+                }],
+                services: vec![],
+                depends_on: vec![],
+                condition: None,
+                timeout: None,
+                retry: None,
+            }],
+        }
+    }
+
+    #[sqlx::test(migrations = "../met-store/migrations")]
+    async fn test_fetch_global_workflow(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
-        let _provider = DatabaseWorkflowProvider {
-            pool: todo!("need test pool"),
-            org_id,
-        };
+        
+        // Insert a test workflow
+        let workflow_def = test_workflow_def();
+        let definition = serde_json::to_value(&workflow_def).unwrap();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
+            VALUES ($1, $2, 'global', $3, $4, $5, false, NOW())
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(org_id)
+        .bind("test-workflow")
+        .bind("1.0.0")
+        .bind(&definition)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Test the provider
+        let provider = DatabaseWorkflowProvider::new(pool, org_id);
+        
+        let result = provider.fetch(WorkflowScope::Global, "test-workflow", "1.0.0").await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        
+        let workflow = result.unwrap();
+        assert_eq!(workflow.name, "Test Workflow");
+        assert_eq!(workflow.version, Some("1.0.0".to_string()));
+    }
+
+    #[sqlx::test(migrations = "../met-store/migrations")]
+    async fn test_fetch_latest_version(pool: PgPool) {
+        let org_id = uuid::Uuid::new_v4();
+        
+        // Insert multiple versions
+        for version in &["1.0.0", "1.1.0", "2.0.0"] {
+            let mut workflow_def = test_workflow_def();
+            workflow_def.version = Some(version.to_string());
+            let definition = serde_json::to_value(&workflow_def).unwrap();
+            
+            sqlx::query(
+                r#"
+                INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
+                VALUES ($1, $2, 'global', $3, $4, $5, false, NOW() + interval '1 second' * $6)
+                "#,
+            )
+            .bind(uuid::Uuid::new_v4())
+            .bind(org_id)
+            .bind("versioned-workflow")
+            .bind(version)
+            .bind(&definition)
+            .bind(version.chars().next().unwrap().to_digit(10).unwrap() as i32)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let provider = DatabaseWorkflowProvider::new(pool, org_id);
+        
+        // Fetch latest should return the most recently created (2.0.0)
+        let result = provider.fetch(WorkflowScope::Global, "versioned-workflow", "latest").await;
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+        assert_eq!(workflow.version, Some("2.0.0".to_string()));
+    }
+
+    #[sqlx::test(migrations = "../met-store/migrations")]
+    async fn test_fetch_nonexistent_workflow(pool: PgPool) {
+        let org_id = uuid::Uuid::new_v4();
+        let provider = DatabaseWorkflowProvider::new(pool, org_id);
+        
+        let result = provider.fetch(WorkflowScope::Global, "nonexistent", "1.0.0").await;
+        assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
+    }
+
+    #[sqlx::test(migrations = "../met-store/migrations")]
+    async fn test_list_versions(pool: PgPool) {
+        let org_id = uuid::Uuid::new_v4();
+        
+        // Insert multiple versions
+        for version in &["1.0.0", "1.1.0", "2.0.0"] {
+            let workflow_def = test_workflow_def();
+            let definition = serde_json::to_value(&workflow_def).unwrap();
+            
+            sqlx::query(
+                r#"
+                INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
+                VALUES ($1, $2, 'global', $3, $4, $5, false, NOW())
+                "#,
+            )
+            .bind(uuid::Uuid::new_v4())
+            .bind(org_id)
+            .bind("multi-version")
+            .bind(version)
+            .bind(&definition)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let provider = DatabaseWorkflowProvider::new(pool, org_id);
+        
+        let versions = provider.list_versions(WorkflowScope::Global, "multi-version").await.unwrap();
+        assert_eq!(versions.len(), 3);
+        assert!(versions.contains(&"1.0.0".to_string()));
+        assert!(versions.contains(&"1.1.0".to_string()));
+        assert!(versions.contains(&"2.0.0".to_string()));
+    }
+
+    #[sqlx::test(migrations = "../met-store/migrations")]
+    async fn test_deprecated_workflow_excluded(pool: PgPool) {
+        let org_id = uuid::Uuid::new_v4();
+        
+        // Insert a deprecated workflow
+        let workflow_def = test_workflow_def();
+        let definition = serde_json::to_value(&workflow_def).unwrap();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
+            VALUES ($1, $2, 'global', $3, $4, $5, true, NOW())
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(org_id)
+        .bind("deprecated-workflow")
+        .bind("1.0.0")
+        .bind(&definition)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let provider = DatabaseWorkflowProvider::new(pool, org_id);
+        
+        // list_versions should not include deprecated workflows
+        let versions = provider.list_versions(WorkflowScope::Global, "deprecated-workflow").await.unwrap();
+        assert!(versions.is_empty());
+        
+        // fetch latest should fail for deprecated-only workflows
+        let result = provider.fetch(WorkflowScope::Global, "deprecated-workflow", "latest").await;
+        assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
     }
 }

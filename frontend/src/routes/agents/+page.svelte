@@ -4,7 +4,7 @@
 	import { apiMethods } from '$api/client';
 	import type { Agent } from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
-	import { Server, RefreshCw, Search, Filter, Power, Play, MoreVertical, Info } from 'lucide-svelte';
+	import { Server, RefreshCw, Search, Power, Play, Info, Trash2 } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -16,6 +16,8 @@
 	let poolFilter = $state<string>('');
 	let selectedAgent = $state<Agent | null>(null);
 	let showDetailsDialog = $state(false);
+	let showDeleteDialog = $state(false);
+	let agentToDelete = $state<Agent | null>(null);
 	let actionLoading = $state(false);
 
 	const statusOptions = [
@@ -66,6 +68,29 @@
 			await loadAgents();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to resume agent';
+		} finally {
+			actionLoading = false;
+		}
+	}
+
+	function confirmDelete(agent: Agent) {
+		agentToDelete = agent;
+		showDeleteDialog = true;
+	}
+
+	async function deleteAgent() {
+		if (!agentToDelete) return;
+		actionLoading = true;
+		error = null;
+		try {
+			await apiMethods.agents.delete(agentToDelete.id);
+			showDeleteDialog = false;
+			agentToDelete = null;
+			showDetailsDialog = false;
+			selectedAgent = null;
+			await loadAgents();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to remove agent';
 		} finally {
 			actionLoading = false;
 		}
@@ -315,6 +340,19 @@
 											Drain
 										</Button>
 									{/if}
+									{#if agent.running_jobs === 0}
+										<span title="Remove agent from organization">
+											<Button
+												variant="ghost"
+												size="sm"
+												class="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+												onclick={() => confirmDelete(agent)}
+												loading={actionLoading}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</span>
+									{/if}
 									<Button
 										variant="ghost"
 										size="sm"
@@ -391,7 +429,16 @@
 				</div>
 			{/if}
 
-			<div class="flex justify-end gap-2 pt-4">
+			<div class="flex flex-wrap justify-end gap-2 pt-4">
+				{#if selectedAgent.running_jobs === 0}
+					<Button
+						variant="outline"
+						class="border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+						onclick={() => { confirmDelete(selectedAgent!); showDetailsDialog = false; }}
+					>
+						Remove agent
+					</Button>
+				{/if}
 				<Button variant="outline" onclick={() => (showDetailsDialog = false)}>
 					Close
 				</Button>
@@ -405,6 +452,23 @@
 					</Button>
 				{/if}
 			</div>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog bind:open={showDeleteDialog} title="Remove agent?">
+	{#if agentToDelete}
+		<p class="text-sm text-[var(--text-secondary)]">
+			This removes <span class="font-medium text-[var(--text-primary)]">{agentToDelete.name}</span> from your
+			organization. The agent can register again with a join token (it will get a new identity).
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => { showDeleteDialog = false; agentToDelete = null; }}>
+				Cancel
+			</Button>
+			<Button variant="primary" class="bg-red-600 hover:bg-red-700" onclick={deleteAgent} loading={actionLoading}>
+				Remove
+			</Button>
 		</div>
 	{/if}
 </Dialog>

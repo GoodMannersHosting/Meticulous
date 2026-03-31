@@ -132,7 +132,7 @@ pub async fn validate(path: &std::path::Path, format: OutputFormat) -> Result<()
     })?;
 
     let provider = MockWorkflowProvider::new();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
 
     #[derive(Serialize)]
     struct ValidationResult {

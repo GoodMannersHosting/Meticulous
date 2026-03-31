@@ -86,7 +86,7 @@ async fn list_auth_providers(
     };
 
     Ok(Json(AuthProvidersResponse {
-        password_enabled: true, // TODO: Make this configurable
+        password_enabled: state.config.auth.password_enabled,
         providers,
     }))
 }
@@ -144,6 +144,7 @@ impl From<&User> for UserResponse {
     responses(
         (status = 200, description = "Login successful", body = LoginResponse),
         (status = 401, description = "Invalid credentials"),
+        (status = 403, description = "Password authentication disabled"),
     ),
     tag = "auth",
 )]
@@ -151,6 +152,11 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
+    // Check if password authentication is enabled
+    if !state.config.auth.password_enabled {
+        return Err(ApiError::forbidden("password authentication is disabled - use SSO to login"));
+    }
+
     let user_repo = UserRepo::new(state.db());
     let org_repo = OrganizationRepo::new(state.db());
 
@@ -367,9 +373,10 @@ async fn setup(
         return Err(ApiError::conflict("setup already completed"));
     }
 
-    // Validate password
-    if req.password.len() < 8 {
-        return Err(ApiError::bad_request("password must be at least 8 characters"));
+    // Validate password using configured minimum length
+    let min_length = state.config.auth.min_password_length;
+    if req.password.len() < min_length {
+        return Err(ApiError::bad_request(format!("password must be at least {} characters", min_length)));
     }
 
     // Create slug from org name
@@ -457,6 +464,7 @@ pub struct ChangePasswordResponse {
         (status = 200, description = "Password changed", body = ChangePasswordResponse),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Current password incorrect"),
+        (status = 403, description = "Password authentication disabled"),
     ),
     tag = "auth",
 )]
@@ -465,11 +473,17 @@ async fn change_password(
     Auth(current_user): Auth,
     Json(req): Json<ChangePasswordRequest>,
 ) -> ApiResult<Json<ChangePasswordResponse>> {
+    // Check if password authentication is enabled
+    if !state.config.auth.password_enabled {
+        return Err(ApiError::forbidden("password authentication is disabled"));
+    }
+
     let user_repo = UserRepo::new(state.db());
 
-    // Validate new password
-    if req.new_password.len() < 8 {
-        return Err(ApiError::bad_request("new password must be at least 8 characters"));
+    // Validate new password using configured minimum length
+    let min_length = state.config.auth.min_password_length;
+    if req.new_password.len() < min_length {
+        return Err(ApiError::bad_request(format!("new password must be at least {} characters", min_length)));
     }
 
     // Get the user to verify current password
@@ -534,11 +548,17 @@ async fn admin_reset_password(
         return Err(ApiError::forbidden("admin access required"));
     }
 
+    // Check if password authentication is enabled
+    if !state.config.auth.password_enabled {
+        return Err(ApiError::forbidden("password authentication is disabled"));
+    }
+
     let user_repo = UserRepo::new(state.db());
 
-    // Validate new password
-    if req.new_password.len() < 8 {
-        return Err(ApiError::bad_request("password must be at least 8 characters"));
+    // Validate new password using configured minimum length
+    let min_length = state.config.auth.min_password_length;
+    if req.new_password.len() < min_length {
+        return Err(ApiError::bad_request(format!("password must be at least {} characters", min_length)));
     }
 
     // Verify the target user exists

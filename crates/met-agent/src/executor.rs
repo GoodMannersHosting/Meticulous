@@ -15,6 +15,7 @@ use met_proto::agent::v1::{
 };
 use met_proto::common::v1::{RunStatus, StepKind, Timestamp};
 use prost::Message;
+use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, watch, RwLock};
 use tonic::transport::Channel;
 use tracing::{debug, error, info, instrument, warn};
@@ -392,18 +393,67 @@ impl JobExecutor {
         let request = JobKeyExchange {
             agent_id: self.identity.agent_id.clone(),
             job_id: job_id.to_string(),
-            one_time_x509_public_key: pki.public_key_der(),
+            one_time_x509_public_key: pki.x25519_public_key().to_vec(),
         };
 
         let response = self.client.exchange_job_keys(request).await?.into_inner();
 
-        // Decrypt secrets
+        // Derive HMAC key from agent identity for secret verification
+        // This must match the key derivation in the controller
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(self.identity.jwt_token.as_bytes());
+        hasher.update(b"meticulous-secrets-hmac-v1");
+        let hmac_key = hasher.finalize();
+
+        // Decrypt secrets using X25519 + AES-256-GCM hybrid decryption
         let mut secrets = HashMap::new();
         for secret in response.secrets {
-            // TODO: Implement actual decryption
-            // For now, skip decryption
-            warn!(key = %secret.key, "secret decryption not implemented");
+            match pki.decrypt(&secret.encrypted_value, &hmac_key) {
+                Ok(plaintext) => {
+                    // Verify SHA-256 checksum
+                    let mut checksum_hasher = Sha256::new();
+                    checksum_hasher.update(&*plaintext);
+                    let computed_checksum = hex::encode(checksum_hasher.finalize());
+
+                    if computed_checksum != secret.sha256_checksum {
+                        error!(
+                            key = %secret.key,
+                            expected = %secret.sha256_checksum,
+                            computed = %computed_checksum,
+                            "secret checksum verification failed"
+                        );
+                        return Err(AgentError::Security(format!(
+                            "checksum verification failed for secret '{}'",
+                            secret.key
+                        )));
+                    }
+
+                    // Convert decrypted bytes to string (zeroizing wrapper ensures cleanup)
+                    let value = String::from_utf8(plaintext.to_vec())
+                        .map_err(|_| AgentError::Security(format!(
+                            "secret '{}' is not valid UTF-8",
+                            secret.key
+                        )))?;
+
+                    debug!(key = %secret.key, "decrypted and verified secret");
+                    secrets.insert(secret.key, value);
+                }
+                Err(e) => {
+                    error!(key = %secret.key, error = %e, "failed to decrypt secret");
+                    return Err(AgentError::Security(format!(
+                        "failed to decrypt secret '{}': {}",
+                        secret.key, e
+                    )));
+                }
+            }
         }
+
+        info!(
+            job_id = %job_id,
+            secrets_count = secrets.len(),
+            "decrypted and verified all job secrets"
+        );
 
         Ok(secrets)
     }

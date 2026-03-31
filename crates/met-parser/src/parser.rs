@@ -19,6 +19,7 @@ use crate::schema::{
     RawCacheConfig, RawHealthCheck, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy,
     RawSecretRef, RawService, RawStep, RawWorkflowDef, RawWorkflowInvocation,
 };
+use crate::span::{SpanTracker, SpannedYamlParser};
 use crate::variable::VariableContext;
 use crate::workflow::{WorkflowProvider, WorkflowResolver};
 use indexmap::IndexMap;
@@ -51,6 +52,8 @@ impl Default for ParserConfig {
 pub struct PipelineParser<'a> {
     config: ParserConfig,
     provider: &'a dyn WorkflowProvider,
+    /// Span tracker for source location resolution
+    span_tracker: Option<SpanTracker>,
 }
 
 impl<'a> PipelineParser<'a> {
@@ -59,6 +62,7 @@ impl<'a> PipelineParser<'a> {
         Self {
             config: ParserConfig::default(),
             provider,
+            span_tracker: None,
         }
     }
 
@@ -68,12 +72,46 @@ impl<'a> PipelineParser<'a> {
         self
     }
 
+    /// Get a source location for a key, with fallback to unknown location.
+    fn get_location(&self, key: &str) -> SourceLocation {
+        self.span_tracker
+            .as_ref()
+            .and_then(|t| t.get_span(key).cloned())
+            .unwrap_or_else(|| {
+                let mut loc = SourceLocation::unknown();
+                if let Some(file) = &self.config.source_file {
+                    loc = loc.with_file(file.clone());
+                }
+                loc
+            })
+    }
+
+    /// Get a source location for a workflow invocation by index.
+    fn get_workflow_location(&self, idx: usize, workflow_id: &str) -> SourceLocation {
+        // Try specific workflow key first, then fall back to index-based or generic
+        self.span_tracker
+            .as_ref()
+            .and_then(|t| {
+                t.get_span(workflow_id)
+                    .or_else(|| t.get_span(&format!("workflows[{}]", idx)))
+                    .or_else(|| t.get_span("workflows"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                let mut loc = SourceLocation::unknown();
+                if let Some(file) = &self.config.source_file {
+                    loc = loc.with_file(file.clone());
+                }
+                loc
+            })
+    }
+
     /// Parse a pipeline from YAML string.
     #[instrument(skip(self, yaml), fields(source = ?self.config.source_file))]
-    pub async fn parse(&self, yaml: &str) -> Result<PipelineIR, Vec<ParseError>> {
+    pub async fn parse(&mut self, yaml: &str) -> Result<PipelineIR, Vec<ParseError>> {
         let mut diagnostics = ParseDiagnostics::new();
 
-        // Stage 1: Deserialize YAML
+        // Stage 1: Deserialize YAML with span tracking
         debug!("stage 1: deserializing YAML");
         let raw_pipeline = match self.deserialize(yaml, &mut diagnostics) {
             Some(p) => p,
@@ -127,16 +165,30 @@ impl<'a> PipelineParser<'a> {
         Ok(ir)
     }
 
-    /// Stage 1: Deserialize YAML.
+    /// Stage 1: Deserialize YAML with span tracking.
     fn deserialize(
-        &self,
+        &mut self,
         yaml: &str,
         diagnostics: &mut ParseDiagnostics,
     ) -> Option<RawPipeline> {
-        match serde_yaml::from_str(yaml) {
-            Ok(pipeline) => Some(pipeline),
+        let mut parser = if let Some(file) = &self.config.source_file {
+            SpannedYamlParser::with_file(file.clone())
+        } else {
+            SpannedYamlParser::new()
+        };
+
+        match parser.parse::<RawPipeline>(yaml) {
+            Ok((pipeline, tracker)) => {
+                // Clone the span tracker for use in later stages
+                self.span_tracker = Some(SpanTracker::from_existing(tracker));
+                Some(pipeline)
+            }
             Err(e) => {
-                diagnostics.push(ParseError::from(e));
+                let mut error = ParseError::new(ErrorCode::E1001, e.message);
+                if let Some(loc) = e.location {
+                    error = error.with_source(loc);
+                }
+                diagnostics.push(error);
                 None
             }
         }
@@ -146,13 +198,17 @@ impl<'a> PipelineParser<'a> {
     fn validate_schema(&self, pipeline: &RawPipeline, diagnostics: &mut ParseDiagnostics) {
         // Validate pipeline name
         if pipeline.name.is_empty() {
-            diagnostics.error(ErrorCode::E2001, "pipeline name is required");
+            diagnostics.error_at(
+                ErrorCode::E2001,
+                "pipeline name is required",
+                self.get_location("name"),
+            );
         }
 
         // Validate workflow invocations
         let mut seen_ids: HashSet<&str> = HashSet::new();
         for (idx, workflow) in pipeline.workflows.iter().enumerate() {
-            let location = SourceLocation::new(1, 1); // TODO: capture actual location
+            let location = self.get_workflow_location(idx, &workflow.id);
 
             // Check required fields
             if workflow.id.is_empty() {
@@ -177,7 +233,7 @@ impl<'a> PipelineParser<'a> {
                     diagnostics.error_at(
                         ErrorCode::E2005,
                         format!("duplicate workflow ID: {}", workflow.id),
-                        location,
+                        location.clone(),
                     );
                 } else {
                     seen_ids.insert(&workflow.id);
@@ -192,7 +248,7 @@ impl<'a> PipelineParser<'a> {
                         "invalid workflow ID '{}': must be alphanumeric with hyphens/underscores",
                         workflow.id
                     ),
-                    SourceLocation::new(1, 1),
+                    location.clone(),
                 );
             }
 
@@ -215,7 +271,7 @@ impl<'a> PipelineParser<'a> {
                             "workflow '{}' retry max_attempts must be at least 1",
                             workflow.id
                         ),
-                        SourceLocation::new(1, 1),
+                        location.clone(),
                     );
                 }
             }
@@ -224,9 +280,10 @@ impl<'a> PipelineParser<'a> {
         // Validate secrets
         for (name, _secret) in &pipeline.secrets {
             if !is_valid_id(name) {
-                diagnostics.error(
+                diagnostics.error_at(
                     ErrorCode::E2006,
                     format!("invalid secret name '{}': must be alphanumeric with underscores", name),
+                    self.get_location(name),
                 );
             }
         }
@@ -234,12 +291,13 @@ impl<'a> PipelineParser<'a> {
         // Validate variables
         for (name, _value) in &pipeline.vars {
             if !is_valid_id(name) {
-                diagnostics.error(
+                diagnostics.error_at(
                     ErrorCode::E2006,
                     format!(
                         "invalid variable name '{}': must be alphanumeric with underscores",
                         name
                     ),
+                    self.get_location(name),
                 );
             }
         }
@@ -254,15 +312,15 @@ impl<'a> PipelineParser<'a> {
         let mut resolver = WorkflowResolver::new(self.provider);
         let mut resolved = Vec::new();
 
-        for invocation in &pipeline.workflows {
-            let location = SourceLocation::new(1, 1); // TODO: capture actual location
+        for (idx, invocation) in pipeline.workflows.iter().enumerate() {
+            let location = self.get_workflow_location(idx, &invocation.id);
 
             if let Some((workflow_def, workflow_ref)) = resolver
                 .resolve(
                     &invocation.workflow,
                     invocation.version.as_deref(),
                     diagnostics,
-                    location,
+                    location.clone(),
                 )
                 .await
             {
@@ -319,7 +377,9 @@ impl<'a> PipelineParser<'a> {
         ctx: &VariableContext,
         diagnostics: &mut ParseDiagnostics,
     ) {
-        for resolved in workflows {
+        for (idx, resolved) in workflows.iter().enumerate() {
+            let workflow_location = self.get_workflow_location(idx, &resolved.invocation.id);
+
             // Build context with workflow inputs
             let inputs: IndexMap<String, String> = resolved
                 .invocation
@@ -340,56 +400,47 @@ impl<'a> PipelineParser<'a> {
             // Validate input values
             for (name, value) in &resolved.invocation.inputs {
                 if let serde_yaml::Value::String(s) = value {
-                    crate::variable::validate_refs(
-                        s,
-                        &workflow_ctx,
-                        diagnostics,
-                        SourceLocation::new(1, 1),
-                    );
+                    let loc = self.get_location(name).clone();
+                    let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                    crate::variable::validate_refs(s, &workflow_ctx, diagnostics, loc);
                 }
             }
 
             // Validate condition
             if let Some(condition) = &resolved.invocation.condition {
-                crate::variable::validate_refs(
-                    condition,
-                    &workflow_ctx,
-                    diagnostics,
-                    SourceLocation::new(1, 1),
-                );
+                let loc = self.get_location("condition");
+                let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                crate::variable::validate_refs(condition, &workflow_ctx, diagnostics, loc);
             }
 
             // Validate cache key
             if let Some(cache) = &resolved.invocation.cache {
-                crate::variable::validate_refs(
-                    &cache.key,
-                    &workflow_ctx,
-                    diagnostics,
-                    SourceLocation::new(1, 1),
-                );
+                let loc = self.get_location("cache");
+                let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                crate::variable::validate_refs(&cache.key, &workflow_ctx, diagnostics, loc);
             }
 
             // Validate steps in workflow definition
             for job in &resolved.definition.jobs {
+                let job_location = self.get_location(&job.id);
+                let job_location = if job_location.line == 0 { workflow_location.clone() } else { job_location };
+
                 for step in &job.steps {
+                    let step_location = step
+                        .id
+                        .as_ref()
+                        .map(|id| self.get_location(id))
+                        .unwrap_or_else(|| job_location.clone());
+                    let step_location = if step_location.line == 0 { job_location.clone() } else { step_location };
+
                     // Validate run command
                     if let Some(run) = &step.run {
-                        crate::variable::validate_refs(
-                            run,
-                            &workflow_ctx,
-                            diagnostics,
-                            SourceLocation::new(1, 1),
-                        );
+                        crate::variable::validate_refs(run, &workflow_ctx, diagnostics, step_location.clone());
                     }
 
                     // Validate env values
                     for value in step.env.values() {
-                        crate::variable::validate_refs(
-                            value,
-                            &workflow_ctx,
-                            diagnostics,
-                            SourceLocation::new(1, 1),
-                        );
+                        crate::variable::validate_refs(value, &workflow_ctx, diagnostics, step_location.clone());
                     }
                 }
             }
@@ -400,11 +451,12 @@ impl<'a> PipelineParser<'a> {
     fn build_dag_nodes(&self, workflows: &[ResolvedWorkflow]) -> Vec<DagNode> {
         workflows
             .iter()
-            .map(|w| DagNode {
+            .enumerate()
+            .map(|(idx, w)| DagNode {
                 id: w.invocation.id.clone(),
                 name: w.invocation.name.clone(),
                 depends_on: w.invocation.depends_on.clone(),
-                source: SourceLocation::new(1, 1),
+                source: self.get_workflow_location(idx, &w.invocation.id),
             })
             .collect()
     }
@@ -887,7 +939,7 @@ workflows:
             mock_workflow(),
         );
 
-        let parser = PipelineParser::new(&provider);
+        let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
 
         assert!(result.is_ok(), "parse error: {:?}", result.err());
@@ -920,7 +972,7 @@ workflows:
             mock_workflow(),
         );
 
-        let parser = PipelineParser::new(&provider);
+        let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
 
         assert!(result.is_ok());
@@ -956,7 +1008,7 @@ workflows:
             mock_workflow(),
         );
 
-        let parser = PipelineParser::new(&provider);
+        let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
 
         assert!(result.is_err());
@@ -977,7 +1029,7 @@ workflows:
 "#;
 
         let provider = MockWorkflowProvider::new();
-        let parser = PipelineParser::new(&provider);
+        let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
 
         assert!(result.is_err());

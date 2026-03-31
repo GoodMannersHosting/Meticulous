@@ -30,6 +30,14 @@ impl SpanTracker {
         }
     }
 
+    /// Create a span tracker from an existing reference (clones the data).
+    pub fn from_existing(other: &SpanTracker) -> Self {
+        Self {
+            spans: other.spans.clone(),
+            source_file: other.source_file.clone(),
+        }
+    }
+
     /// Parse YAML and track spans by walking through the source.
     pub fn parse_with_spans(&mut self, yaml: &str) -> Result<Value, serde_yaml::Error> {
         let value = serde_yaml::from_str(yaml)?;

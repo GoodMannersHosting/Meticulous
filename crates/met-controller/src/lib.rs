@@ -25,6 +25,7 @@
 pub mod config;
 pub mod error;
 pub mod grpc;
+pub mod log_archive;
 pub mod health;
 pub mod jwt;
 pub mod nats;
@@ -33,6 +34,7 @@ pub mod registry;
 pub use config::ControllerConfig;
 pub use error::{ControllerError, Result};
 pub use grpc::AgentServiceImpl;
+pub use log_archive::{finalize_job_logs, rehydrate_job_logs_from_store};
 pub use health::HealthMonitor;
 pub use jwt::JwtManager;
 pub use nats::NatsDispatcher;

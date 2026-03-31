@@ -333,11 +333,47 @@ impl ProcessWatcher {
         result
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    async fn get_descendant_pids(&self, root_pid: u32) -> Vec<(u32, u32, u32)> {
+        use std::mem;
+
+        // Use sysctl to get process list and filter for descendants
+        let mut result = Vec::new();
+        let mut to_visit = vec![(root_pid, 0u32)]; // (pid, depth)
+
+        // Get all processes on the system
+        let all_procs = match get_all_pids_macos() {
+            Ok(pids) => pids,
+            Err(e) => {
+                trace!(error = %e, "failed to get process list on macOS");
+                return Vec::new();
+            }
+        };
+
+        // Build a map of pid -> parent_pid using proc_pidinfo
+        let mut parent_map: HashMap<u32, u32> = HashMap::new();
+        for &pid in &all_procs {
+            if let Some(ppid) = get_parent_pid_macos(pid) {
+                parent_map.insert(pid, ppid);
+            }
+        }
+
+        // Find all descendants using BFS
+        while let Some((pid, depth)) = to_visit.pop() {
+            for (&child_pid, &parent_pid) in &parent_map {
+                if parent_pid == pid && child_pid != root_pid {
+                    result.push((child_pid, pid, depth + 1));
+                    to_visit.push((child_pid, depth + 1));
+                }
+            }
+        }
+
+        result
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "macos")))]
     async fn get_descendant_pids(&self, _root_pid: u32) -> Vec<(u32, u32, u32)> {
-        // On non-Linux platforms, we can't easily enumerate child processes
-        // without platform-specific APIs. Return empty for now.
-        // TODO: Implement for macOS (sysctl) and Windows (CreateToolhelp32Snapshot)
+        // On Windows and other platforms, process enumeration not yet implemented
         Vec::new()
     }
 
@@ -360,11 +396,127 @@ impl ProcessWatcher {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    async fn get_process_exe(&self, pid: u32) -> Option<PathBuf> {
+        get_exe_path_macos(pid)
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "macos")))]
     async fn get_process_exe(&self, _pid: u32) -> Option<PathBuf> {
-        // TODO: Implement for macOS and Windows
+        // Windows implementation not yet available
         None
     }
+}
+
+/// Get all process IDs on macOS using sysctl.
+#[cfg(target_os = "macos")]
+fn get_all_pids_macos() -> std::result::Result<Vec<u32>, std::io::Error> {
+    use std::io::{Error, ErrorKind};
+
+    // KERN_PROC_ALL = 0
+    // CTL_KERN = 1, KERN_PROC = 14
+    let mib: [i32; 4] = [1, 14, 0, 0]; // CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0
+
+    // First call to get size
+    let mut size: libc::size_t = 0;
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_ptr() as *mut i32,
+            4,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    if ret != 0 {
+        return Err(Error::last_os_error());
+    }
+
+    // Allocate buffer
+    let num_procs = size / std::mem::size_of::<libc::kinfo_proc>();
+    let mut procs: Vec<libc::kinfo_proc> = Vec::with_capacity(num_procs);
+
+    // Second call to get data
+    let ret = unsafe {
+        procs.set_len(num_procs);
+        libc::sysctl(
+            mib.as_ptr() as *mut i32,
+            4,
+            procs.as_mut_ptr() as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    if ret != 0 {
+        return Err(Error::last_os_error());
+    }
+
+    // Actual number of processes returned
+    let actual_procs = size / std::mem::size_of::<libc::kinfo_proc>();
+    procs.truncate(actual_procs);
+
+    Ok(procs
+        .iter()
+        .map(|p| p.kp_proc.p_pid as u32)
+        .filter(|&pid| pid > 0)
+        .collect())
+}
+
+/// Get the parent PID of a process on macOS.
+#[cfg(target_os = "macos")]
+fn get_parent_pid_macos(pid: u32) -> Option<u32> {
+    let mib: [i32; 4] = [1, 14, 1, pid as i32]; // CTL_KERN, KERN_PROC, KERN_PROC_PID, pid
+
+    let mut info: libc::kinfo_proc = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of::<libc::kinfo_proc>();
+
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_ptr() as *mut i32,
+            4,
+            &mut info as *mut libc::kinfo_proc as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    if ret == 0 && size > 0 {
+        let ppid = info.kp_eproc.e_ppid;
+        if ppid > 0 {
+            return Some(ppid as u32);
+        }
+    }
+
+    None
+}
+
+/// Get the executable path for a process on macOS using proc_pidpath.
+#[cfg(target_os = "macos")]
+fn get_exe_path_macos(pid: u32) -> Option<PathBuf> {
+    extern "C" {
+        fn proc_pidpath(pid: i32, buffer: *mut libc::c_char, buffersize: u32) -> i32;
+    }
+
+    const PROC_PIDPATHINFO_MAXSIZE: u32 = 4096;
+    let mut buffer: Vec<u8> = vec![0; PROC_PIDPATHINFO_MAXSIZE as usize];
+
+    let ret = unsafe { proc_pidpath(pid as i32, buffer.as_mut_ptr() as *mut libc::c_char, PROC_PIDPATHINFO_MAXSIZE) };
+
+    if ret > 0 {
+        buffer.truncate(ret as usize);
+        let path_str = String::from_utf8_lossy(&buffer);
+        let path = PathBuf::from(path_str.trim_end_matches('\0'));
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 impl Default for ProcessWatcher {

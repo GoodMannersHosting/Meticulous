@@ -22,7 +22,7 @@ pub async fn run(
     })?;
 
     let provider = MockWorkflowProvider::new();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let pipeline = parser.parse(&yaml).await.map_err(|errors| {
         let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
         crate::api_client::ApiError::Other(format!("Parse errors:\n  {}", msgs.join("\n  ")))

@@ -1495,7 +1495,7 @@ async fn enrich_join_tokens(
     }
 
     let agents: Vec<AgentRow> = sqlx::query_as(
-        "SELECT id, name, status, join_token_id, created_at FROM agents WHERE join_token_id = ANY($1)",
+        "SELECT id, name, status, join_token_id, created_at FROM agents WHERE join_token_id = ANY($1) AND deregistered_at IS NULL",
     )
     .bind(&token_ids)
     .fetch_all(db)

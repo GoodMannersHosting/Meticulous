@@ -107,6 +107,7 @@ use crate::routes::{
         // Agents
         crate::routes::agents::list_agents,
         crate::routes::agents::get_agent,
+        crate::routes::agents::delete_agent,
         crate::routes::agents::drain_agent,
         crate::routes::agents::resume_agent,
         crate::routes::agents::revoke_agent,

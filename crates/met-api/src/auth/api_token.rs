@@ -11,10 +11,10 @@
 //! The full token is hashed using SHA-256 for storage comparison.
 
 use crate::extractors::CurrentUser;
+use met_core::hash_join_token;
 use met_core::ids::ProjectId;
 use met_store::repos::{ApiTokenRepo, UserRepo};
 use met_store::PgPool;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -63,7 +63,7 @@ impl<'a> ApiTokenValidator<'a> {
         }
 
         // Hash the full token for lookup
-        let token_hash = hash_token(token);
+        let token_hash = hash_join_token(token);
 
         // Look up the token by hash
         let api_token_repo = ApiTokenRepo::new(self.db);
@@ -130,10 +130,7 @@ impl<'a> ApiTokenValidator<'a> {
 /// API tokens are already high-entropy random strings, so we don't need
 /// the computational cost of Argon2 like we do for passwords.
 pub fn hash_token(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(result)
+    hash_join_token(token)
 }
 
 /// Generate a new API token.

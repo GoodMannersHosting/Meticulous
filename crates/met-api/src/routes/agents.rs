@@ -10,6 +10,7 @@ use met_core::{
     models::{Agent, AgentStatus},
 };
 use met_store::repos::AgentRepo;
+use met_store::StoreError;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -23,7 +24,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/agents", get(list_agents))
-        .route("/agents/{id}", get(get_agent))
+        .route("/agents/{id}", get(get_agent).delete(delete_agent))
         .route("/agents/{id}/drain", axum::routing::post(drain_agent))
         .route("/agents/{id}/resume", axum::routing::post(resume_agent))
         .route("/agents/{id}/revoke", axum::routing::post(revoke_agent))
@@ -168,6 +169,36 @@ async fn get_agent(
     }
 
     Ok(Json(AgentResponse::from(agent)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/agents/{id}",
+    params(("id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent removed from organization"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Agent not found"),
+        (status = 409, description = "Agent still has running jobs"),
+    ),
+    tag = "agents",
+)]
+#[instrument(skip(state))]
+async fn delete_agent(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<AgentId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let repo = AgentRepo::new(state.db());
+
+    match repo.soft_delete(user.org_id, id).await {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "message": "agent removed",
+            "agent_id": id.to_string()
+        }))),
+        Err(StoreError::Constraint(msg)) => Err(ApiError::conflict(msg)),
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]

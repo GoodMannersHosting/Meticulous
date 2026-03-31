@@ -43,6 +43,34 @@ pub struct AgentPoolSpec {
     /// Whether to use Docker-in-Docker sidecar.
     #[serde(default)]
     pub dind_enabled: bool,
+
+    /// Optional autoscaler configuration for NATS queue-based scaling.
+    #[serde(default)]
+    pub autoscaler: Option<InlineAutoscalerConfig>,
+}
+
+/// Inline autoscaler configuration for queue-depth based scaling.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+pub struct InlineAutoscalerConfig {
+    /// Queue depth threshold to trigger scale up (number of pending messages).
+    #[serde(default)]
+    pub queue_depth_scale_up_threshold: Option<i32>,
+
+    /// Queue depth threshold below which to scale down (number of pending messages).
+    #[serde(default)]
+    pub queue_depth_scale_down_threshold: Option<i32>,
+
+    /// Number of replicas to add per scale up event.
+    #[serde(default)]
+    pub scale_up_step: Option<i32>,
+
+    /// Number of replicas to remove per scale down event.
+    #[serde(default)]
+    pub scale_down_step: Option<i32>,
+
+    /// Stabilization window in seconds before scaling down.
+    #[serde(default)]
+    pub scale_down_stabilization_seconds: Option<i32>,
 }
 
 fn pod_template_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {

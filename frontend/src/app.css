@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* Match Tailwind `dark:` utilities to html.dark — not prefers-color-scheme — so they stay in sync with CSS variables (--text-primary, etc.) and the theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
 	/* Color Palette - Light Mode Base */
 	--color-primary-50: oklch(0.97 0.02 265);
