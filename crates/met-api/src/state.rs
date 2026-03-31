@@ -4,6 +4,7 @@
 //! shared resources like database pools, configuration, and service clients.
 
 use crate::config::ApiConfig;
+use met_secrets::BuiltinStoredCrypto;
 use met_store::PgPool;
 use std::sync::Arc;
 
@@ -17,14 +18,18 @@ pub struct AppState {
 
     /// API configuration.
     pub config: Arc<ApiConfig>,
+
+    /// Encrypts stored secret payloads (same master key as engine/controller).
+    pub stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
 }
 
 impl AppState {
     /// Create a new `AppState` instance.
-    pub fn new(db: PgPool, config: ApiConfig) -> Self {
+    pub fn new(db: PgPool, config: ApiConfig, stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>) -> Self {
         Self {
             db,
             config: Arc::new(config),
+            stored_secret_crypto,
         }
     }
 

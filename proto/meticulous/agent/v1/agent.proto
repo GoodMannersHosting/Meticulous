@@ -130,6 +130,12 @@ message JobKeyExchange {
     string job_id = 2;
     // One-time X509 public key for this job.
     bytes one_time_x509_public_key = 3;
+    // Copied from JobDispatch for secret resolution when no DB job_run row exists.
+    string org_id = 4;
+    string project_id = 5;
+    string pipeline_id = 6;
+    // Same JSON as JobDispatch.secret_resolution_hints_json.
+    string secret_resolution_hints_json = 7;
 }
 
 // Encrypted secrets payload for a job.
@@ -140,6 +146,15 @@ message JobSecretsPayload {
     repeated EncryptedSecretValue secrets = 2;
 }
 
+// How the agent should expose the decrypted secret to the job environment.
+enum SecretMaterialKind {
+    SECRET_MATERIAL_KIND_UNSPECIFIED = 0;
+    // Plaintext value is injected into process env as `key`.
+    SECRET_MATERIAL_KIND_ENV_INLINE = 1;
+    // Plaintext is file contents; agent writes under workspace `.meticulous/secrets/` and sets env `key` to the absolute file path.
+    SECRET_MATERIAL_KIND_WORKSPACE_FILE_PATH = 2;
+}
+
 // An encrypted secret value.
 message EncryptedSecretValue {
     // Secret key/name.
@@ -148,6 +163,8 @@ message EncryptedSecretValue {
     bytes encrypted_value = 2;
     // SHA-256 checksum of plaintext (for verification after decryption).
     string sha256_checksum = 3;
+    // Materialization after hybrid decrypt.
+    SecretMaterialKind material_kind = 4;
 }
 
 // Request to deregister agent.

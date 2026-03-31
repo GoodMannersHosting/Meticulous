@@ -109,6 +109,7 @@ met-proto = { path = "crates/met-proto" }
 met-telemetry = { path = "crates/met-telemetry" }
 met-logging = { path = "crates/met-logging" }
 met-secrets = { path = "crates/met-secrets" }
+met-secret-resolve = { path = "crates/met-secret-resolve" }
 met-objstore = { path = "crates/met-objstore" }
 met-parser = { path = "crates/met-parser" }
 met-engine = { path = "crates/met-engine" }

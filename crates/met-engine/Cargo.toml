@@ -11,6 +11,7 @@ met-core = { workspace = true }
 met-store = { workspace = true }
 met-parser = { workspace = true }
 met-secrets = { workspace = true }
+met-secret-resolve = { workspace = true }
 met-proto = { workspace = true }
 
 async-nats = { workspace = true }

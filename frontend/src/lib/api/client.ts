@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { PUBLIC_API_URL } from '$env/static/public';
-import type { ApiError, ApiResponse } from './types';
+import type { ApiError, ApiResponse, StoredSecret } from './types';
 
 export class ApiClientError extends Error {
 	constructor(
@@ -234,6 +234,27 @@ export const apiMethods = {
 		update: (id: string, data: Partial<import('./types').Project>) =>
 			api.patch<import('./types').Project>(`/api/v1/projects/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
+	},
+
+	// Platform stored secrets (encrypted at rest; values never returned)
+	storedSecrets: {
+		list: (projectId: string, params?: { pipeline_id?: string }) =>
+			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secrets`, {
+				params
+			}),
+		create: (
+			projectId: string,
+			body: {
+				path: string;
+				kind: string;
+				value: string;
+				description?: string;
+				pipeline_id?: string;
+			}
+		) => api.post<StoredSecret>(`/api/v1/projects/${projectId}/stored-secrets`, body),
+		rotate: (id: string, value: string) =>
+			api.post<StoredSecret>(`/api/v1/stored-secrets/${id}/rotate`, { value }),
+		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`)
 	},
 
 	// Pipelines

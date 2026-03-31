@@ -105,6 +105,7 @@ pub mod pki;
 pub mod providers;
 pub mod rbac;
 pub mod syscall_audit;
+pub mod stored_crypto;
 pub mod traits;
 pub mod types;
 
@@ -118,6 +119,7 @@ pub use providers::{
     AwsSecretsProvider, BuiltinSecretsProvider, KubernetesSecretsProvider, MultiProviderBroker,
     VaultProvider,
 };
+pub use stored_crypto::BuiltinStoredCrypto;
 
 // Re-export RBAC types
 pub use rbac::{Actor, ActorId, Permission, RbacPolicy, Resource, ResourceType, Role};

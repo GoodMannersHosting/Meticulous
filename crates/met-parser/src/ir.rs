@@ -111,8 +111,10 @@ pub enum SecretRef {
         key: String,
         mount: Option<String>,
     },
-    /// Built-in secret store.
+    /// Built-in secret store (legacy alias for platform-stored secrets).
     Builtin { name: String },
+    /// Platform-stored encrypted secret (`builtin_secrets` table).
+    Stored { name: String },
 }
 
 /// Agent pool selector.

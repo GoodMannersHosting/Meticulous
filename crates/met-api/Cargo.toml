@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 met-core = { workspace = true }
 met-store = { workspace = true }
+met-secrets = { workspace = true }
 met-engine = { workspace = true }
 met-controller = { workspace = true }
 axum = { workspace = true, features = ["ws"] }

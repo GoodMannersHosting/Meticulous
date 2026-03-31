@@ -106,6 +106,7 @@ async fn register_rejects_unknown_join_token(pool: PgPool) {
         registry,
         nats,
         None,
+        None,
     );
 
     let err = AgentService::register(
@@ -163,6 +164,7 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
         Arc::new(pool),
         registry,
         nats,
+        None,
         None,
     );
 

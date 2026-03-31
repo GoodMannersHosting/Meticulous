@@ -42,6 +42,9 @@ pub enum EngineError {
     #[error("secret resolution failed: {0}")]
     SecretResolution(String),
 
+    #[error("missing or unresolved secrets: {0:?}")]
+    MissingSecrets(Vec<String>),
+
     #[error("cache operation failed: {0}")]
     Cache(String),
 
@@ -59,6 +62,24 @@ pub enum EngineError {
 
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+impl From<met_secret_resolve::ResolveError> for EngineError {
+    fn from(e: met_secret_resolve::ResolveError) -> Self {
+        match e {
+            met_secret_resolve::ResolveError::MissingSecrets(names) => Self::MissingSecrets(names),
+            met_secret_resolve::ResolveError::MissingProjectId => {
+                Self::SecretResolution("pipeline is missing project_id".into())
+            }
+            met_secret_resolve::ResolveError::MissingMasterKey => Self::SecretResolution(
+                "built-in secrets master key is not configured".into(),
+            ),
+            met_secret_resolve::ResolveError::ExternalNotConfigured(msg) => {
+                Self::SecretResolution(format!("external secret provider not available: {msg}"))
+            }
+            other => Self::SecretResolution(other.to_string()),
+        }
+    }
 }
 
 impl EngineError {

@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Button, Card, Badge, Tabs, Dialog, Input, Alert } from '$components/ui';
+	import { Button, Card, Badge, Tabs, Dialog, Input, Alert, Select } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
-	import { StatusBadge } from '$components/ui';
 	import { apiMethods } from '$api/client';
-	import type { Project, Pipeline, Run } from '$api/types';
-	import { formatRelativeTime, formatDurationMs } from '$utils/format';
+	import type { Project, Pipeline, StoredSecret } from '$api/types';
+	import { formatRelativeTime } from '$utils/format';
 	import {
 		ArrowLeft,
 		Plus,
@@ -15,21 +14,44 @@
 		Settings,
 		Trash2,
 		Edit,
-		MoreVertical
+		KeyRound,
+		RefreshCw
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
-	let { data } = $props();
-
 	let project = $state<Project | null>(null);
 	let pipelines = $state<Pipeline[]>([]);
-	let recentRuns = $state<Run[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let activeTab = $state('pipelines');
 
+	let secrets = $state<StoredSecret[]>([]);
+	let secretsLoading = $state(false);
+	let secretsError = $state<string | null>(null);
+	let showCreateSecret = $state(false);
+	let createPath = $state('');
+	let createKind = $state('kv');
+	let createValue = $state('');
+	let createDescription = $state('');
+	let createPipelineId = $state('');
+	let secretActionLoading = $state(false);
+	let rotateTarget = $state<StoredSecret | null>(null);
+	let rotateValue = $state('');
+	let showRotateSecretDialog = $state(false);
+	let deleteTarget = $state<StoredSecret | null>(null);
+	let showDeleteSecretDialog = $state(false);
+
+	const kindOptions = [
+		{ value: 'kv', label: 'Key / value (kv)' },
+		{ value: 'api_key', label: 'API key' },
+		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
+		{ value: 'github_app', label: 'GitHub App (JSON)' },
+		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
+	];
+
 	const tabs = [
 		{ id: 'pipelines', label: 'Pipelines', icon: GitBranch },
+		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
 		{ id: 'runs', label: 'Recent Runs', icon: Play },
 		{ id: 'settings', label: 'Settings', icon: Settings }
 	];
@@ -84,6 +106,100 @@
 	function handlePipelineClick(pipeline: Pipeline) {
 		goto(`/pipelines/${pipeline.id}`);
 	}
+
+	function pipelineLabel(id: string | null | undefined): string {
+		if (!id) return '—';
+		const p = pipelines.find((x) => x.id === id);
+		return p ? p.name : id.slice(0, 8);
+	}
+
+	async function loadSecrets() {
+		if (!project) return;
+		secretsLoading = true;
+		secretsError = null;
+		try {
+			secrets = await apiMethods.storedSecrets.list(project.id);
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to load secrets';
+			secrets = [];
+		} finally {
+			secretsLoading = false;
+		}
+	}
+
+	$effect(() => {
+		const pid = project?.id;
+		if (activeTab !== 'secrets' || !pid || loading) return;
+		void loadSecrets();
+	});
+
+	function openCreateSecret() {
+		createPath = '';
+		createKind = 'kv';
+		createValue = '';
+		createDescription = '';
+		createPipelineId = '';
+		showCreateSecret = true;
+	}
+
+	async function submitCreateSecret() {
+		if (!project) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.create(project.id, {
+				path: createPath.trim(),
+				kind: createKind,
+				value: createValue,
+				description: createDescription.trim() || undefined,
+				pipeline_id: createPipelineId || undefined
+			});
+			showCreateSecret = false;
+			await loadSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to create secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function submitRotateSecret() {
+		if (!rotateTarget) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.rotate(rotateTarget.id, rotateValue);
+			showRotateSecretDialog = false;
+			rotateTarget = null;
+			rotateValue = '';
+			await loadSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to rotate secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function submitDeleteSecret() {
+		if (!deleteTarget) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.delete(deleteTarget.id);
+			showDeleteSecretDialog = false;
+			deleteTarget = null;
+			await loadSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to delete secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	const pipelineScopeOptions = $derived([
+		{ value: '', label: 'Project-wide (all pipelines)' },
+		...pipelines.map((p) => ({ value: p.id, label: p.name }))
+	]);
 </script>
 
 <svelte:head>
@@ -154,6 +270,109 @@
 					onRowClick={handlePipelineClick}
 				/>
 			{/if}
+		{:else if activeTab === 'secrets'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<p class="text-sm text-[var(--text-secondary)]">
+					Values are encrypted and never shown again after save. Reference them in pipeline YAML with{' '}
+					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
+						>stored: &#123; name: MY_TOKEN &#125;</code
+					>
+					(use the same logical name you entered here).
+				</p>
+				<div class="flex gap-2">
+					<Button variant="outline" size="sm" onclick={loadSecrets} loading={secretsLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+					<Button variant="primary" size="sm" onclick={openCreateSecret}>
+						<Plus class="h-4 w-4" />
+						Add secret
+					</Button>
+				</div>
+			</div>
+
+			{#if secretsError}
+				<Alert variant="error" title="Secrets" dismissible ondismiss={() => (secretsError = null)}>
+					{secretsError}
+				</Alert>
+			{/if}
+
+			{#if secretsLoading && secrets.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(4) as _, i (i)}
+							<Skeleton class="h-10 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else if secrets.length === 0}
+				<Card>
+					<EmptyState
+						title="No stored secrets"
+						description="Create a secret to inject into jobs via the pipeline secrets block."
+					>
+						<Button variant="primary" onclick={openCreateSecret}>
+							<Plus class="h-4 w-4" />
+							Add secret
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+					<table class="w-full text-sm">
+						<thead class="bg-[var(--bg-tertiary)]">
+							<tr>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
+								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-secondary)]">
+							{#each secrets as s (s.id)}
+								<tr class="bg-[var(--bg-secondary)]">
+									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
+									<td class="px-4 py-3">{s.kind}</td>
+									<td class="px-4 py-3">
+										{s.pipeline_id ? pipelineLabel(s.pipeline_id) : 'Project'}
+									</td>
+									<td class="px-4 py-3 font-mono">v{s.version}</td>
+									<td class="px-4 py-3 text-[var(--text-secondary)]">
+										{formatRelativeTime(s.updated_at)}
+									</td>
+									<td class="px-4 py-3 text-right">
+										<div class="flex justify-end gap-2">
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => {
+													rotateTarget = s;
+													rotateValue = '';
+													showRotateSecretDialog = true;
+												}}
+											>
+												Rotate
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => {
+													deleteTarget = s;
+													showDeleteSecretDialog = true;
+												}}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		{:else if activeTab === 'runs'}
 			<Card>
 				<EmptyState
@@ -193,3 +412,119 @@
 		{/if}
 	{/if}
 </div>
+
+<Dialog bind:open={showCreateSecret} title="Add stored secret">
+	<div class="space-y-4">
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-path"
+				>Logical name</label
+			>
+			<Input id="sec-path" bind:value={createPath} placeholder="e.g. MY_API_TOKEN" />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-kind">Kind</label>
+			<Select id="sec-kind" options={kindOptions} bind:value={createKind} />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-val"
+				>Value (one-time)</label
+			>
+			<textarea
+				id="sec-val"
+				bind:value={createValue}
+				rows="4"
+				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+				placeholder="Secret value or PEM / JSON payload"
+			></textarea>
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-desc"
+				>Description (optional)</label
+			>
+			<Input id="sec-desc" bind:value={createDescription} />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-scope">Scope</label>
+			<Select id="sec-scope" options={pipelineScopeOptions} bind:value={createPipelineId} />
+		</div>
+		<div class="flex justify-end gap-2 pt-2">
+			<Button variant="outline" onclick={() => (showCreateSecret = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				onclick={submitCreateSecret}
+				loading={secretActionLoading}
+				disabled={!createPath.trim() || !createValue}
+			>
+				Save
+			</Button>
+		</div>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showRotateSecretDialog}
+	title="Rotate secret"
+	onclose={() => {
+		rotateTarget = null;
+		rotateValue = '';
+	}}
+>
+	{#if rotateTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
+			version).
+		</p>
+		<div class="mt-4">
+			<textarea
+				bind:value={rotateValue}
+				rows="4"
+				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+			></textarea>
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showRotateSecretDialog = false;
+					rotateTarget = null;
+					rotateValue = '';
+				}}
+			>
+				Cancel
+			</Button>
+			<Button
+				variant="primary"
+				onclick={submitRotateSecret}
+				loading={secretActionLoading}
+				disabled={!rotateValue}
+			>
+				Rotate
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showDeleteSecretDialog}
+	title="Delete secret?"
+	onclose={() => {
+		deleteTarget = null;
+	}}
+>
+	{#if deleteTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Soft-delete <span class="font-mono">{deleteTarget.path}</span>? Runs that still need it may fail validation.
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showDeleteSecretDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitDeleteSecret}
+				loading={secretActionLoading}
+			>
+				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>

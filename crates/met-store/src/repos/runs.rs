@@ -303,6 +303,15 @@ pub struct RunWithJobs {
     pub job_runs: Vec<JobRun>,
 }
 
+/// Org/project/pipeline + definition for resolving job secrets from a job run id.
+#[derive(Debug, Clone)]
+pub struct JobRunPipelineContext {
+    pub org_id: Uuid,
+    pub project_id: Uuid,
+    pub pipeline_id: Uuid,
+    pub definition: serde_json::Value,
+}
+
 /// Repository for job run operations.
 pub struct JobRunRepo<'a> {
     pool: &'a PgPool,
@@ -489,6 +498,30 @@ impl<'a> JobRunRepo<'a> {
         .await?;
 
         Ok(job_run)
+    }
+
+    /// Load pipeline definition context for secret resolution (controller / jobs).
+    pub async fn get_pipeline_context(&self, job_run_id: JobRunId) -> Result<Option<JobRunPipelineContext>> {
+        let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, serde_json::Value)>(
+            r#"
+            SELECT COALESCE(r.org_id, pr.org_id), p.project_id, p.id, p.definition
+            FROM job_runs jr
+            JOIN runs r ON r.id = jr.run_id
+            JOIN pipelines p ON p.id = r.pipeline_id
+            JOIN projects pr ON pr.id = p.project_id
+            WHERE jr.id = $1
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?;
+
+        Ok(row.map(|(org_id, project_id, pipeline_id, definition)| JobRunPipelineContext {
+            org_id,
+            project_id,
+            pipeline_id,
+            definition,
+        }))
     }
 
     /// Update status helper.

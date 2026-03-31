@@ -140,6 +140,16 @@ pub struct RawSecretRef {
     /// Built-in secret store (discouraged).
     #[serde(default)]
     pub builtin: Option<RawBuiltinSecretRef>,
+    /// Platform-stored secret (preferred over `builtin`).
+    #[serde(default)]
+    pub stored: Option<RawStoredSecretRef>,
+}
+
+/// Platform-stored secret reference.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RawStoredSecretRef {
+    /// Logical name in the platform secret store (row `path`).
+    pub name: String,
 }
 
 /// AWS Secrets Manager secret reference.

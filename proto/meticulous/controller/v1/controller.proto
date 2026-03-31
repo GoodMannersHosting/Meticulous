@@ -44,6 +44,13 @@ message JobDispatch {
     string trace_id = 16;
     // Job attempt number (1 for first attempt).
     int32 attempt = 17;
+    // When true, agent must call ExchangeJobKeys even if `secrets` is empty (secrets delivered via gRPC).
+    bool requires_secret_exchange = 18;
+    // Project and pipeline IDs for server-side secret resolution (non-secret metadata).
+    string project_id = 19;
+    string pipeline_id = 20;
+    // JSON [`SecretResolutionHints`](engine): env_name → store path for stored/builtin refs only.
+    string secret_resolution_hints_json = 21;
 }
 
 // Full job payload message (comprehensive version).

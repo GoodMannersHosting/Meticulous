@@ -4,7 +4,7 @@
 	import { Button, Card, Badge, Tabs, Dialog, Alert, StatusBadge, CopyButton } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Pipeline, Run } from '$api/types';
+	import type { Pipeline, Run, StoredSecret } from '$api/types';
 	import { formatRelativeTime, formatDurationMs, truncateId } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -18,7 +18,8 @@
 		RefreshCw,
 		Pause,
 		Trash2,
-		ExternalLink
+		ExternalLink,
+		KeyRound
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 	import DagViewer from '$components/pipeline/DagViewer.svelte';
@@ -30,9 +31,13 @@
 	let error = $state<string | null>(null);
 	let activeTab = $state('runs');
 	let triggerLoading = $state(false);
+	let pipelineSecrets = $state<StoredSecret[]>([]);
+	let secretsLoading = $state(false);
+	let secretsError = $state<string | null>(null);
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
+		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
 		{ id: 'definition', label: 'Definition', icon: Settings }
 	];
 
@@ -66,6 +71,27 @@
 			runsLoading = false;
 		}
 	}
+
+	async function loadPipelineSecrets() {
+		if (!pipeline) return;
+		secretsLoading = true;
+		secretsError = null;
+		try {
+			pipelineSecrets = await apiMethods.storedSecrets.list(pipeline.project_id, {
+				pipeline_id: pipeline.id
+			});
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to load secrets';
+			pipelineSecrets = [];
+		} finally {
+			secretsLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (activeTab !== 'secrets' || !pipeline || loading) return;
+		void loadPipelineSecrets();
+	});
 
 	async function triggerPipeline() {
 		if (!pipeline) return;
@@ -269,6 +295,72 @@
 									<td class="px-4 py-3 text-sm">{run.triggered_by}</td>
 									<td class="px-4 py-3 text-sm">{formatDurationMs(run.duration_ms)}</td>
 									<td class="px-4 py-3 text-sm text-[var(--text-secondary)]">{formatRelativeTime(run.created_at)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		{:else if activeTab === 'secrets'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<p class="text-sm text-[var(--text-secondary)]">
+					Secrets scoped to this pipeline. Create project-wide or other pipeline secrets from the project
+					page.
+				</p>
+				<div class="flex gap-2">
+					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}">
+						Project secrets
+					</Button>
+					<Button variant="ghost" size="sm" onclick={loadPipelineSecrets} loading={secretsLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+				</div>
+			</div>
+			{#if secretsError}
+				<Alert variant="error" title="Secrets" dismissible ondismiss={() => (secretsError = null)}>
+					{secretsError}
+				</Alert>
+			{/if}
+			{#if secretsLoading && pipelineSecrets.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(3) as _, i (i)}
+							<Skeleton class="h-10 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else if pipelineSecrets.length === 0}
+				<Card>
+					<EmptyState
+						title="No pipeline-scoped secrets"
+						description={`Add a secret on the project page and choose this pipeline as the scope, or use project-wide secrets with stored: { name: ... } in YAML.`}
+					>
+						<Button variant="primary" href="/projects/{pipeline.project_id}">
+							Open project
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+					<table class="w-full text-sm">
+						<thead class="bg-[var(--bg-tertiary)]">
+							<tr>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-secondary)]">
+							{#each pipelineSecrets as s (s.id)}
+								<tr class="bg-[var(--bg-secondary)]">
+									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
+									<td class="px-4 py-3">{s.kind}</td>
+									<td class="px-4 py-3 font-mono">v{s.version}</td>
+									<td class="px-4 py-3 text-[var(--text-secondary)]">
+										{formatRelativeTime(s.updated_at)}
+									</td>
 								</tr>
 							{/each}
 						</tbody>

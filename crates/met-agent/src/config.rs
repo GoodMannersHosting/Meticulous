@@ -73,7 +73,7 @@ impl Default for AgentConfig {
         let workspace_dir = root.join("workspaces");
 
         Self {
-            controller_url: "http://localhost:9090".to_string(),
+            controller_url: "http://127.0.0.1:9090".to_string(),
             join_token: None,
             name: None,
             pool: None,
@@ -448,6 +448,23 @@ impl AgentIdentity {
         let total = 24 * 60 * 60; // Assume 24h validity
         remaining <= (total as f64 * 0.1) as i64
     }
+
+    /// JetStream pull `filter_subject` for this agent's job inbox.
+    ///
+    /// Must align with controller dispatch (`met.jobs.{org}.{pool}.{agent_id}`) and
+    /// [`met_controller::nats::subjects::job_inbox_filter`]. Older identity files stored
+    /// `met.jobs.{org}._default`, which **overlaps** per-agent subjects on a WorkQueue stream
+    /// and triggers NATS error 10100 if another consumer also matches those messages.
+    pub fn job_pull_filter_subject(&self) -> String {
+        if let Ok(org) = uuid::Uuid::parse_str(self.org_id.trim()) {
+            format!("met.jobs.{}.*.{}", org, self.agent_id)
+        } else {
+            self.nats_subjects
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "met.jobs.*._default".to_string())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -465,6 +482,26 @@ mod tests {
         writeln!(f, r#"controller_url = "http://example:9090""#).unwrap();
         let (c, _) = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
         assert_eq!(c.controller_url, "http://example:9090");
+    }
+
+    #[test]
+    fn job_pull_filter_subject_matches_controller_inbox() {
+        let org = uuid::Uuid::new_v4();
+        let identity = AgentIdentity {
+            agent_id: "agt_test123".to_string(),
+            org_id: org.to_string(),
+            jwt_token: "x".to_string(),
+            jwt_expires_at: 0,
+            renewable: true,
+            nats_subjects: vec![format!("met.jobs.{org}._default")],
+            nats_url: "nats://localhost:4222".to_string(),
+            nats_user_jwt: None,
+            nats_user_seed: None,
+        };
+        assert_eq!(
+            identity.job_pull_filter_subject(),
+            format!("met.jobs.{org}.*.agt_test123")
+        );
     }
 
     #[test]

@@ -14,10 +14,11 @@ use met_proto::agent::v1::{
     agent_service_server::AgentService, DeregisterRequest, DeregisterResponse,
     EncryptedSecretValue, HeartbeatAction, HeartbeatRequest, HeartbeatResponse, JobKeyExchange,
     JobSecretsPayload, JobStatusAck, JobStatusUpdate, LogAck, LogChunk, RegisterRequest,
-    RegisterResponse, SecurityBundle, StepStatusAck, StepStatusUpdate,
+    RegisterResponse, SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
 };
 use met_proto::common::v1::RunStatus as ProtoRunStatus;
 use met_secrets::pki::encryption::HybridEncryption;
+use met_secrets::BuiltinStoredCrypto;
 use met_objstore::ObjectStore;
 use met_store::repos::{
     register_agent_with_join_token, AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo,
@@ -76,6 +77,8 @@ pub struct AgentServiceImpl {
     secrets_hmac_key: Vec<u8>,
     /// Optional object store for log archival (SeaweedFS / S3).
     object_store: Option<Arc<dyn ObjectStore + Send + Sync>>,
+    /// Decrypts `builtin_secrets` ciphertext for job key exchange.
+    stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
 }
 
 impl AgentServiceImpl {
@@ -86,6 +89,7 @@ impl AgentServiceImpl {
         registry: AgentRegistry,
         nats: NatsDispatcher,
         object_store: Option<Arc<dyn ObjectStore + Send + Sync>>,
+        stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
     ) -> Self {
         let jwt = JwtManager::new(
             &config.jwt_secret,
@@ -107,6 +111,7 @@ impl AgentServiceImpl {
             nats,
             secrets_hmac_key,
             object_store,
+            stored_secret_crypto,
         }
     }
 
@@ -183,15 +188,29 @@ impl AgentServiceImpl {
         }
     }
 
-    /// Fetch secrets required for a job from the secrets provider.
-    /// In production, this would query the job configuration and resolve
-    /// secret references from vault, AWS Secrets Manager, etc.
-    async fn fetch_job_secrets(&self, _job_id: &str) -> Vec<(String, String)> {
-        // Placeholder - in production this would:
-        // 1. Look up job configuration from database
-        // 2. Extract secret references from the job spec
-        // 3. Resolve each secret from the appropriate provider
-        Vec::new()
+    /// Resolve plaintext secrets for hybrid encryption to the agent.
+    async fn fetch_job_secrets(
+        &self,
+        job_id: &str,
+        org_id: &str,
+        project_id: &str,
+        pipeline_id: &str,
+        hints_json: &str,
+    ) -> Result<Vec<(String, String, i32)>, ControllerError> {
+        let Some(crypto) = self.stored_secret_crypto.as_ref() else {
+            return Ok(Vec::new());
+        };
+        met_secret_resolve::resolve_job_secrets_for_exchange(
+            &self.pool,
+            crypto.as_ref(),
+            job_id,
+            org_id,
+            project_id,
+            pipeline_id,
+            hints_json,
+        )
+        .await
+        .map_err(|e| ControllerError::Internal(e.to_string()))
     }
 }
 
@@ -364,6 +383,18 @@ impl AgentService for AgentServiceImpl {
         };
         self.registry.register(state).await;
 
+        if let Err(e) = self
+            .nats
+            .reconcile_jobs_consumers_for_agent(org_id, &agent_id.to_string(), &pool_tags)
+            .await
+        {
+            warn!(
+                error = %e,
+                agent_id = %agent_id,
+                "NATS JOBS consumer reconcile after register failed (non-fatal)"
+            );
+        }
+
         // JetStream pull: one non-overlapping inbox per agent (pool is `*` in the subject).
         let job_inbox = crate::nats::subjects::job_inbox_filter(org_id, &agent_id.to_string());
         let nats_subjects: Vec<String> = std::iter::once(job_inbox)
@@ -508,6 +539,22 @@ impl AgentService for AgentServiceImpl {
         let heartbeat_repo = AgentHeartbeatRepo::new(&self.pool);
         if let Err(e) = heartbeat_repo.record(&heartbeat_record).await {
             warn!(error = %e, "failed to record heartbeat");
+        }
+
+        if let Err(e) = self
+            .nats
+            .reconcile_jobs_consumers_for_agent(
+                db_row.org_id,
+                &agent_id.to_string(),
+                &db_row.pool_tags,
+            )
+            .await
+        {
+            warn!(
+                error = %e,
+                agent_id = %agent_id,
+                "NATS JOBS consumer reconcile on heartbeat failed (non-fatal)"
+            );
         }
 
         // Check for JWT renewal
@@ -856,14 +903,25 @@ impl AgentService for AgentServiceImpl {
             .try_into()
             .map_err(|_| Status::invalid_argument("invalid public key length, expected 32 bytes"))?;
 
-        // Look up secrets required for this job from job assignment or cache
-        // For now, we'll encrypt a placeholder - in production this would
-        // fetch from the secrets provider based on job configuration
-        let job_secrets = self.fetch_job_secrets(&req.job_id).await;
+        let job_secrets = self
+            .fetch_job_secrets(
+                &req.job_id,
+                &req.org_id,
+                &req.project_id,
+                &req.pipeline_id,
+                &req.secret_resolution_hints_json,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         // Encrypt each secret with the agent's one-time public key
         let mut encrypted_secrets = Vec::new();
-        for (name, value) in job_secrets {
+        for (name, value, material) in job_secrets {
+            let material_kind = match material {
+                2 => SecretMaterialKind::WorkspaceFilePath as i32,
+                1 => SecretMaterialKind::EnvInline as i32,
+                _ => SecretMaterialKind::Unspecified as i32,
+            };
             match HybridEncryption::encrypt(&agent_public_key, value.as_bytes(), &self.secrets_hmac_key) {
                 Ok(envelope) => {
                     // Compute SHA-256 checksum of plaintext for verification
@@ -875,6 +933,7 @@ impl AgentService for AgentServiceImpl {
                         key: name,
                         encrypted_value: envelope.to_bytes(),
                         sha256_checksum: checksum,
+                        material_kind,
                     });
                 }
                 Err(e) => {

@@ -26,6 +26,9 @@ use crate::routes::{
         RetryRunResponse, RunDagResponse, RunResponse, StepRunResponse,
     },
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
+    stored_secrets::{
+        CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse,
+    },
     tokens::{CreateTokenRequest, CreateTokenResponseBody, TokenResponse},
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
     webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
@@ -56,6 +59,7 @@ use crate::routes::{
         (name = "agents", description = "Agent management"),
         (name = "tokens", description = "API token management"),
         (name = "secrets", description = "Secret management"),
+        (name = "stored_secrets", description = "Platform-stored encrypted secrets (metadata only on read)"),
         (name = "variables", description = "Variable management"),
         (name = "workflows", description = "Reusable workflow management"),
         (name = "webhooks", description = "Webhook management"),
@@ -120,6 +124,11 @@ use crate::routes::{
         crate::routes::secrets::create_secret,
         crate::routes::secrets::update_secret,
         crate::routes::secrets::delete_secret,
+        // Stored secrets (builtin_secrets)
+        crate::routes::stored_secrets::list_stored_secrets,
+        crate::routes::stored_secrets::create_stored_secret,
+        crate::routes::stored_secrets::rotate_stored_secret,
+        crate::routes::stored_secrets::delete_stored_secret,
         // Variables
         crate::routes::variables::list_variables,
         crate::routes::variables::create_variable,
@@ -181,6 +190,7 @@ use crate::routes::{
             TokenResponse, CreateTokenRequest, CreateTokenResponseBody,
             // Secrets
             SecretResponse, CreateSecretRequest, UpdateSecretRequest,
+            StoredSecretResponse, CreateStoredSecretRequest, RotateStoredSecretRequest,
             // Variables
             VariableResponse, CreateVariableRequest, UpdateVariableRequest,
             // Webhooks

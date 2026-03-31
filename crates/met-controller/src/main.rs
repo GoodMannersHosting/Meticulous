@@ -133,8 +133,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    let stored_secret_crypto = std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
+        .map(std::sync::Arc::new);
+
     let registry = AgentRegistry::new();
-    let grpc = AgentServiceImpl::new(ctrl.clone(), pool, registry, nats, None);
+    let grpc = AgentServiceImpl::new(
+        ctrl.clone(),
+        pool,
+        registry,
+        nats,
+        None,
+        stored_secret_crypto,
+    );
 
     let addr = ctrl
         .grpc_addr

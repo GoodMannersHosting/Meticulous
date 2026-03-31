@@ -42,7 +42,7 @@ pub struct SecretRow {
     pub description: Option<String>,
     pub scope: String,
     pub provider: String,
-    pub provider_key: String,
+    pub provider_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -58,6 +58,7 @@ pub struct SecretResponse {
     pub description: Option<String>,
     pub scope: String,
     pub provider: String,
+    pub provider_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -71,6 +72,7 @@ impl From<SecretRow> for SecretResponse {
             description: r.description,
             scope: r.scope,
             provider: r.provider,
+            provider_ref: r.provider_ref,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -104,7 +106,7 @@ async fn list_secrets(
 
     let rows = sqlx::query_as::<_, SecretRow>(
         r#"
-        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_key, created_at, updated_at
+        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_ref, created_at, updated_at
         FROM secrets
         WHERE project_id = $1 AND org_id = $2
         ORDER BY name ASC
@@ -135,7 +137,7 @@ pub struct CreateSecretRequest {
     #[serde(default = "default_scope")]
     pub scope: String,
     pub provider: String,
-    pub provider_key: String,
+    pub provider_ref: String,
 }
 
 fn default_scope() -> String {
@@ -173,8 +175,8 @@ async fn create_secret(
         return Err(ApiError::bad_request("provider is required"));
     }
 
-    if req.provider_key.is_empty() {
-        return Err(ApiError::bad_request("provider_key is required"));
+    if req.provider_ref.is_empty() {
+        return Err(ApiError::bad_request("provider_ref is required"));
     }
 
     let id = Uuid::now_v7();
@@ -182,9 +184,9 @@ async fn create_secret(
 
     let row = sqlx::query_as::<_, SecretRow>(
         r#"
-        INSERT INTO secrets (id, project_id, org_id, name, description, scope, provider, provider_key, created_at, updated_at)
+        INSERT INTO secrets (id, project_id, org_id, name, description, scope, provider, provider_ref, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6::secret_scope, $7, $8, $9, $9)
-        RETURNING id, project_id, org_id, name, description, scope::text, provider, provider_key, created_at, updated_at
+        RETURNING id, project_id, org_id, name, description, scope::text, provider, provider_ref, created_at, updated_at
         "#,
     )
     .bind(id)
@@ -194,7 +196,7 @@ async fn create_secret(
     .bind(&req.description)
     .bind(&req.scope)
     .bind(&req.provider)
-    .bind(&req.provider_key)
+    .bind(&req.provider_ref)
     .bind(now)
     .fetch_one(state.db())
     .await
@@ -210,7 +212,7 @@ pub struct UpdateSecretRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
-    pub provider_key: Option<String>,
+    pub provider_ref: Option<String>,
 }
 
 #[utoipa::path(
@@ -234,7 +236,7 @@ async fn update_secret(
 ) -> ApiResult<Json<SecretResponse>> {
     let existing = sqlx::query_as::<_, SecretRow>(
         r#"
-        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_key, created_at, updated_at
+        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_ref, created_at, updated_at
         FROM secrets
         WHERE id = $1
         "#,
@@ -252,21 +254,21 @@ async fn update_secret(
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.or(existing.description);
     let provider = req.provider.unwrap_or(existing.provider);
-    let provider_key = req.provider_key.unwrap_or(existing.provider_key);
+    let provider_ref = req.provider_ref.unwrap_or(existing.provider_ref);
 
     let row = sqlx::query_as::<_, SecretRow>(
         r#"
         UPDATE secrets
-        SET name = $2, description = $3, provider = $4, provider_key = $5, updated_at = NOW()
+        SET name = $2, description = $3, provider = $4, provider_ref = $5, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, project_id, org_id, name, description, scope::text, provider, provider_key, created_at, updated_at
+        RETURNING id, project_id, org_id, name, description, scope::text, provider, provider_ref, created_at, updated_at
         "#,
     )
     .bind(id.as_uuid())
     .bind(&name)
     .bind(&description)
     .bind(&provider)
-    .bind(&provider_key)
+    .bind(&provider_ref)
     .fetch_one(state.db())
     .await
     .map_err(met_store::StoreError::from)?;
@@ -295,7 +297,7 @@ async fn delete_secret(
 ) -> ApiResult<Json<serde_json::Value>> {
     let existing = sqlx::query_as::<_, SecretRow>(
         r#"
-        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_key, created_at, updated_at
+        SELECT id, project_id, org_id, name, description, scope::text, provider, provider_ref, created_at, updated_at
         FROM secrets
         WHERE id = $1
         "#,

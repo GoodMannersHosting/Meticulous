@@ -1,0 +1,389 @@
+//! CRUD for platform-stored secrets (`builtin_secrets`). Plaintext is accepted only on create/rotate; never returned.
+
+use std::collections::HashMap;
+
+use axum::{
+    extract::{Path, Query, State},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use chrono::{DateTime, Utc};
+use met_core::ids::{OrganizationId, PipelineId, ProjectId};
+use met_store::repos::{BuiltinSecretMetaRow, BuiltinSecretsRepo, PipelineRepo, ProjectRepo, StoredSecretKind};
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+use crate::{
+    error::{ApiError, ApiResult},
+    extractors::Auth,
+    state::AppState,
+};
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/projects/{project_id}/stored-secrets",
+            get(list_stored_secrets).post(create_stored_secret),
+        )
+        .route("/stored-secrets/{id}/rotate", post(rotate_stored_secret))
+        .route("/stored-secrets/{id}", delete(delete_stored_secret))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListStoredQuery {
+    pipeline_id: Option<PipelineId>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StoredSecretResponse {
+    pub id: Uuid,
+    #[schema(value_type = Option<String>)]
+    pub project_id: Option<ProjectId>,
+    #[schema(value_type = Option<String>)]
+    pub pipeline_id: Option<PipelineId>,
+    pub path: String,
+    pub kind: String,
+    pub version: i32,
+    pub metadata: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<BuiltinSecretMetaRow> for StoredSecretResponse {
+    fn from(r: BuiltinSecretMetaRow) -> Self {
+        Self {
+            id: r.id,
+            project_id: r.project_id.map(ProjectId::from_uuid),
+            pipeline_id: r.pipeline_id.map(PipelineId::from_uuid),
+            path: r.path,
+            kind: r.kind,
+            version: r.version,
+            metadata: r.metadata,
+            description: r.description,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+fn dedupe_latest(rows: Vec<BuiltinSecretMetaRow>) -> Vec<BuiltinSecretMetaRow> {
+    let mut best: HashMap<String, BuiltinSecretMetaRow> = HashMap::new();
+    for r in rows {
+        let k = format!("{}|{:?}|{:?}", r.path, r.project_id, r.pipeline_id);
+        match best.get_mut(&k) {
+            Some(e) => {
+                if r.version > e.version {
+                    *e = r;
+                }
+            }
+            None => {
+                best.insert(k, r);
+            }
+        }
+    }
+    let mut v: Vec<_> = best.into_values().collect();
+    v.sort_by(|a, b| a.path.cmp(&b.path));
+    v
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/stored-secrets",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("pipeline_id" = Option<String>, Query, description = "When set, list secrets scoped to this pipeline only"),
+    ),
+    responses(
+        (status = 200, description = "Metadata only (no secret values)", body = Vec<StoredSecretResponse>),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state))]
+async fn list_stored_secrets(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Query(q): Query<ListStoredQuery>,
+) -> ApiResult<Json<Vec<StoredSecretResponse>>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let org_id = ProjectRepo::new(state.db())
+        .get(project_id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .org_id;
+
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let rows = if let Some(pid) = q.pipeline_id {
+        let pl = PipelineRepo::new(state.db())
+            .get(pid)
+            .await
+            .map_err(met_store::StoreError::from)?;
+        if pl.project_id.as_uuid() != project_id.as_uuid() {
+            return Err(ApiError::bad_request("pipeline does not belong to project"));
+        }
+        repo.list_for_pipeline(org_id, project_id, pid).await?
+    } else {
+        repo.list_for_project(org_id, project_id).await?
+    };
+
+    let out = dedupe_latest(rows)
+        .into_iter()
+        .map(StoredSecretResponse::from)
+        .collect();
+    Ok(Json(out))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateStoredSecretRequest {
+    /// Logical name (`builtin_secrets.path`); becomes YAML `stored.name`.
+    pub path: String,
+    pub kind: String,
+    /// One-time plaintext (never stored or returned after this call).
+    pub value: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub pipeline_id: Option<PipelineId>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/stored-secrets",
+    request_body = CreateStoredSecretRequest,
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+    ),
+    responses(
+        (status = 200, description = "Created", body = StoredSecretResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+        (status = 503, description = "Stored secrets not configured"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state, req))]
+async fn create_stored_secret(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<CreateStoredSecretRequest>,
+) -> ApiResult<Json<StoredSecretResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let Some(ref crypto) = state.stored_secret_crypto else {
+        return Err(ApiError::unavailable(
+            "stored secrets are not configured (set MET_BUILTIN_SECRETS_MASTER_KEY)",
+        ));
+    };
+
+    if req.path.trim().is_empty() {
+        return Err(ApiError::bad_request("path is required"));
+    }
+    if req.value.is_empty() {
+        return Err(ApiError::bad_request("value is required"));
+    }
+
+    let kind = StoredSecretKind::parse(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let project = ProjectRepo::new(state.db())
+        .get(project_id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+    let org_id = project.org_id;
+
+    if let Some(pid) = req.pipeline_id {
+        let pl = PipelineRepo::new(state.db())
+            .get(pid)
+            .await
+            .map_err(met_store::StoreError::from)?;
+        if pl.project_id.as_uuid() != project_id.as_uuid() {
+            return Err(ApiError::bad_request("pipeline does not belong to project"));
+        }
+    }
+
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let version = repo
+        .next_version(
+            org_id,
+            Some(project_id),
+            req.pipeline_id,
+            &req.path,
+        )
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    let (ct, nonce, key_id) = crypto
+        .encrypt(req.value.as_bytes())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let meta = serde_json::json!({});
+    let row = repo
+        .insert_encrypted(
+            org_id,
+            Some(project_id),
+            req.pipeline_id,
+            &req.path,
+            kind,
+            &meta,
+            req.description.as_deref(),
+            &ct,
+            &nonce,
+            &key_id,
+            version,
+            Some(user.user_id.as_uuid()),
+        )
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    tracing::info!(stored_secret_id = %row.id, path = %req.path, "stored secret created");
+    Ok(Json(StoredSecretResponse::from(row)))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RotateStoredSecretRequest {
+    pub value: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/stored-secrets/{id}/rotate",
+    request_body = RotateStoredSecretRequest,
+    params(
+        ("id" = String, Path, description = "Stored secret row ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Rotated", body = StoredSecretResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 503, description = "Stored secrets not configured"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state, req))]
+async fn rotate_stored_secret(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<Uuid>,
+    Json(req): Json<RotateStoredSecretRequest>,
+) -> ApiResult<Json<StoredSecretResponse>> {
+    let Some(ref crypto) = state.stored_secret_crypto else {
+        return Err(ApiError::unavailable(
+            "stored secrets are not configured (set MET_BUILTIN_SECRETS_MASTER_KEY)",
+        ));
+    };
+
+    if req.value.is_empty() {
+        return Err(ApiError::bad_request("value is required"));
+    }
+
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let existing = repo
+        .get_meta_by_id(id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
+
+    let project_id = existing
+        .project_id
+        .map(ProjectId::from_uuid)
+        .ok_or_else(|| ApiError::bad_request("cannot rotate org-wide secrets via this API"))?;
+
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    if existing.org_id != user.org_id.as_uuid() {
+        return Err(ApiError::forbidden("wrong organization"));
+    }
+
+    let org_id = OrganizationId::from_uuid(existing.org_id);
+    let kind = StoredSecretKind::parse(&existing.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let version = repo
+        .next_version(
+            org_id,
+            existing.project_id.map(ProjectId::from_uuid),
+            existing.pipeline_id.map(PipelineId::from_uuid),
+            &existing.path,
+        )
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    let (ct, nonce, key_id) = crypto
+        .encrypt(req.value.as_bytes())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let row = repo
+        .insert_encrypted(
+            org_id,
+            existing.project_id.map(ProjectId::from_uuid),
+            existing.pipeline_id.map(PipelineId::from_uuid),
+            &existing.path,
+            kind,
+            &existing.metadata,
+            existing.description.as_deref(),
+            &ct,
+            &nonce,
+            &key_id,
+            version,
+            Some(user.user_id.as_uuid()),
+        )
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    tracing::info!(stored_secret_id = %row.id, path = %existing.path, "stored secret rotated");
+    Ok(Json(StoredSecretResponse::from(row)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/stored-secrets/{id}",
+    params(
+        ("id" = String, Path, description = "Stored secret row ID (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Soft-deleted", body = serde_json::Value),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state))]
+async fn delete_stored_secret(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let existing = repo
+        .get_meta_by_id(id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
+
+    let Some(project_id) = existing.project_id.map(ProjectId::from_uuid) else {
+        return Err(ApiError::bad_request("cannot delete org-wide secrets via this API"));
+    };
+
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+    if existing.org_id != user.org_id.as_uuid() {
+        return Err(ApiError::forbidden("wrong organization"));
+    }
+
+    repo.soft_delete(id).await.map_err(met_store::StoreError::from)?;
+    Ok(Json(serde_json::json!({ "message": "stored secret deleted" })))
+}

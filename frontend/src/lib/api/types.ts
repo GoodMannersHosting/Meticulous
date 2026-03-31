@@ -74,6 +74,20 @@ export interface CreateProjectInput {
 	owner_id: string;
 }
 
+/** Metadata for a platform-stored secret (no plaintext). */
+export interface StoredSecret {
+	id: string;
+	project_id?: string | null;
+	pipeline_id?: string | null;
+	path: string;
+	kind: string;
+	version: number;
+	metadata: Record<string, unknown>;
+	description?: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
 // Pipeline Types
 export interface Pipeline {
 	id: string;

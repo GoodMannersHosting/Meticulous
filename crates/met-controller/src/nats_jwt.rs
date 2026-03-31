@@ -6,8 +6,30 @@ use chrono::{Duration, Utc};
 use met_core::ids::{AgentId, OrganizationId};
 use nats_io_jwt::{Claims, Permission, Token, User};
 use nkeys::KeyPair;
+use tracing::warn;
 
 use crate::error::{ControllerError, Result};
+
+/// `nats-io-jwt` `Token::sign` uses `expect`/`unwrap` internally; a bad signing key or malformed
+/// claims can panic and tear down the gRPC connection (client sees `BrokenPipe`). Convert that
+/// into a normal [`ControllerError`] instead.
+fn sign_agent_user_jwt(token: Token, account_kp: &KeyPair) -> Result<String> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    match catch_unwind(AssertUnwindSafe(|| token.sign(account_kp))) {
+        Ok(jwt) => Ok(jwt),
+        Err(_) => {
+            warn!(
+                "NATS user JWT signing failed with a panic inside nats-io-jwt; \
+                 verify MET_NATS_ACCOUNT_SIGNING_SEED is a valid account signing seed (SU… from nsc), \
+                 not a user, operator, or account public key"
+            );
+            Err(ControllerError::Internal(
+                "NATS user JWT signing failed; check MET_NATS_ACCOUNT_SIGNING_SEED".into(),
+            ))
+        }
+    }
+}
 
 /// Build a NATS user JWT and NKey seed for an agent, scoped to org job subjects and JetStream APIs.
 pub fn issue_agent_nats_credentials(
@@ -58,11 +80,11 @@ pub fn issue_agent_nats_credentials(
         ControllerError::Internal("NATS agent JWT ttl out of range for timestamp".into())
     })?;
     let exp = (Utc::now() + chrono_ttl).timestamp();
-    let jwt = Token::new(user_kp.public_key())
+    let token = Token::new(user_kp.public_key())
         .name(format!("agent-{}", agent_id.as_uuid()))
         .claims(Claims::from(user))
-        .expires(exp)
-        .sign(&account_kp);
+        .expires(exp);
+    let jwt = sign_agent_user_jwt(token, &account_kp)?;
 
     let seed = user_kp
         .seed()

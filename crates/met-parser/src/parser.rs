@@ -556,6 +556,10 @@ impl<'a> PipelineParser<'a> {
                         key: vault.key.clone(),
                         mount: vault.mount.clone(),
                     }
+                } else if let Some(stored) = &raw.stored {
+                    SecretRef::Stored {
+                        name: stored.name.clone(),
+                    }
                 } else if let Some(builtin) = &raw.builtin {
                     SecretRef::Builtin {
                         name: builtin.name.clone(),

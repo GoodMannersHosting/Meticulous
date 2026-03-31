@@ -133,7 +133,7 @@ mod tests {
     fn test_default_config() {
         let config = AgentConfig::default();
 
-        assert_eq!(config.controller_url, "http://localhost:9090");
+        assert_eq!(config.controller_url, "http://127.0.0.1:9090");
         assert_eq!(config.concurrency, 1);
         assert!(!config.pool_tags.is_empty());
         assert_eq!(config.pool_tags[0], "_default");
@@ -491,11 +491,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires running controller at localhost:9090"]
+    #[ignore = "requires running controller at 127.0.0.1:9090"]
     async fn test_agent_registration_flow() {
         use met_proto::agent::v1::agent_service_client::AgentServiceClient;
 
-        let result = AgentServiceClient::connect("http://localhost:9090").await;
+        let result = AgentServiceClient::connect("http://127.0.0.1:9090").await;
         assert!(result.is_ok(), "should connect to controller gRPC");
     }
 

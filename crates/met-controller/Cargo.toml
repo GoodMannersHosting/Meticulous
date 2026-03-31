@@ -16,6 +16,8 @@ met-core = { workspace = true }
 met-store = { workspace = true }
 met-proto = { workspace = true }
 met-secrets = { workspace = true }
+met-secret-resolve = { workspace = true }
+met-parser = { workspace = true }
 met-objstore = { workspace = true }
 met-logging = { workspace = true }
 bytes = { workspace = true }

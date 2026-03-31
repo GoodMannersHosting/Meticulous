@@ -15,8 +15,9 @@ use crate::error::{Result, SecretsError};
 use crate::traits::{ProviderConfig, SecretsProvider, SecretsWriter};
 use crate::types::{ProviderType, SecretMetadata, SecretValue};
 
+use crate::stored_crypto::BUILTIN_SECRETS_HKDF_INFO;
+
 const NONCE_SIZE: usize = 12;
-const HKDF_INFO: &[u8] = b"meticulous-builtin-secrets-v1";
 
 /// Configuration for the built-in secrets provider.
 #[derive(Debug, Clone)]
@@ -91,7 +92,7 @@ impl BuiltinSecretsProvider {
 
             let hk = Hkdf::<Sha256>::new(None, &master_key_bytes);
             let mut key = Zeroizing::new([0u8; 32]);
-            hk.expand(HKDF_INFO, key.as_mut())
+            hk.expand(BUILTIN_SECRETS_HKDF_INFO, key.as_mut())
                 .map_err(|e| SecretsError::Crypto(format!("HKDF expand failed: {e}")))?;
 
             let key_id = config.key_id.clone().unwrap_or_else(|| "v1".to_string());
@@ -152,7 +153,7 @@ impl BuiltinSecretsProvider {
 
         let hk = Hkdf::<Sha256>::new(None, &new_bytes);
         let mut new_key = Zeroizing::new([0u8; 32]);
-        hk.expand(HKDF_INFO, new_key.as_mut())
+        hk.expand(BUILTIN_SECRETS_HKDF_INFO, new_key.as_mut())
             .map_err(|e| SecretsError::Crypto(format!("HKDF: {e}")))?;
 
         let mut store = self.store.write().await;

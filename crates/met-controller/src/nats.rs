@@ -6,7 +6,7 @@ use async_nats::jetstream::{self, consumer::PullConsumer, stream::Stream};
 use async_nats::Client;
 use met_core::ids::OrganizationId;
 use prost::Message;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::error::{ControllerError, Result};
 
@@ -282,6 +282,78 @@ impl NatsDispatcher {
             .await
             .map_err(|e| ControllerError::Nats(e.to_string()))?;
         info!(consumer = %name, stream = subjects::JOBS_STREAM, "deleted agent JetStream consumer");
+        Ok(())
+    }
+
+    /// Best-effort cleanup on the JOBS WorkQueue stream so operators never need manual `nats consumer` commands:
+    /// - Deletes legacy `pool-{org}-{pool_tag}-{agent_id}` pull consumers (older layout / tests).
+    /// - Deletes `agent-{agent_id}` when its filter no longer matches [`subjects::job_inbox_filter`]
+    ///   (e.g. stale `met.jobs.{org}._default`), so the agent can recreate with the correct filter.
+    pub async fn reconcile_jobs_consumers_for_agent(
+        &self,
+        org_id: OrganizationId,
+        agent_id: &str,
+        pool_tags: &[String],
+    ) -> Result<()> {
+        let stream = self
+            .jetstream
+            .get_stream(subjects::JOBS_STREAM)
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+
+        let mut tags: Vec<&str> = pool_tags.iter().map(|s| s.as_str()).collect();
+        if tags.is_empty() {
+            tags.push("_default");
+        }
+
+        for pt in tags {
+            let name = format!("pool-{}-{}-{}", org_id.as_uuid(), pt, agent_id);
+            match stream.delete_consumer(&name).await {
+                Ok(_) => info!(
+                    consumer = %name,
+                    stream = subjects::JOBS_STREAM,
+                    "removed legacy pool-prefixed JetStream consumer"
+                ),
+                Err(e) => {
+                    debug!(
+                        consumer = %name,
+                        error = %e,
+                        "pool-prefixed consumer absent or delete failed (expected if none existed)"
+                    );
+                }
+            }
+        }
+
+        let agent_c = format!("agent-{agent_id}");
+        let expected = subjects::job_inbox_filter(org_id, agent_id);
+        match stream.consumer_info(&agent_c).await {
+            Ok(info) => {
+                let filter_ok = if !info.config.filter_subjects.is_empty() {
+                    info.config.filter_subjects.iter().any(|s| s == &expected)
+                } else {
+                    info.config.filter_subject == expected
+                };
+                if !filter_ok {
+                    match stream.delete_consumer(&agent_c).await {
+                        Ok(_) => info!(
+                            consumer = %agent_c,
+                            stale_filter = %info.config.filter_subject,
+                            expected_filter = %expected,
+                            "removed agent JetStream consumer with stale filter (agent recreates on next pull)"
+                        ),
+                        Err(e) => warn!(
+                            consumer = %agent_c,
+                            error = %e,
+                            "failed to delete stale agent JetStream consumer"
+                        ),
+                    }
+                }
+            }
+            Err(_) => {
+                debug!(consumer = %agent_c, "no existing agent JetStream consumer to inspect");
+            }
+        }
+
         Ok(())
     }
 

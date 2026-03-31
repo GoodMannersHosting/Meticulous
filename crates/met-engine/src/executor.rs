@@ -11,6 +11,8 @@ use chrono::Utc;
 use met_core::ids::{JobId, JobRunId, RunId};
 use met_core::models::{JobStatus, RunStatus};
 use met_parser::{JobIR, PipelineIR};
+use met_secrets::BuiltinStoredCrypto;
+use secrecy::SecretString;
 use sqlx::PgPool;
 use tokio::time::interval;
 use tracing::{debug, error, info, instrument, warn};
@@ -65,6 +67,8 @@ pub struct Executor<C: CacheBackend> {
     events: Arc<EventBroadcaster>,
     pool: PgPool,
     config: ExecutorConfig,
+    /// When set, stored/builtin pipeline secrets are validated and resolved into the run context.
+    builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
 }
 
 impl<C: CacheBackend> Executor<C> {
@@ -75,6 +79,7 @@ impl<C: CacheBackend> Executor<C> {
         events: Arc<EventBroadcaster>,
         pool: PgPool,
         config: ExecutorConfig,
+        builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
     ) -> Self {
         Self {
             scheduler,
@@ -82,6 +87,7 @@ impl<C: CacheBackend> Executor<C> {
             events,
             pool,
             config,
+            builtin_stored_crypto,
         }
     }
 
@@ -93,6 +99,36 @@ impl<C: CacheBackend> Executor<C> {
         let start_time = Utc::now();
 
         info!(pipeline = %ctx.pipeline().name, "starting pipeline execution");
+
+        met_secret_resolve::validate_secret_refs(
+            &self.pool,
+            ctx.org_id(),
+            ctx.project_id(),
+            ctx.pipeline_id(),
+            &ctx.pipeline().secret_refs,
+        )
+        .await?;
+
+        if !ctx.pipeline().secret_refs.is_empty() {
+            let Some(crypto) = self.builtin_stored_crypto.as_ref() else {
+                return Err(EngineError::SecretResolution(
+                    "MET_BUILTIN_SECRETS_MASTER_KEY is not set but the pipeline declares secrets"
+                        .into(),
+                ));
+            };
+            let resolved = met_secret_resolve::resolve_stored_secret_map(
+                &self.pool,
+                crypto.as_ref(),
+                ctx.org_id(),
+                ctx.project_id(),
+                ctx.pipeline_id(),
+                &ctx.pipeline().secret_refs,
+            )
+            .await?;
+            for (name, (value, _, _)) in resolved {
+                ctx.register_secret(name, SecretString::new(value.into_boxed_str())).await;
+            }
+        }
 
         let run_state = RunState::new(run_id);
         run_state.set_status(RunStatus::Running).await;

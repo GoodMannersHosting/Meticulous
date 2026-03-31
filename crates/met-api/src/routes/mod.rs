@@ -28,6 +28,7 @@ pub mod pipelines;
 pub mod projects;
 pub mod runs;
 pub mod secrets;
+pub mod stored_secrets;
 pub mod tokens;
 pub mod variables;
 pub mod webhooks;
@@ -59,6 +60,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(tokens::router())
         .merge(orgs::router())
         .merge(secrets::router())
+        .merge(stored_secrets::router())
         .merge(variables::router())
         .merge(workflows::router())
         .merge(debug::router())

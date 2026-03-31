@@ -11,7 +11,7 @@ use futures::StreamExt;
 use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient, ExecutedBinary as ProtoExecutedBinary,
     JobAssignment, JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange,
-    JobStatusUpdate, StepSpec, StepStatusUpdate,
+    JobStatusUpdate, SecretMaterialKind, StepSpec, StepStatusUpdate,
 };
 use met_proto::common::v1::{RunStatus, StepKind, Timestamp};
 use prost::Message;
@@ -82,7 +82,16 @@ impl JobExecutor {
                 return Ok(());
             }
 
-            self.run_pull_session(&jetstream).await?;
+            match self.run_pull_session(&jetstream).await {
+                Ok(()) => {}
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        "job pull session failed; retrying after delay (controller may be reconciling JetStream consumers)"
+                    );
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            }
 
             if *self.shutdown_rx.borrow() {
                 info!("executor shutting down");
@@ -104,12 +113,15 @@ impl JobExecutor {
             }
         };
 
-        let subject = self
-            .identity
-            .nats_subjects
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "met.jobs.*._default".to_string());
+        let subject = self.identity.job_pull_filter_subject();
+        let stored_first = self.identity.nats_subjects.first().cloned();
+        if stored_first.as_deref() != Some(subject.as_str()) {
+            warn!(
+                stored = ?stored_first,
+                derived = %subject,
+                "job inbox filter derived from org_id+agent_id (stale nats_subjects in identity file are ignored for JetStream pull)"
+            );
+        }
 
         let consumer_name = format!("agent-{}", self.identity.agent_id);
         let pull_config = async_nats::jetstream::consumer::pull::Config {
@@ -213,8 +225,8 @@ impl JobExecutor {
         // Generate per-job PKI and exchange keys
         let pki = JobPki::generate().map_err(|e| AgentError::Certificate(e))?;
 
-        let secrets = if !job.secrets.is_empty() {
-            self.exchange_keys(&job.job_run_id, &pki).await?
+        let secrets = if job.requires_secret_exchange {
+            self.exchange_keys(&job, &pki, &workspace).await?
         } else {
             HashMap::new()
         };
@@ -421,13 +433,18 @@ impl JobExecutor {
     /// Exchange keys with controller for job secrets.
     async fn exchange_keys(
         &mut self,
-        job_id: &str,
+        job: &met_proto::controller::v1::JobDispatch,
         pki: &JobPki,
+        workspace: &Path,
     ) -> Result<HashMap<String, String>> {
         let request = JobKeyExchange {
             agent_id: self.identity.agent_id.clone(),
-            job_id: job_id.to_string(),
+            job_id: job.job_run_id.clone(),
             one_time_x509_public_key: pki.x25519_public_key().to_vec(),
+            org_id: job.org_id.clone(),
+            project_id: job.project_id.clone(),
+            pipeline_id: job.pipeline_id.clone(),
+            secret_resolution_hints_json: job.secret_resolution_hints_json.clone(),
         };
 
         let response = self.client.exchange_job_keys(request).await?.into_inner();
@@ -470,8 +487,42 @@ impl JobExecutor {
                             secret.key
                         )))?;
 
-                    debug!(key = %secret.key, "decrypted and verified secret");
-                    secrets.insert(secret.key, value);
+                    let is_file = secret.material_kind == SecretMaterialKind::WorkspaceFilePath as i32;
+
+                    if is_file {
+                        let secrets_dir = workspace.join(".meticulous").join("secrets");
+                        tokio::fs::create_dir_all(&secrets_dir)
+                            .await
+                            .map_err(|e| AgentError::Workspace(format!("secrets dir: {e}")))?;
+                        let safe_name: String = secret
+                            .key
+                            .chars()
+                            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                            .collect();
+                        let path = secrets_dir.join(safe_name);
+                        tokio::fs::write(&path, value.as_bytes())
+                            .await
+                            .map_err(|e| AgentError::Workspace(format!("write secret file: {e}")))?;
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = tokio::fs::set_permissions(
+                                &path,
+                                std::fs::Permissions::from_mode(0o600),
+                            )
+                            .await;
+                        }
+                        let abs = path
+                            .canonicalize()
+                            .unwrap_or(path)
+                            .to_string_lossy()
+                            .into_owned();
+                        debug!(key = %secret.key, path = %abs, "decrypted secret materialized as file");
+                        secrets.insert(secret.key, abs);
+                    } else {
+                        debug!(key = %secret.key, "decrypted and verified secret");
+                        secrets.insert(secret.key, value);
+                    }
                 }
                 Err(e) => {
                     error!(key = %secret.key, error = %e, "failed to decrypt secret");
@@ -484,7 +535,7 @@ impl JobExecutor {
         }
 
         info!(
-            job_id = %job_id,
+            job_id = %job.job_run_id,
             secrets_count = secrets.len(),
             "decrypted and verified all job secrets"
         );

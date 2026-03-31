@@ -79,6 +79,7 @@ pub use state::{JobState, RunState, StepState};
 use async_nats::jetstream::Context as JetStreamContext;
 use met_core::ids::{OrganizationId, RunId};
 use met_parser::PipelineIR;
+use met_secrets::BuiltinStoredCrypto;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{info, instrument};
@@ -96,6 +97,10 @@ pub struct EngineConfig {
     pub scheduler: SchedulerConfig,
     /// Object storage prefix for caching.
     pub cache_prefix: String,
+    /// Base64 master key for `builtin_secrets` rows (env `MET_BUILTIN_SECRETS_MASTER_KEY`).
+    pub builtin_secrets_master_key: Option<String>,
+    /// Optional key id label stored with ciphertext (default `v1`).
+    pub builtin_secrets_key_id: Option<String>,
 }
 
 /// The main pipeline execution engine.
@@ -131,12 +136,18 @@ impl Engine {
             config.scheduler,
         ));
 
+        let builtin_stored_crypto = Self::make_builtin_crypto(
+            config.builtin_secrets_master_key.as_deref(),
+            config.builtin_secrets_key_id.as_deref(),
+        );
+
         let executor = Arc::new(Executor::new(
             scheduler.clone(),
             cache.clone(),
             events.clone(),
             config.pool.clone(),
             config.executor,
+            builtin_stored_crypto,
         ));
 
         info!("engine initialized successfully");
@@ -148,6 +159,17 @@ impl Engine {
             cache,
             pool: config.pool,
         })
+    }
+
+    fn make_builtin_crypto(
+        master: Option<&str>,
+        kid: Option<&str>,
+    ) -> Option<Arc<BuiltinStoredCrypto>> {
+        let m = master?.trim();
+        if m.is_empty() {
+            return None;
+        }
+        BuiltinStoredCrypto::from_master_key_b64(m, kid).ok().map(Arc::new)
     }
 
     /// Create an engine with a custom cache backend.
@@ -176,12 +198,15 @@ impl Engine {
             scheduler_config,
         ));
 
+        let builtin_stored_crypto = Self::make_builtin_crypto(None, None);
+
         let executor = Arc::new(Executor::new(
             scheduler.clone(),
             cache.clone(),
             events.clone(),
             pool.clone(),
             executor_config,
+            builtin_stored_crypto,
         ));
 
         Ok(EngineWithCache {

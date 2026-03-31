@@ -2,7 +2,7 @@
 
 use async_nats::jetstream::Context as JetStreamContext;
 use indexmap::IndexMap;
-use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, RunId, StepRunId};
+use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepRunId};
 use met_store::repos::AgentRepo;
 use met_parser::{JobIR, Shell, StepCommand};
 use prost::Message;
@@ -23,11 +23,16 @@ pub struct JobDispatchMessage {
     pub job_run_id: JobRunId,
     pub run_id: RunId,
     pub org_id: OrganizationId,
+    pub project_id: Option<ProjectId>,
+    pub pipeline_id: PipelineId,
     pub pipeline_name: String,
     pub job_name: String,
     pub steps: Vec<StepDispatch>,
     pub variables: IndexMap<String, String>,
     pub secrets: Vec<EncryptedSecretRef>,
+    /// JSON secret hints for controller-side resolution (non-sensitive).
+    pub secret_resolution_hints_json: String,
+    pub requires_secret_exchange: bool,
     pub timeout_secs: u64,
     pub required_tags: Vec<String>,
     pub priority: i32,
@@ -269,15 +274,22 @@ impl Scheduler {
         variables: IndexMap<String, String>,
         required_tags: Vec<String>,
     ) -> Result<JobDispatchMessage> {
+        let (requires_secret_exchange, secret_resolution_hints_json) =
+            met_secret_resolve::hints_json_from_secret_refs(&ctx.pipeline().secret_refs);
+
         Ok(JobDispatchMessage {
             job_run_id,
             run_id: ctx.run_id(),
             org_id: ctx.org_id(),
+            project_id: ctx.project_id(),
+            pipeline_id: ctx.pipeline_id(),
             pipeline_name: ctx.pipeline().name.clone(),
             job_name: job.name.clone(),
             steps,
             variables,
             secrets: Vec::new(),
+            secret_resolution_hints_json,
+            requires_secret_exchange,
             timeout_secs: job.timeout.as_secs(),
             required_tags,
             priority: self.config.base_priority,
@@ -310,6 +322,10 @@ impl Scheduler {
             })
             .collect();
 
+        let project_id = msg
+            .project_id
+            .map(|p| p.to_string())
+            .unwrap_or_default();
         Ok(JobDispatch {
             job_run_id: msg.job_run_id.to_string(),
             run_id: msg.run_id.to_string(),
@@ -328,6 +344,10 @@ impl Scheduler {
             retry_policy: None,
             trace_id: String::new(),
             attempt: 1,
+            requires_secret_exchange: msg.requires_secret_exchange,
+            project_id,
+            pipeline_id: msg.pipeline_id.to_string(),
+            secret_resolution_hints_json: msg.secret_resolution_hints_json.clone(),
         })
     }
 

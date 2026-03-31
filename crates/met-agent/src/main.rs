@@ -36,7 +36,7 @@ struct Args {
     #[arg(
         long,
         env = "MET_CONTROLLER_URL",
-        default_value = "http://localhost:9090"
+        default_value = "http://127.0.0.1:9090"
     )]
     controller_url: String,
 

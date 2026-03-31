@@ -26,6 +26,10 @@ pub enum StoreError {
     #[error("constraint violation: {0}")]
     Constraint(String),
 
+    /// Input / domain validation failed.
+    #[error("validation error: {0}")]
+    Validation(String),
+
     /// Connection pool exhausted.
     #[error("connection pool exhausted")]
     PoolExhausted,
@@ -47,6 +51,11 @@ impl StoreError {
         matches!(self, Self::NotFound { .. })
     }
 
+    #[must_use]
+    pub fn validation(msg: impl Into<String>) -> Self {
+        Self::Validation(msg.into())
+    }
+
     /// Check if this is a unique constraint violation.
     #[must_use]
     pub fn is_unique_violation(&self) -> bool {
@@ -66,6 +75,7 @@ impl From<StoreError> for MetError {
             StoreError::Migration(e) => Self::Internal(format!("migration failed: {e}")),
             StoreError::NotFound { entity, id } => Self::NotFound { entity, id },
             StoreError::Constraint(msg) => Self::Validation(msg),
+            StoreError::Validation(msg) => Self::Validation(msg),
             StoreError::PoolExhausted => Self::Internal("database pool exhausted".to_string()),
         }
     }

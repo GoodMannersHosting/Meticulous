@@ -61,7 +61,7 @@ pub use providers::DatabaseWorkflowProvider;
 pub use providers::GitWorkflowProvider;
 pub use schema::{
     RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef, RawService,
-    RawStep, RawTriggers, RawWorkflowDef, RawWorkflowInvocation,
+    RawStep, RawStoredSecretRef, RawTriggers, RawWorkflowDef, RawWorkflowInvocation,
 };
 pub use semver::{parse_version_constraint, resolve_version, VersionConstraint};
 pub use span::{SpanTracker, SpannedYamlParser};
