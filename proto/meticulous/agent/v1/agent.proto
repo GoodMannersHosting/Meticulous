@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package meticulous.agent.v1;
+
+import "meticulous/agent/v1/types.proto";
+import "meticulous/common/v1/types.proto";
+
+// Service for agent-to-controller communication.
+// Agents initiate all connections (egress-only model).
+service AgentService {
+    // Register the agent with the controller.
+    // Called once on startup, returns the assigned agent ID.
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+
+    // Send periodic heartbeats to report health and capacity.
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+    // Report job execution status updates.
+    // Bidirectional stream for real-time updates.
+    rpc ReportJobStatus(stream JobStatusUpdate) returns (JobStatusAck);
+
+    // Report step execution status updates.
+    rpc ReportStepStatus(stream StepStatusUpdate) returns (StepStatusAck);
+
+    // Stream log chunks to the controller.
+    rpc StreamLogs(stream LogChunk) returns (LogAck);
+
+    // Per-job PKI key exchange.
+    // Agent sends one-time public key, receives encrypted secrets.
+    rpc ExchangeJobKeys(JobKeyExchange) returns (JobSecretsPayload);
+
+    // Request graceful deregistration.
+    rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+}
+
+// Request to register an agent.
+message RegisterRequest {
+    // Join token for authentication.
+    string join_token = 1;
+    // Security bundle with environment info.
+    SecurityBundle security_bundle = 2;
+    // Agent capabilities for job matching.
+    AgentCapabilities capabilities = 3;
+}
+
+// Response to agent registration.
+message RegisterResponse {
+    // Assigned agent ID (use this for all subsequent calls).
+    string agent_id = 1;
+    // JWT token for authenticated calls.
+    string jwt_token = 2;
+    // JWT expiration time.
+    meticulous.common.v1.Timestamp jwt_expires_at = 3;
+    // Whether the JWT can be renewed.
+    bool renewable = 4;
+    // NATS subjects to subscribe to.
+    repeated string nats_subjects = 5;
+    // NATS credentials for connection.
+    NatsCredentials nats_credentials = 6;
+    // Heartbeat interval in seconds.
+    int32 heartbeat_interval_secs = 7;
+}
+
+// Heartbeat request.
+message HeartbeatRequest {
+    // Agent ID.
+    string agent_id = 1;
+    // Current agent status.
+    AgentStatusInfo status = 2;
+    // Resource utilization.
+    ResourceSnapshot resources = 3;
+    // Current job ID (if busy).
+    optional string current_job_id = 4;
+}
+
+// Agent status info for heartbeat.
+message AgentStatusInfo {
+    // Agent status.
+    meticulous.common.v1.AgentStatus status = 1;
+    // Number of jobs currently running.
+    int32 running_jobs = 2;
+    // Number of jobs in queue (local).
+    int32 queued_jobs = 3;
+}
+
+// Heartbeat response.
+message HeartbeatResponse {
+    // Action for the agent to take.
+    HeartbeatAction action = 1;
+    // Optional configuration patch.
+    optional AgentConfigPatch config_patch = 2;
+    // New JWT token (if renewed).
+    optional string new_jwt_token = 3;
+    // New JWT expiration.
+    optional meticulous.common.v1.Timestamp new_jwt_expires_at = 4;
+}
+
+// Actions the controller can request via heartbeat.
+enum HeartbeatAction {
+    HEARTBEAT_ACTION_UNSPECIFIED = 0;
+    // Continue normal operation.
+    HEARTBEAT_ACTION_CONTINUE = 1;
+    // Start draining (finish current jobs, accept no new ones).
+    HEARTBEAT_ACTION_DRAIN = 2;
+    // Terminate immediately (cancel current job).
+    HEARTBEAT_ACTION_TERMINATE = 3;
+    // Apply configuration update.
+    HEARTBEAT_ACTION_UPDATE_CONFIG = 4;
+}
+
+// Configuration patch for agent.
+message AgentConfigPatch {
+    // New heartbeat interval (seconds).
+    optional int32 heartbeat_interval_secs = 1;
+    // New max concurrent jobs.
+    optional int32 max_jobs = 2;
+    // New labels.
+    repeated string labels = 3;
+}
+
+// Per-job PKI key exchange request.
+message JobKeyExchange {
+    // Agent ID.
+    string agent_id = 1;
+    // Job ID.
+    string job_id = 2;
+    // One-time X509 public key for this job.
+    bytes one_time_x509_public_key = 3;
+}
+
+// Encrypted secrets payload for a job.
+message JobSecretsPayload {
+    // Job ID.
+    string job_id = 1;
+    // Encrypted secrets.
+    repeated EncryptedSecretValue secrets = 2;
+}
+
+// An encrypted secret value.
+message EncryptedSecretValue {
+    // Secret key/name.
+    string key = 1;
+    // Encrypted value (hybrid encryption with agent's one-time key).
+    bytes encrypted_value = 2;
+    // SHA-256 checksum of plaintext (for verification after decryption).
+    string sha256_checksum = 3;
+}
+
+// Request to deregister agent.
+message DeregisterRequest {
+    // Agent ID.
+    string agent_id = 1;
+    // Reason for deregistration.
+    string reason = 2;
+}
+
+// Response to deregistration.
+message DeregisterResponse {
+    // Whether deregistration was successful.
+    bool success = 1;
+}
+
+// Acknowledgment for job status updates.
+message JobStatusAck {
+    // Number of updates received.
+    int64 received_count = 1;
+}
+
+// Acknowledgment for step status updates.
+message StepStatusAck {
+    // Number of updates received.
+    int64 received_count = 1;
+}
+
+// Acknowledgment for log chunks.
+message LogAck {
+    // Last sequence number received.
+    int64 last_sequence = 1;
+}
+
+// Request to wait for job assignments.
+message WaitForJobsRequest {
+    // Agent ID.
+    string agent_id = 1;
+    // Maximum number of jobs to receive (based on capacity).
+    int32 max_jobs = 2;
+}
+
+// Job assignment from controller to agent.
+message JobAssignment {
+    // Job run ID.
+    string job_run_id = 1;
+    // Run ID.
+    string run_id = 2;
+    // Pipeline name.
+    string pipeline_name = 3;
+    // Job name.
+    string job_name = 4;
+    // Steps to execute.
+    repeated StepSpec steps = 5;
+    // Variables for the job.
+    map<string, string> variables = 6;
+    // Encrypted secrets.
+    repeated EncryptedSecret secrets = 7;
+    // Agent's public key (for secret decryption).
+    bytes agent_public_key = 8;
+    // Job timeout in seconds.
+    int32 timeout_secs = 9;
+    // Working directory.
+    string working_dir = 10;
+}
+
+// Specification for a step to execute.
+message StepSpec {
+    // Step run ID.
+    string step_run_id = 1;
+    // Step ID.
+    string step_id = 2;
+    // Step name.
+    string name = 3;
+    // Step kind.
+    meticulous.common.v1.StepKind kind = 4;
+    // Command to execute.
+    string command = 5;
+    // Container image (if containerized).
+    string image = 6;
+    // Working directory.
+    string working_dir = 7;
+    // Shell to use.
+    string shell = 8;
+    // Environment variables.
+    map<string, string> environment = 9;
+    // Execution sequence.
+    int32 sequence = 10;
+    // Continue on error.
+    bool continue_on_error = 11;
+    // Step timeout in seconds.
+    int32 timeout_secs = 12;
+}
+
+// An encrypted secret for a job.
+message EncryptedSecret {
+    // Secret name.
+    string name = 1;
+    // Encrypted value (encrypted with agent's public key).
+    bytes encrypted_value = 2;
+    // SHA-256 hash for integrity verification.
+    string sha256 = 3;
+}

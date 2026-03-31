@@ -1,0 +1,38 @@
+[package]
+name = "met-engine"
+description = "Pipeline execution engine (DAG executor, job scheduler, caching) for Meticulous CI/CD"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+met-core = { workspace = true }
+met-store = { workspace = true }
+met-parser = { workspace = true }
+met-secrets = { workspace = true }
+met-proto = { workspace = true }
+
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+cel-interpreter = "0.8"
+regex = "1"
+secrecy = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+indexmap = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

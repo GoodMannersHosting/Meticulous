@@ -1,0 +1,65 @@
+{
+	"/": [
+		"src/routes/+layout.ts",
+		"src/routes/+layout.ts"
+	],
+	"/agents": [
+		"src/routes/agents/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/auth/callback": [
+		"src/routes/auth/callback/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/auth/login": [
+		"src/routes/+layout.ts"
+	],
+	"/dashboard": [
+		"src/routes/dashboard/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/jobs": [
+		"src/routes/jobs/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/pipelines": [
+		"src/routes/pipelines/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/pipelines/new": [
+		"src/routes/pipelines/new/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/pipelines/[id]": [
+		"src/routes/pipelines/[id]/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/projects": [
+		"src/routes/projects/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/projects/[id]": [
+		"src/routes/projects/[id]/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/runs": [
+		"src/routes/runs/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/runs/[id]": [
+		"src/routes/runs/[id]/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/settings": [
+		"src/routes/settings/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/settings/security": [
+		"src/routes/settings/security/+page.ts",
+		"src/routes/+layout.ts"
+	],
+	"/workflows": [
+		"src/routes/workflows/+page.ts",
+		"src/routes/+layout.ts"
+	]
+}

@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package meticulous.agent.v1;
+
+import "meticulous/common/v1/types.proto";
+
+// Agent registration information.
+message AgentInfo {
+    // Agent unique identifier (assigned by controller on first registration).
+    string agent_id = 1;
+    // Human-readable name.
+    string name = 2;
+    // Operating system.
+    string os = 3;
+    // CPU architecture.
+    string arch = 4;
+    // Agent software version.
+    string version = 5;
+    // Agent pool membership.
+    string pool = 6;
+    // Tags for job matching.
+    repeated string tags = 7;
+    // Maximum concurrent jobs.
+    int32 max_jobs = 8;
+    // Agent capabilities (JSON-encoded).
+    string capabilities_json = 9;
+}
+
+// Security bundle collected during agent registration.
+// Used for environment validation and audit.
+message SecurityBundle {
+    // Agent hostname.
+    string hostname = 1;
+    // Operating system.
+    string os = 2;
+    // CPU architecture.
+    string arch = 3;
+    // Kernel version.
+    string kernel_version = 4;
+    // Public IP addresses.
+    repeated string public_ips = 5;
+    // Private IP addresses.
+    repeated string private_ips = 6;
+    // Whether NTP is synchronized.
+    bool ntp_synchronized = 7;
+    // Container runtime (docker, podman, containerd, none).
+    string container_runtime = 8;
+    // Container runtime version.
+    string container_runtime_version = 9;
+    // Environment type.
+    EnvironmentType environment_type = 10;
+    // Agent's long-term X509 public key for identity.
+    bytes agent_x509_public_key = 11;
+}
+
+// Type of execution environment.
+enum EnvironmentType {
+    ENVIRONMENT_TYPE_UNSPECIFIED = 0;
+    ENVIRONMENT_TYPE_PHYSICAL = 1;
+    ENVIRONMENT_TYPE_VIRTUAL = 2;
+    ENVIRONMENT_TYPE_CONTAINER = 3;
+}
+
+// Agent capabilities for job matching.
+message AgentCapabilities {
+    // Operating system.
+    string os = 1;
+    // CPU architecture.
+    string arch = 2;
+    // User-defined labels (gpu, high-memory, etc.).
+    repeated string labels = 3;
+    // Pool tags for NATS subject subscriptions.
+    repeated string pool_tags = 4;
+}
+
+// Resource utilization snapshot.
+message ResourceSnapshot {
+    // CPU utilization (0.0 to 1.0).
+    float cpu_percent = 1;
+    // Memory utilization (0.0 to 1.0).
+    float memory_percent = 2;
+    // Disk utilization (0.0 to 1.0).
+    float disk_percent = 3;
+    // Available memory in bytes.
+    int64 available_memory_bytes = 4;
+    // Available disk space in bytes.
+    int64 available_disk_bytes = 5;
+}
+
+// NATS credentials for agent connection.
+message NatsCredentials {
+    // NATS URL.
+    string url = 1;
+    // JWT token for authentication.
+    string jwt = 2;
+    // NKey seed (optional, for NKey auth).
+    string nkey_seed = 3;
+}
+
+// Agent health and capacity information.
+message AgentHealth {
+    // Number of jobs currently running.
+    int32 running_jobs = 1;
+    // Available memory in bytes.
+    int64 available_memory_bytes = 2;
+    // Available disk space in bytes.
+    int64 available_disk_bytes = 3;
+    // CPU load (0.0 to 1.0).
+    float cpu_load = 4;
+}
+
+// Log chunk for streaming.
+message LogChunk {
+    // Job run ID this log belongs to.
+    string job_run_id = 1;
+    // Step run ID (optional, for step-specific logs).
+    string step_run_id = 2;
+    // Log content.
+    bytes content = 3;
+    // Stream type (stdout or stderr).
+    LogStream stream = 4;
+    // Sequence number for ordering.
+    int64 sequence = 5;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 6;
+}
+
+// Log stream type.
+enum LogStream {
+    LOG_STREAM_UNSPECIFIED = 0;
+    LOG_STREAM_STDOUT = 1;
+    LOG_STREAM_STDERR = 2;
+}
+
+// Job status update from agent.
+message JobStatusUpdate {
+    // Job run ID.
+    string job_run_id = 1;
+    // New status.
+    meticulous.common.v1.RunStatus status = 2;
+    // Exit code (if finished).
+    optional int32 exit_code = 3;
+    // Error message (if failed).
+    string error_message = 4;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 5;
+}
+
+// Step status update from agent.
+message StepStatusUpdate {
+    // Step run ID.
+    string step_run_id = 1;
+    // Job run ID.
+    string job_run_id = 2;
+    // New status.
+    meticulous.common.v1.RunStatus status = 3;
+    // Exit code (if finished).
+    optional int32 exit_code = 4;
+    // Error message (if failed).
+    string error_message = 5;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 6;
+}

@@ -1,0 +1,160 @@
+syntax = "proto3";
+
+package meticulous.controller.v1;
+
+import "meticulous/common/v1/types.proto";
+
+// Message types for NATS pub/sub communication.
+// These are not gRPC services - they define message formats for NATS.
+
+// Job dispatch message (published by controller, consumed by agents).
+// Subject: meticulous.jobs.<pool>.<tags>
+message JobDispatch {
+    // Job run ID.
+    string job_run_id = 1;
+    // Run ID.
+    string run_id = 2;
+    // Organization ID.
+    string org_id = 3;
+    // Pipeline name.
+    string pipeline_name = 4;
+    // Job name.
+    string job_name = 5;
+    // Steps to execute.
+    repeated StepSpec steps = 6;
+    // Variables for the job.
+    map<string, string> variables = 7;
+    // Encrypted secrets.
+    repeated EncryptedSecret secrets = 8;
+    // Job timeout in seconds.
+    int32 timeout_secs = 9;
+    // Required agent tags.
+    repeated string required_tags = 10;
+    // Priority (higher = more urgent).
+    int32 priority = 11;
+}
+
+// Step specification (embedded in JobDispatch).
+message StepSpec {
+    // Step run ID.
+    string step_run_id = 1;
+    // Step ID.
+    string step_id = 2;
+    // Step name.
+    string name = 3;
+    // Step kind.
+    meticulous.common.v1.StepKind kind = 4;
+    // Command to execute.
+    string command = 5;
+    // Container image.
+    string image = 6;
+    // Working directory.
+    string working_dir = 7;
+    // Shell to use.
+    string shell = 8;
+    // Environment variables.
+    map<string, string> environment = 9;
+    // Execution sequence.
+    int32 sequence = 10;
+    // Continue on error.
+    bool continue_on_error = 11;
+    // Step timeout in seconds.
+    int32 timeout_secs = 12;
+}
+
+// Encrypted secret.
+message EncryptedSecret {
+    // Secret name.
+    string name = 1;
+    // Encrypted value.
+    bytes encrypted_value = 2;
+    // SHA-256 hash.
+    string sha256 = 3;
+}
+
+// Job claim message (published by agent when claiming a job).
+// Subject: meticulous.claims.<job_run_id>
+message JobClaim {
+    // Job run ID being claimed.
+    string job_run_id = 1;
+    // Agent ID claiming the job.
+    string agent_id = 2;
+    // Claim timestamp.
+    meticulous.common.v1.Timestamp timestamp = 3;
+}
+
+// Job completion message (published by agent when job finishes).
+// Subject: meticulous.completions.<run_id>
+message JobCompletion {
+    // Job run ID.
+    string job_run_id = 1;
+    // Run ID.
+    string run_id = 2;
+    // Agent ID.
+    string agent_id = 3;
+    // Final status.
+    meticulous.common.v1.RunStatus status = 4;
+    // Exit code (if applicable).
+    optional int32 exit_code = 5;
+    // Error message (if failed).
+    string error_message = 6;
+    // Duration in milliseconds.
+    int64 duration_ms = 7;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 8;
+}
+
+// Agent event (published by controller for agent lifecycle).
+// Subject: meticulous.agents.<org_id>
+message AgentEvent {
+    // Event type.
+    AgentEventType type = 1;
+    // Agent ID.
+    string agent_id = 2;
+    // Organization ID.
+    string org_id = 3;
+    // Agent status.
+    meticulous.common.v1.AgentStatus status = 4;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 5;
+    // Additional details (JSON).
+    string details_json = 6;
+}
+
+// Types of agent events.
+enum AgentEventType {
+    AGENT_EVENT_TYPE_UNSPECIFIED = 0;
+    AGENT_EVENT_TYPE_REGISTERED = 1;
+    AGENT_EVENT_TYPE_ONLINE = 2;
+    AGENT_EVENT_TYPE_OFFLINE = 3;
+    AGENT_EVENT_TYPE_DRAINING = 4;
+    AGENT_EVENT_TYPE_DECOMMISSIONED = 5;
+}
+
+// Run event (published by engine for pipeline execution).
+// Subject: meticulous.runs.<pipeline_id>
+message RunEvent {
+    // Event type.
+    RunEventType type = 1;
+    // Run ID.
+    string run_id = 2;
+    // Pipeline ID.
+    string pipeline_id = 3;
+    // Run status.
+    meticulous.common.v1.RunStatus status = 4;
+    // Timestamp.
+    meticulous.common.v1.Timestamp timestamp = 5;
+    // Additional details (JSON).
+    string details_json = 6;
+}
+
+// Types of run events.
+enum RunEventType {
+    RUN_EVENT_TYPE_UNSPECIFIED = 0;
+    RUN_EVENT_TYPE_QUEUED = 1;
+    RUN_EVENT_TYPE_STARTED = 2;
+    RUN_EVENT_TYPE_JOB_STARTED = 3;
+    RUN_EVENT_TYPE_JOB_COMPLETED = 4;
+    RUN_EVENT_TYPE_COMPLETED = 5;
+    RUN_EVENT_TYPE_CANCELLED = 6;
+}

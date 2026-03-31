@@ -1,0 +1,9 @@
+- Enforce package locks where possible
+- Watch syscalls and get all binaries and sha256sum of all executed binaries in a pipeline run
+- Secrets Mangement, prefer external integrations (i.e AWS Secrets Manager or GCP equivalent), Kubernetes Secrets, Hashicorp Vault/OpenBao
+- Blast Radius Identification
+- Tool versioned/SHA256sum per-run
+- SBOMs/Attestation as a first priority
+- Multi-Project credential stores
+- AWS Roles Anywhere for remote/non
+- OpenBao/Vault AppRole and JWT Auth + Policy/Role Config Generator to simplify configuration if using OpenBao/Vault for pipeline secrets storage

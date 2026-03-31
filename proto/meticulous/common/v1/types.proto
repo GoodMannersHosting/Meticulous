@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package meticulous.common.v1;
+
+// A UUID value.
+message Uuid {
+    string value = 1;
+}
+
+// A timestamp with nanosecond precision.
+message Timestamp {
+    int64 seconds = 1;
+    int32 nanos = 2;
+}
+
+// Status of a pipeline run or job.
+enum RunStatus {
+    RUN_STATUS_UNSPECIFIED = 0;
+    RUN_STATUS_PENDING = 1;
+    RUN_STATUS_QUEUED = 2;
+    RUN_STATUS_RUNNING = 3;
+    RUN_STATUS_SUCCEEDED = 4;
+    RUN_STATUS_FAILED = 5;
+    RUN_STATUS_CANCELLED = 6;
+    RUN_STATUS_TIMED_OUT = 7;
+    RUN_STATUS_SKIPPED = 8;
+}
+
+// Status of an agent.
+enum AgentStatus {
+    AGENT_STATUS_UNSPECIFIED = 0;
+    AGENT_STATUS_ONLINE = 1;
+    AGENT_STATUS_OFFLINE = 2;
+    AGENT_STATUS_BUSY = 3;
+    AGENT_STATUS_DRAINING = 4;
+    AGENT_STATUS_DECOMMISSIONED = 5;
+}
+
+// Type of step execution.
+enum StepKind {
+    STEP_KIND_UNSPECIFIED = 0;
+    STEP_KIND_COMMAND = 1;
+    STEP_KIND_WORKFLOW_REF = 2;
+    STEP_KIND_PLUGIN = 3;
+}

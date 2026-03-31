@@ -1,0 +1,33 @@
+[package]
+name = "met-controller"
+description = "Agent controller (registration, health, job dispatch) for Meticulous CI/CD"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+met-core = { workspace = true }
+met-store = { workspace = true }
+met-proto = { workspace = true }
+async-nats = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+bcrypt = "0.16"
+chrono = { workspace = true }
+jsonwebtoken = "9"
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-stream = "0.1"
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

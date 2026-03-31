@@ -1,0 +1,18 @@
+//! Authentication and authorization modules.
+//!
+//! This module provides:
+//! - JWT token validation for user sessions
+//! - JWT token creation for login
+//! - API token validation for programmatic access
+//! - RBAC (Role-Based Access Control) enforcement
+//! - Password hashing and verification
+
+pub mod api_token;
+pub mod jwt;
+pub mod password;
+pub mod rbac;
+
+pub use api_token::ApiTokenValidator;
+pub use jwt::{JwtValidator, create_jwt};
+pub use password::{hash_password, verify_password, PasswordError};
+pub use rbac::{Permission, require_permission};

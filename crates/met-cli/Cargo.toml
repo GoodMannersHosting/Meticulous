@@ -1,0 +1,31 @@
+[package]
+name = "met-cli"
+description = "Developer CLI for Meticulous CI/CD"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "met"
+path = "src/main.rs"
+
+[dependencies]
+met-core = { workspace = true }
+met-parser = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = "0.28"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

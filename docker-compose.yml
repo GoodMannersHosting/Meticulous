@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: meticulous
+      POSTGRES_USER: meticulous
+      POSTGRES_PASSWORD: meticulous
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meticulous -d meticulous"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: docker.io/library/nats:2-alpine
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - natsdata:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  seaweedfs:
+    image: docker.io/chrislusf/seaweedfs:4.17
+    command: "server -s3 -dir=/data -s3.port=8333"
+    ports:
+      - "8333:8333"   # S3 API
+      - "9333:9333"   # Master server
+    volumes:
+      - seaweeddata:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9333/cluster/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  natsdata:
+  seaweeddata:

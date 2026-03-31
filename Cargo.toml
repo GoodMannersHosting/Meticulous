@@ -1,0 +1,121 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/gmh/meticulous"
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Web
+axum = { version = "0.8" }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["compression-gzip", "cors", "propagate-header", "request-id", "trace"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+
+# gRPC
+tonic = "0.13"
+tonic-build = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+
+# NATS
+async-nats = "0.39"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# IDs and time
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = { version = "0.27", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "metrics", "trace"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "http-proto", "metrics", "trace"] }
+tracing-opentelemetry = "0.28"
+http = "1"
+
+# Object Storage
+async-trait = "0.1"
+aws-sdk-s3 = "1"
+aws-config = "1"
+aws-credential-types = "1"
+bytes = "1"
+url = "2"
+tokio-util = { version = "0.7", features = ["io"] }
+futures = "0.3"
+pin-project-lite = "0.2"
+
+# Crypto
+rustls = "0.23"
+rcgen = "0.13"
+zeroize = { version = "1", features = ["derive"] }
+secrecy = { version = "0.10", features = ["serde"] }
+sha2 = "0.10"
+
+# Collections
+indexmap = { version = "2", features = ["serde"] }
+
+# Regex
+regex = "1"
+
+# Auth
+jsonwebtoken = "9"
+base64 = "0.22"
+argon2 = "0.5"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Config
+config = "0.15"
+directories = "6"
+
+# Testing
+insta = { version = "1", features = ["yaml"] }
+
+# Internal crates
+met-core = { path = "crates/met-core" }
+met-store = { path = "crates/met-store" }
+met-proto = { path = "crates/met-proto" }
+met-telemetry = { path = "crates/met-telemetry" }
+met-logging = { path = "crates/met-logging" }
+met-secrets = { path = "crates/met-secrets" }
+met-objstore = { path = "crates/met-objstore" }
+met-parser = { path = "crates/met-parser" }
+met-engine = { path = "crates/met-engine" }
+met-controller = { path = "crates/met-controller" }
+met-agent = { path = "crates/met-agent" }
+met-api = { path = "crates/met-api" }
+met-cli = { path = "crates/met-cli" }
+met-operator = { path = "crates/met-operator" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Temporarily relaxing pedantic and nursery until codebase matures
+# pedantic = "warn"
+# nursery = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+derivable_impls = "allow"
+needless_borrows_for_generic_args = "allow"

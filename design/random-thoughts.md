@@ -1,0 +1,5 @@
+- Prom/Otel metrics and log shipping
+- S3 compatible storage requirement?
+- Pre-populate build tool volumes, mount as read-only for agents (OCI Archive?) to improve build tool requirements and minimize workflow runtime?
+    - symlink latest tools to `/usr/local/bin/`
+    - `/buildtools/${binary}/${version}/${arch}/${binary}`

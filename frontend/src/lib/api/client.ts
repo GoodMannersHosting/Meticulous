@@ -1,0 +1,268 @@
+import { browser } from '$app/environment';
+import { goto } from '$app/navigation';
+import { PUBLIC_API_URL } from '$env/static/public';
+import type { ApiError, ApiResponse } from './types';
+
+export class ApiClientError extends Error {
+	constructor(
+		public readonly code: string,
+		message: string,
+		public readonly status: number,
+		public readonly details?: Record<string, unknown>
+	) {
+		super(message);
+		this.name = 'ApiClientError';
+	}
+
+	static fromApiError(error: ApiError, status: number): ApiClientError {
+		return new ApiClientError(error.code, error.message, status, error.details);
+	}
+}
+
+export interface RequestConfig extends RequestInit {
+	params?: Record<string, string | number | boolean | undefined>;
+	skipAuth?: boolean;
+}
+
+type RequestInterceptor = (config: RequestConfig) => RequestConfig | Promise<RequestConfig>;
+type ResponseInterceptor = (response: Response) => Response | Promise<Response>;
+
+class ApiClient {
+	private baseUrl: string;
+	private requestInterceptors: RequestInterceptor[] = [];
+	private responseInterceptors: ResponseInterceptor[] = [];
+
+	constructor() {
+		this.baseUrl = browser ? (PUBLIC_API_URL ?? '') : '';
+	}
+
+	setBaseUrl(url: string): void {
+		this.baseUrl = url;
+	}
+
+	addRequestInterceptor(interceptor: RequestInterceptor): () => void {
+		this.requestInterceptors.push(interceptor);
+		return () => {
+			const index = this.requestInterceptors.indexOf(interceptor);
+			if (index > -1) this.requestInterceptors.splice(index, 1);
+		};
+	}
+
+	addResponseInterceptor(interceptor: ResponseInterceptor): () => void {
+		this.responseInterceptors.push(interceptor);
+		return () => {
+			const index = this.responseInterceptors.indexOf(interceptor);
+			if (index > -1) this.responseInterceptors.splice(index, 1);
+		};
+	}
+
+	private getAuthToken(): string | null {
+		if (!browser) return null;
+		// Token is stored in cookie, but we can also check localStorage for SPA mode
+		return localStorage.getItem('auth_token');
+	}
+
+	private buildUrl(endpoint: string, params?: Record<string, string | number | boolean | undefined>): string {
+		const url = new URL(endpoint, this.baseUrl);
+
+		if (params) {
+			Object.entries(params).forEach(([key, value]) => {
+				if (value !== undefined) {
+					url.searchParams.set(key, String(value));
+				}
+			});
+		}
+
+		return url.toString();
+	}
+
+	private async applyRequestInterceptors(config: RequestConfig): Promise<RequestConfig> {
+		let result = config;
+		for (const interceptor of this.requestInterceptors) {
+			result = await interceptor(result);
+		}
+		return result;
+	}
+
+	private async applyResponseInterceptors(response: Response): Promise<Response> {
+		let result = response;
+		for (const interceptor of this.responseInterceptors) {
+			result = await interceptor(result);
+		}
+		return result;
+	}
+
+	async request<T>(endpoint: string, config: RequestConfig = {}): Promise<T> {
+		const { params, skipAuth, ...fetchConfig } = await this.applyRequestInterceptors(config);
+
+		const headers = new Headers(fetchConfig.headers);
+
+		if (!headers.has('Content-Type') && fetchConfig.body) {
+			headers.set('Content-Type', 'application/json');
+		}
+
+		if (!skipAuth) {
+			const token = this.getAuthToken();
+			if (token) {
+				headers.set('Authorization', `Bearer ${token}`);
+			}
+		}
+
+		const url = this.buildUrl(endpoint, params);
+
+		let response = await fetch(url, {
+			...fetchConfig,
+			headers
+		});
+
+		response = await this.applyResponseInterceptors(response);
+
+		if (!response.ok) {
+			if (response.status === 401 && browser) {
+				localStorage.removeItem('auth_token');
+				goto('/auth/login');
+				throw new ApiClientError('UNAUTHORIZED', 'Session expired', 401);
+			}
+
+			let apiError: ApiError;
+			try {
+				apiError = await response.json();
+			} catch {
+				apiError = {
+					code: 'UNKNOWN_ERROR',
+					message: response.statusText || 'An unknown error occurred'
+				};
+			}
+
+			throw ApiClientError.fromApiError(apiError, response.status);
+		}
+
+		if (response.status === 204) {
+			return undefined as T;
+		}
+
+		return response.json();
+	}
+
+	async get<T>(endpoint: string, config?: RequestConfig): Promise<T> {
+		return this.request<T>(endpoint, { ...config, method: 'GET' });
+	}
+
+	async post<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<T> {
+		return this.request<T>(endpoint, {
+			...config,
+			method: 'POST',
+			body: data ? JSON.stringify(data) : undefined
+		});
+	}
+
+	async put<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<T> {
+		return this.request<T>(endpoint, {
+			...config,
+			method: 'PUT',
+			body: data ? JSON.stringify(data) : undefined
+		});
+	}
+
+	async patch<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<T> {
+		return this.request<T>(endpoint, {
+			...config,
+			method: 'PATCH',
+			body: data ? JSON.stringify(data) : undefined
+		});
+	}
+
+	async delete<T>(endpoint: string, config?: RequestConfig): Promise<T> {
+		return this.request<T>(endpoint, { ...config, method: 'DELETE' });
+	}
+}
+
+export const api = new ApiClient();
+
+// Login response from password authentication
+export interface PasswordLoginResponse {
+	token: string;
+	token_type: string;
+	expires_in: number;
+	user: {
+		id: string;
+		username: string;
+		email: string;
+		display_name?: string;
+		is_admin: boolean;
+	};
+}
+
+// Type-safe API methods
+export const apiMethods = {
+	// Auth
+	auth: {
+		login: (provider: string) => api.get<{ redirect_url: string }>(`/auth/${provider}/login`),
+		loginWithPassword: (username: string, password: string) =>
+			api.post<PasswordLoginResponse>('/auth/login', { username, password }, { skipAuth: true }),
+		callback: (provider: string, code: string, state: string) =>
+			api.post<{ user: import('./types').User; tokens: import('./types').AuthTokens }>(`/auth/${provider}/callback`, { code, state }),
+		logout: () => api.post<void>('/auth/logout'),
+		me: () => api.get<import('./types').User>('/auth/me'),
+		setupStatus: () => api.get<{ setup_required: boolean }>('/auth/setup', { skipAuth: true }),
+		setup: (data: { username: string; email: string; password: string; org_name?: string }) =>
+			api.post<PasswordLoginResponse>('/auth/setup', data, { skipAuth: true })
+	},
+
+	// Dashboard
+	dashboard: {
+		stats: () => api.get<import('./types').DashboardStats>('/api/v1/dashboard/stats'),
+		recentRuns: (limit = 10) =>
+			api.get<import('./types').RecentRun[]>('/api/v1/dashboard/recent-runs', { params: { limit } })
+	},
+
+	// Projects
+	projects: {
+		list: (params?: import('./types').ListProjectsParams) =>
+			api.get<import('./types').PaginatedResponse<import('./types').Project>>('/api/v1/projects', { params }),
+		get: (id: string) => api.get<import('./types').Project>(`/api/v1/projects/${id}`),
+		getBySlug: (slug: string) => api.get<import('./types').Project>(`/api/v1/projects/by-slug/${slug}`),
+		create: (data: import('./types').CreateProjectInput) =>
+			api.post<import('./types').Project>('/api/v1/projects', data),
+		update: (id: string, data: Partial<import('./types').Project>) =>
+			api.patch<import('./types').Project>(`/api/v1/projects/${id}`, data),
+		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
+	},
+
+	// Pipelines
+	pipelines: {
+		list: (params: import('./types').ListPipelinesParams) =>
+			api.get<import('./types').PaginatedResponse<import('./types').Pipeline>>('/api/v1/pipelines', { params }),
+		get: (id: string) => api.get<import('./types').Pipeline>(`/api/v1/pipelines/${id}`),
+		getBySlug: (projectId: string, slug: string) =>
+			api.get<import('./types').Pipeline>(`/api/v1/pipelines/by-slug/${projectId}/${slug}`),
+		create: (data: import('./types').CreatePipelineInput) =>
+			api.post<import('./types').Pipeline>('/api/v1/pipelines', data),
+		update: (id: string, data: Partial<import('./types').Pipeline>) =>
+			api.patch<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
+		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
+		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
+			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {})
+	},
+
+	// Runs
+	runs: {
+		list: (params: import('./types').ListRunsParams) =>
+			api.get<import('./types').PaginatedResponse<import('./types').Run>>('/api/v1/runs', { params }),
+		get: (id: string) => api.get<import('./types').Run>(`/api/v1/runs/${id}`),
+		cancel: (id: string) => api.post<{ run_id: string; status: string; message: string }>(`/api/v1/runs/${id}/cancel`),
+		retry: (id: string) => api.post<{ original_run_id: string; new_run_id: string; run_number: number }>(`/api/v1/runs/${id}/retry`),
+		jobs: (runId: string) => api.get<import('./types').JobRun[]>(`/api/v1/runs/${runId}/jobs`),
+		logs: (runId: string, jobRunId: string) =>
+			api.get<{ lines: import('./types').LogLinePayload[] }>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`)
+	},
+
+	// Agents
+	agents: {
+		list: (params?: import('./types').ListAgentsParams) =>
+			api.get<import('./types').PaginatedResponse<import('./types').Agent>>('/api/v1/agents', { params }),
+		get: (id: string) => api.get<import('./types').Agent>(`/api/v1/agents/${id}`),
+		drain: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/drain`),
+		resume: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/resume`)
+	}
+};
