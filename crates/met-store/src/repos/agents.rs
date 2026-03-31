@@ -208,4 +208,129 @@ impl<'a> AgentRepo<'a> {
 
         Ok(count)
     }
+
+    /// Validate NTP synchronization and optional binary SHA, then persist the
+    /// security bundle fields for an agent. Returns a constraint error if the
+    /// agent's clock is not NTP-synchronized or the binary hash doesn't match.
+    pub async fn validate_security_bundle(
+        &self,
+        id: AgentId,
+        ntp_synchronized: bool,
+        binary_sha256: Option<&str>,
+        expected_binary_sha256: Option<&str>,
+        environment_type: &str,
+        kernel_version: Option<&str>,
+        public_ips: &[String],
+        private_ips: &[String],
+        container_runtime: Option<&str>,
+        container_runtime_version: Option<&str>,
+        x509_public_key: Option<&[u8]>,
+    ) -> Result<()> {
+        if !ntp_synchronized {
+            return Err(StoreError::Constraint(
+                "agent clock is not NTP-synchronized; registration rejected".into(),
+            ));
+        }
+
+        if let (Some(actual), Some(expected)) = (binary_sha256, expected_binary_sha256) {
+            if actual != expected {
+                return Err(StoreError::Constraint(format!(
+                    "binary SHA-256 mismatch: expected {expected}, got {actual}"
+                )));
+            }
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE agents
+            SET environment_type = $2,
+                kernel_version = $3,
+                public_ips = $4,
+                private_ips = $5,
+                ntp_synchronized = $6,
+                container_runtime = $7,
+                container_runtime_version = $8,
+                x509_public_key = $9
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(environment_type)
+        .bind(kernel_version)
+        .bind(public_ips)
+        .bind(private_ips)
+        .bind(ntp_synchronized)
+        .bind(container_runtime)
+        .bind(container_runtime_version)
+        .bind(x509_public_key)
+        .execute(self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::not_found("agent", id));
+        }
+
+        Ok(())
+    }
+
+    /// Update an agent's JWT expiration timestamp and renewal eligibility.
+    pub async fn update_jwt_expiry(
+        &self,
+        id: AgentId,
+        jwt_expires_at: chrono::DateTime<Utc>,
+        jwt_renewable: bool,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE agents
+            SET jwt_expires_at = $2, jwt_renewable = $3
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(jwt_expires_at)
+        .bind(jwt_renewable)
+        .execute(self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::not_found("agent", id));
+        }
+
+        Ok(())
+    }
+
+    /// Mark an agent as approved for JWT renewal. Only agents that are online
+    /// and not in a terminal state can be approved.
+    pub async fn approve_renewal(&self, id: AgentId) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE agents
+            SET jwt_renewable = true
+            WHERE id = $1
+                AND status NOT IN ('decommissioned', 'revoked', 'dead')
+            "#,
+        )
+        .bind(id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)",
+            )
+            .bind(id.as_uuid())
+            .fetch_one(self.pool)
+            .await?;
+
+            if exists {
+                return Err(StoreError::Constraint(
+                    "agent is in a terminal state and cannot be approved for renewal".into(),
+                ));
+            }
+            return Err(StoreError::not_found("agent", id));
+        }
+
+        Ok(())
+    }
 }

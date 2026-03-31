@@ -4,40 +4,43 @@ overview: "Detailed plan for the Meticulous agent system: agent binary, agent co
 todos:
   - id: agent-proto
     content: Define protobuf service definitions for agent<->controller gRPC (registration, heartbeat, job status, log streaming)
-    status: pending
+    status: completed
   - id: agent-nats-subjects
     content: Design NATS subject hierarchy and JetStream consumer configuration for job dispatch
-    status: pending
+    status: completed
   - id: agent-binary
     content: "Implement met-agent binary: CLI entrypoint, config loading, NATS connection, gRPC client, job executor loop"
-    status: pending
+    status: completed
   - id: agent-controller
     content: "Implement met-controller: gRPC server, agent registry, health tracking, join token management"
-    status: pending
+    status: completed
   - id: agent-provisioning
     content: "Implement provisioning flow: join token creation, security bundle validation, JWT issuance, agent enrollment"
-    status: pending
+    status: completed
   - id: agent-job-lifecycle
     content: "Implement job lifecycle: NATS pickup, per-job PKI handshake, step execution, status reporting, log streaming"
-    status: pending
+    status: completed
   - id: agent-env-validation
     content: Implement operating environment validation (OS, arch, network, NTP, container runtime detection)
-    status: pending
+    status: completed
   - id: agent-execution
     content: "Implement step execution backends: container (Linux), native process (macOS/Windows), workspace isolation"
-    status: pending
+    status: completed
   - id: agent-operator
     content: "Implement met-operator: Kubernetes CRDs, reconciliation loop, agent pool auto-scaling"
-    status: pending
+    status: completed
   - id: agent-db-schema
     content: Design and implement agent-related database tables (agents, join_tokens, agent_heartbeats, job_assignments)
-    status: pending
+    status: completed
   - id: agent-cross-platform
     content: Set up cross-compilation targets and platform-specific build configuration (Linux, macOS, Windows)
-    status: pending
+    status: completed
   - id: agent-integration-tests
     content: "Write integration tests: agent registration, NATS dispatch, job execution, heartbeat, revocation"
-    status: pending
+    status: completed
+  - id: agent-process-watcher
+    content: "Implement process watcher: track child process spawns, compute SHA256 checksums of executed binaries, log as job metadata"
+    status: completed
 isProject: false
 ---
 
@@ -184,6 +187,48 @@ message EncryptedSecret {
   string key = 1;
   bytes encrypted_value = 2;
   string sha256_checksum = 3;  // of plaintext, for agent-side verification
+}
+
+// Job status report with execution metadata
+message JobStatusReport {
+  string agent_id = 1;
+  string job_id = 2;
+  JobStatus status = 3;
+  optional string step_id = 4;
+  optional int32 exit_code = 5;
+  optional string failure_reason = 6;
+  google.protobuf.Timestamp timestamp = 7;
+  optional JobExecutionMetadata execution_metadata = 8;  // populated on job completion
+}
+
+message JobStatusAck {
+  bool acknowledged = 1;
+}
+
+// Execution metadata collected during job run
+message JobExecutionMetadata {
+  repeated ExecutedBinary executed_binaries = 1;
+  uint64 total_processes_spawned = 2;
+  uint32 execution_tree_depth = 3;
+}
+
+message ExecutedBinary {
+  string path = 1;
+  string sha256 = 2;
+  uint32 execution_count = 3;
+  google.protobuf.Timestamp first_executed_at = 4;
+  google.protobuf.Timestamp last_executed_at = 5;
+  repeated string step_ids = 6;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  ACCEPTED = 1;
+  RUNNING = 2;
+  SUCCEEDED = 3;
+  FAILED = 4;
+  CANCELLED = 5;
+  TIMED_OUT = 6;
 }
 ```
 
@@ -343,11 +388,20 @@ loop {
     secrets = grpc.exchange_job_keys(job.id, pubkey)
     decrypted = decrypt_and_verify(secrets, privkey)
 
+    // Initialize process watcher for this job
+    process_watcher = ProcessWatcher::new()
+    all_executed_binaries = []
+
     // Execute steps sequentially
     for step in job.steps {
         report_status(job.id, step.id, RUNNING)
-        result = execution_backend.run(step, decrypted, workspace)
+
+        // Run step with process watching enabled
+        result = execution_backend.run(step, decrypted, workspace, &mut process_watcher)
         stream_logs(job.id, step.id, result.stdout, result.stderr)
+
+        // Collect executed binaries from this step
+        all_executed_binaries.extend(result.executed_binaries)
 
         if result.exit_code != 0 {
             report_status(job.id, step.id, FAILED, result.exit_code)
@@ -358,7 +412,12 @@ loop {
     }
 
     upload_artifacts(job.artifacts.outputs)
-    report_status(job.id, SUCCEEDED)
+
+    // Aggregate and deduplicate binary execution metadata
+    execution_metadata = aggregate_execution_metadata(all_executed_binaries, process_watcher)
+
+    // Report final status with execution metadata
+    report_status(job.id, SUCCEEDED, execution_metadata)
 
     // Zeroize secrets from memory
     zeroize(decrypted)
@@ -592,8 +651,168 @@ pub struct StepResult {
     pub exit_code: i32,
     pub duration: Duration,
     pub resource_usage: ResourceUsage,
+    pub executed_binaries: Vec<ExecutedBinary>,  // SHA256 checksums of all binaries executed
+}
+
+pub struct ExecutedBinary {
+    pub path: String,           // absolute path to the binary
+    pub sha256: String,         // hex-encoded SHA256 checksum
+    pub pid: u32,               // process ID
+    pub parent_pid: u32,        // parent process ID
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub exit_code: Option<i32>,
 }
 ```
+
+### 8.4 Process Watcher and Binary Checksum Tracking
+
+For security auditing and reproducibility, the agent tracks all child processes spawned during step execution and computes SHA256 checksums of all executed binaries. This metadata is collected and logged at the end of each job.
+
+#### 8.4.1 Design Goals
+
+1. **Complete visibility**: Track every process spawned during step execution, including nested child processes.
+2. **Binary attestation**: Compute and record SHA256 checksums of all executed binaries for supply chain security.
+3. **Minimal overhead**: Process watching should not significantly impact step execution performance.
+4. **Cross-platform support**: Work on Linux (primary), macOS, and Windows with platform-appropriate mechanisms.
+
+#### 8.4.2 Linux Implementation
+
+On Linux, the process watcher uses eBPF to trace process execution with minimal overhead:
+
+- **eBPF tracepoint**: Attach to `tracepoint/syscalls/sys_enter_execve` to intercept all `execve` syscalls.
+- **Process tree tracking**: Maintain parent-child relationships via eBPF maps.
+- `**/proc/{pid}/exe`**: Resolve the executable path for each process from userspace.
+- **File hashing**: Compute SHA256 of the binary file when a new process is detected.
+
+The eBPF approach is preferred over ptrace because:
+
+1. **Lower overhead**: No context switches per syscall; data collected in-kernel.
+2. **No process slowdown**: Traced processes run at full speed.
+3. **Container-aware**: Works correctly with containerized workloads from outside the namespace.
+
+For containerized execution, the watcher operates from outside the container namespace using `/proc/{container_pid}/root/proc/{pid}/exe` path resolution.
+
+```rust
+use aya::{Bpf, maps::AsyncPerfEventArray};
+
+pub struct ProcessWatcher {
+    bpf: Bpf,
+    events: AsyncPerfEventArray<ExecEvent>,
+    tracked_processes: HashMap<u32, TrackedProcess>,
+    binary_cache: HashMap<(PathBuf, u64, SystemTime), String>,  // (path, inode, mtime) -> sha256
+}
+
+#[repr(C)]
+struct ExecEvent {
+    pid: u32,
+    ppid: u32,
+    filename: [u8; 256],
+    timestamp_ns: u64,
+}
+
+struct TrackedProcess {
+    pid: u32,
+    parent_pid: u32,
+    exe_path: PathBuf,
+    exe_sha256: String,
+    started_at: Instant,
+}
+
+impl ProcessWatcher {
+    /// Load eBPF program and start watching execve syscalls
+    pub async fn new() -> Result<Self>;
+
+    /// Poll for new process events (non-blocking)
+    pub async fn poll(&mut self) -> Result<Vec<ProcessEvent>>;
+
+    /// Get all tracked processes with their binary checksums
+    pub fn get_executed_binaries(&self) -> Vec<ExecutedBinary>;
+
+    /// Stop watching and cleanup eBPF resources
+    pub fn stop(self);
+}
+```
+
+**Kernel requirements**: eBPF tracepoints require Linux kernel 4.15+ with `CONFIG_BPF_SYSCALL=y`. The agent validates eBPF availability at startup and fails fast if unsupported.
+
+#### 8.4.3 macOS Implementation
+
+On macOS, use Endpoint Security framework or `dtrace` for process monitoring:
+
+- **Endpoint Security (`es_subscribe`)**: Subscribe to `ES_EVENT_TYPE_NOTIFY_EXEC` events for process execution tracking.
+- **Binary path**: Extract from the `es_message_t` event structure.
+- **Fallback**: Use `dtrace` scripting if Endpoint Security entitlements are not available.
+
+Note: Endpoint Security requires a signed binary with the appropriate entitlement (`com.apple.developer.endpoint-security.client`).
+
+#### 8.4.4 Windows Implementation
+
+On Windows, use ETW (Event Tracing for Windows) or Job Objects:
+
+- **ETW Provider**: Subscribe to the Microsoft-Windows-Kernel-Process provider for process start/stop events.
+- **Job Objects**: If the step runs in a Windows Job Object, use `QueryInformationJobObject` to enumerate child processes.
+- **Binary path**: Extract from `EVENT_RECORD` or `GetProcessImageFileName`.
+
+#### 8.4.5 Checksum Computation
+
+SHA256 checksums are computed efficiently with streaming hashing:
+
+```rust
+use sha2::{Sha256, Digest};
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+
+async fn compute_binary_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];  // 64KB buffer
+
+    loop {
+        let n = file.read(&mut buffer).await?;
+        if n == 0 { break; }
+        hasher.update(&buffer[..n]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
+}
+```
+
+**Caching**: Binary checksums are cached by (path, inode, mtime) tuple to avoid re-hashing the same binary multiple times within a job.
+
+#### 8.4.6 Metadata Collection and Reporting
+
+At the end of each job, the collected binary execution metadata is:
+
+1. **Aggregated**: Combined from all steps into a single job-level report.
+2. **Deduplicated**: Same binary executed multiple times is reported once with execution count.
+3. **Reported**: Sent to the controller via the job status report.
+4. **Stored**: Persisted in the database for audit queries.
+
+```rust
+pub struct JobExecutionMetadata {
+    pub job_id: Uuid,
+    pub executed_binaries: Vec<ExecutedBinaryRecord>,
+    pub total_processes_spawned: u64,
+    pub execution_tree_depth: u32,  // max depth of process tree
+}
+
+pub struct ExecutedBinaryRecord {
+    pub path: String,
+    pub sha256: String,
+    pub execution_count: u32,
+    pub first_executed_at: DateTime<Utc>,
+    pub last_executed_at: DateTime<Utc>,
+    pub step_ids: Vec<Uuid>,  // which steps executed this binary
+}
+```
+
+#### 8.4.7 Security Considerations
+
+- **Checksum verification**: The controller can optionally validate checksums against an allowlist of known-good binaries.
+- **Anomaly detection**: Unexpected binaries (e.g., not in the base image or build outputs) can trigger alerts.
+- **SBOM integration**: Binary checksums can be cross-referenced with Software Bill of Materials for supply chain validation.
+- **Tamper detection**: If a binary's checksum changes between executions within the same job, flag as potential compromise.
 
 ---
 
@@ -708,8 +927,10 @@ The operator's reconciler watches `AgentPool` resources and:
 
 The operator supports two modes for container step execution:
 
-- **Docker Socket mount** (default): Host Docker socket mounted into agent pod. Simpler, better performance, but less isolated.
-- **Docker-in-Docker (DinD)**: Sidecar `dind` container with its own Docker daemon. More isolated but higher overhead. Configured via `spec.template.dindEnabled: true`.
+- **Docker-in-Docker (DinD)** (default for Kubernetes): Sidecar `dind` container with its own Docker daemon. Provides strong isolation between jobs and prevents container escape attacks. Slightly higher overhead but essential for multi-tenant security.
+- **Docker Socket mount**: Host Docker socket mounted into agent pod. Better performance but less isolated. Opt-in via `spec.template.socketMount: true` -- only recommended for single-tenant clusters with trusted workloads.
+
+For **non-Kubernetes agents** (bare-metal, VMs), the default is reversed: socket mount (or direct containerd/docker access) is the default since the agent typically has dedicated access to the container runtime.
 
 The choice is made per-pool via the `AgentPool` CRD.
 
@@ -798,6 +1019,37 @@ CREATE TABLE job_assignments (
 
 CREATE INDEX idx_job_assignments_job ON job_assignments(job_id);
 CREATE INDEX idx_job_assignments_agent ON job_assignments(agent_id) WHERE status IN ('accepted', 'running');
+
+-- Executed binaries tracked during job execution (for security audit)
+CREATE TABLE job_executed_binaries (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id              UUID NOT NULL,                    -- references jobs table from engine schema
+    job_assignment_id   UUID NOT NULL REFERENCES job_assignments(id) ON DELETE CASCADE,
+    binary_path         TEXT NOT NULL,
+    sha256_checksum     TEXT NOT NULL,                    -- hex-encoded SHA256
+    execution_count     INT NOT NULL DEFAULT 1,
+    first_executed_at   TIMESTAMPTZ NOT NULL,
+    last_executed_at    TIMESTAMPTZ NOT NULL,
+    step_ids            UUID[] NOT NULL DEFAULT '{}',     -- which steps executed this binary
+    UNIQUE(job_assignment_id, binary_path, sha256_checksum)
+);
+
+CREATE INDEX idx_job_executed_binaries_job ON job_executed_binaries(job_id);
+CREATE INDEX idx_job_executed_binaries_sha256 ON job_executed_binaries(sha256_checksum);
+
+-- Job execution metadata summary
+CREATE TABLE job_execution_metadata (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id                  UUID NOT NULL,
+    job_assignment_id       UUID NOT NULL REFERENCES job_assignments(id) ON DELETE CASCADE,
+    total_processes_spawned BIGINT NOT NULL DEFAULT 0,
+    execution_tree_depth    INT NOT NULL DEFAULT 0,
+    unique_binaries_count   INT NOT NULL DEFAULT 0,
+    recorded_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(job_assignment_id)
+);
+
+CREATE INDEX idx_job_execution_metadata_job ON job_execution_metadata(job_id);
 ```
 
 ---
@@ -881,6 +1133,12 @@ pub fn default_backend() -> Box<dyn ExecutionBackend> {
 | `test_agent_revocation`               | Admin revokes agent; next heartbeat returns TERMINATE.                                                 |
 | `test_concurrent_agents`              | Multiple agents in same pool; each gets distinct jobs (no double-dispatch).                            |
 | `test_agent_reconnect`                | Agent loses NATS connection, reconnects, and resumes pulling jobs.                                     |
+| `test_process_watcher_basic`          | Process watcher tracks direct child process and computes correct SHA256 checksum.                      |
+| `test_process_watcher_nested`         | Process watcher tracks nested child processes (grandchildren, etc.) in process tree.                   |
+| `test_process_watcher_binary_caching` | Same binary executed multiple times is only hashed once; execution count incremented correctly.        |
+| `test_execution_metadata_reported`    | Job completion report includes accurate execution metadata with all executed binaries.                 |
+| `test_execution_metadata_persisted`   | Execution metadata is correctly persisted to `job_executed_binaries` and `job_execution_metadata`.     |
+| `test_container_process_watching`     | (Linux only) Process watcher correctly tracks processes inside containers from outside namespace.      |
 
 
 ### 12.3 Property-Based Tests
@@ -905,6 +1163,9 @@ met-agent
   ├── tonic             (gRPC client)
   ├── async-nats        (NATS client)
   ├── rcgen             (X509 keypair generation)
+  ├── sha2              (SHA256 binary checksums)
+  ├── hex               (hex encoding for checksums)
+  ├── aya               (eBPF for Linux process watching)
   ├── tokio             (async runtime)
   ├── clap              (CLI)
   └── serde / serde_json
@@ -949,9 +1210,10 @@ met-operator
 | 1.8  | Native execution backend (macOS/Windows): process runner, environment scrubbing                                            | 1.4                   |
 | 1.9  | Agent drain / revocation / graceful shutdown                                                                               | 1.5                   |
 | 1.10 | Operating environment validation                                                                                           | 1.2                   |
-| 1.11 | `met-operator`: CRDs, reconciler, auto-scaler                                                                              | 1.5, 1.4              |
-| 1.12 | Integration tests                                                                                                          | 1.0 -- 1.11           |
-| 1.13 | Cross-platform CI build targets                                                                                            | 1.3                   |
+| 1.11 | Process watcher: eBPF (Linux), Endpoint Security (macOS), ETW (Windows), binary SHA256 hashing                             | 1.7, 1.8              |
+| 1.12 | `met-operator`: CRDs, reconciler, auto-scaler                                                                              | 1.5, 1.4              |
+| 1.13 | Integration tests                                                                                                          | 1.0 -- 1.12           |
+| 1.14 | Cross-platform CI build targets                                                                                            | 1.3                   |
 
 
 ---
@@ -965,7 +1227,8 @@ met-operator
 | NATS auth: per-agent credentials or shared per-pool?                      | Per-agent (issued during registration).                                                                                        | More secure, enables per-agent revocation. Adds complexity to credential management.                                            |
 | Agent update mechanism?                                                   | Out of scope for Phase 1. Agents report their version; operator can roll new image tags. Bare-metal agents updated externally. | Revisit in Phase 4 (CLI could support `met agent update`).                                                                      |
 | Should the controller be a separate binary or embedded in the API server? | Separate binary.                                                                                                               | Allows independent scaling. Controller needs to be highly available; could run multiple replicas behind the same gRPC endpoint. |
-| DinD vs socket mount as default for K8s?                                  | Socket mount as default; DinD as opt-in.                                                                                       | Performance matters for CI. Document the security tradeoffs.                                                                    |
-| BSD support timeline?                                                     | Post-v1.0, if ever.                                                                                                            | Design the native backend to be extensible enough that adding BSD is straightforward.                                           |
+| DinD vs socket mount as default for K8s?                                  | DinD as default for Kubernetes (security); socket mount as default for bare-metal/VM (performance).                            | Multi-tenant K8s clusters require isolation. Socket mount is opt-in for trusted single-tenant clusters.                         |
+| Process watcher implementation?                                           | eBPF only. Require kernel 4.15+ for Linux agents.                                                                              | eBPF provides low-overhead process tracing. Older kernels are not supported for process watching.                               |
+| Should binary checksums be validated against an allowlist?                | Optional per-tenant policy, not enforced by default.                                                                           | Allowlist management adds significant operational complexity. Start with logging-only, add enforcement as opt-in later.         |
 
 

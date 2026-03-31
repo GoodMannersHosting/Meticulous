@@ -101,6 +101,7 @@ impl JwtValidator {
             name: claims.name,
             permissions: claims.permissions.into_iter().collect(),
             is_api_token: false,
+            project_ids: None, // JWT tokens have access to all projects
         })
     }
 }

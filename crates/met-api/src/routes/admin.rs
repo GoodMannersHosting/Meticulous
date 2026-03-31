@@ -11,12 +11,15 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use met_core::ids::{AuthProviderId, GroupId, OidcGroupMappingId, ProjectId, UserId};
+use chrono::{Duration, Utc};
+use met_core::ids::{AuthProviderId, GroupId, JoinTokenId, OidcGroupMappingId, ProjectId, UserId};
 use met_core::models::{
     AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership, GroupRole,
-    OidcGroupMapping, PermissionRole, UpdateAuthProvider, User, UserRole,
+    JoinToken, JoinTokenScope, OidcGroupMapping, PermissionRole, UpdateAuthProvider, User, UserRole,
+    generate_join_token,
 };
-use met_store::repos::{AuthProviderRepo, GroupRepo, ProjectRepo, RoleRepo, UserRepo};
+use met_store::repos::{AgentRepo, AuthProviderRepo, GroupRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo};
+use crate::auth::hash_token;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -68,6 +71,9 @@ pub fn router() -> Router<AppState> {
             "/admin/auth-providers/{provider_id}/group-mappings/{mapping_id}",
             delete(delete_group_mapping),
         )
+        // Join token management
+        .route("/admin/join-tokens", get(list_join_tokens).post(create_join_token))
+        .route("/admin/join-tokens/{id}", get(get_join_token).delete(revoke_join_token))
 }
 
 // ============================================================================
@@ -1335,4 +1341,315 @@ async fn delete_group_mapping(
     );
 
     Ok(Json(serde_json::json!({ "message": "group mapping deleted" })))
+}
+
+// ============================================================================
+// Join Token Management
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct JoinTokenResponse {
+    pub id: String,
+    pub prefix: String,
+    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_uses: Option<i32>,
+    pub current_uses: i32,
+    pub labels: Vec<String>,
+    pub pool_tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    pub revoked: bool,
+    pub created_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_name: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub agents: Vec<JoinTokenAgentInfo>,
+}
+
+/// Summary of an agent that registered using a join token.
+#[derive(Debug, Serialize)]
+pub struct JoinTokenAgentInfo {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub registered_at: String,
+}
+
+impl JoinTokenResponse {
+    fn from_token(t: &JoinToken) -> Self {
+        Self {
+            id: t.id.to_string(),
+            prefix: format!("met_join_{}...", &t.token_hash[..8.min(t.token_hash.len())]),
+            scope: format!("{:?}", t.scope).to_lowercase(),
+            scope_id: t.scope_id.map(|id| id.to_string()),
+            max_uses: t.max_uses,
+            current_uses: t.current_uses,
+            labels: t.labels.clone(),
+            pool_tags: t.pool_tags.clone(),
+            expires_at: t.expires_at.map(|dt| dt.to_rfc3339()),
+            revoked: t.revoked,
+            created_by: t.created_by.to_string(),
+            created_by_name: None,
+            created_at: t.created_at.to_rfc3339(),
+            agents: Vec::new(),
+        }
+    }
+}
+
+impl From<&JoinToken> for JoinTokenResponse {
+    fn from(t: &JoinToken) -> Self {
+        Self::from_token(t)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateJoinTokenRequest {
+    /// Token scope: platform, tenant, project, or pipeline
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Scope ID for project/pipeline scope
+    #[serde(default)]
+    pub scope_id: Option<uuid::Uuid>,
+    /// Maximum number of uses (None = unlimited)
+    #[serde(default)]
+    pub max_uses: Option<i32>,
+    /// Labels to apply to agents using this token
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Pool tags to apply to agents using this token
+    #[serde(default)]
+    pub pool_tags: Vec<String>,
+    /// Expiration in days (None = never expires)
+    #[serde(default)]
+    pub expires_in_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateJoinTokenResponse {
+    pub token: JoinTokenResponse,
+    pub plain_token: String,
+}
+
+/// List all join tokens for the organization, enriched with creator info and associated agents.
+#[instrument(skip(state))]
+async fn list_join_tokens(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    pagination: Pagination,
+) -> ApiResult<Json<PaginatedResponse<JoinTokenResponse>>> {
+    require_admin(&admin)?;
+
+    let repo = JoinTokenRepo::new(state.db());
+    let tokens = repo
+        .list_by_org(admin.org_id, pagination.sql_limit(), 0)
+        .await?;
+
+    let items = enrich_join_tokens(&tokens, state.db()).await?;
+
+    let response = PaginatedResponse::new(items, pagination.limit, |t| t.id.clone());
+
+    Ok(Json(response))
+}
+
+/// Enriches join tokens with creator names and associated agents.
+async fn enrich_join_tokens(
+    tokens: &[JoinToken],
+    db: &sqlx::PgPool,
+) -> ApiResult<Vec<JoinTokenResponse>> {
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let token_ids: Vec<uuid::Uuid> = tokens.iter().map(|t| t.id.as_uuid()).collect();
+    let creator_ids: Vec<uuid::Uuid> = tokens.iter().map(|t| t.created_by.as_uuid()).collect();
+
+    #[derive(sqlx::FromRow)]
+    struct CreatorRow {
+        id: uuid::Uuid,
+        display_name: Option<String>,
+        username: String,
+    }
+
+    let creators: Vec<CreatorRow> = sqlx::query_as(
+        "SELECT id, display_name, username FROM users WHERE id = ANY($1)",
+    )
+    .bind(&creator_ids)
+    .fetch_all(db)
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let creator_map: std::collections::HashMap<uuid::Uuid, &CreatorRow> =
+        creators.iter().map(|c| (c.id, c)).collect();
+
+    #[derive(sqlx::FromRow)]
+    struct AgentRow {
+        id: uuid::Uuid,
+        name: String,
+        status: met_core::models::AgentStatus,
+        join_token_id: Option<uuid::Uuid>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let agents: Vec<AgentRow> = sqlx::query_as(
+        "SELECT id, name, status, join_token_id, created_at FROM agents WHERE join_token_id = ANY($1)",
+    )
+    .bind(&token_ids)
+    .fetch_all(db)
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let mut agent_map: std::collections::HashMap<uuid::Uuid, Vec<JoinTokenAgentInfo>> =
+        std::collections::HashMap::new();
+    for a in &agents {
+        if let Some(jt_id) = a.join_token_id {
+            agent_map.entry(jt_id).or_default().push(JoinTokenAgentInfo {
+                id: a.id.to_string(),
+                name: a.name.clone(),
+                status: format!("{:?}", a.status).to_lowercase(),
+                registered_at: a.created_at.to_rfc3339(),
+            });
+        }
+    }
+
+    let items = tokens
+        .iter()
+        .map(|t| {
+            let mut resp = JoinTokenResponse::from_token(t);
+            if let Some(creator) = creator_map.get(&t.created_by.as_uuid()) {
+                resp.created_by_name =
+                    Some(creator.display_name.clone().unwrap_or_else(|| creator.username.clone()));
+            }
+            if let Some(token_agents) = agent_map.remove(&t.id.as_uuid()) {
+                resp.agents = token_agents;
+            }
+            resp
+        })
+        .collect();
+
+    Ok(items)
+}
+
+/// Get a join token by ID, enriched with creator info and associated agents.
+#[instrument(skip(state))]
+async fn get_join_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(token_id): Path<JoinTokenId>,
+) -> ApiResult<Json<JoinTokenResponse>> {
+    require_admin(&admin)?;
+
+    let repo = JoinTokenRepo::new(state.db());
+    let token = repo.get(token_id).await?;
+
+    if token.scope == JoinTokenScope::Tenant {
+        if token.scope_id != Some(admin.org_id.as_uuid()) {
+            return Err(ApiError::forbidden("cannot access tokens from other organizations"));
+        }
+    }
+
+    let mut items = enrich_join_tokens(&[token], state.db()).await?;
+
+    Ok(Json(items.remove(0)))
+}
+
+/// Create a new join token.
+#[instrument(skip(state, req))]
+async fn create_join_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Json(req): Json<CreateJoinTokenRequest>,
+) -> ApiResult<Json<CreateJoinTokenResponse>> {
+    require_admin(&admin)?;
+
+    // Parse scope
+    let scope = match req.scope.as_deref().unwrap_or("tenant") {
+        "platform" => JoinTokenScope::Platform,
+        "tenant" => JoinTokenScope::Tenant,
+        "project" => JoinTokenScope::Project,
+        "pipeline" => JoinTokenScope::Pipeline,
+        _ => return Err(ApiError::bad_request("invalid scope, must be: platform, tenant, project, or pipeline")),
+    };
+
+    // Generate the plain token
+    let plain_token = generate_join_token();
+    let token_hash = hash_token(&plain_token);
+
+    // Calculate expiration
+    let expires_at = req.expires_in_days.map(|days| Utc::now() + Duration::days(days));
+
+    // Determine scope_id based on scope type
+    let scope_id = match scope {
+        JoinTokenScope::Platform => None,
+        JoinTokenScope::Tenant => Some(admin.org_id.as_uuid()),
+        JoinTokenScope::Project | JoinTokenScope::Pipeline => {
+            req.scope_id.ok_or_else(|| ApiError::bad_request("scope_id is required for project and pipeline scopes"))?;
+            req.scope_id
+        }
+    };
+
+    let now = Utc::now();
+    let token = JoinToken {
+        id: JoinTokenId::new(),
+        token_hash,
+        scope,
+        scope_id,
+        max_uses: req.max_uses,
+        current_uses: 0,
+        labels: req.labels,
+        pool_tags: req.pool_tags,
+        expires_at,
+        revoked: false,
+        created_by: admin.user_id,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let repo = JoinTokenRepo::new(state.db());
+    let created = repo.create(&token).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        token_id = %created.id,
+        scope = ?scope,
+        "join token created"
+    );
+
+    Ok(Json(CreateJoinTokenResponse {
+        token: JoinTokenResponse::from(&created),
+        plain_token,
+    }))
+}
+
+/// Revoke a join token.
+#[instrument(skip(state))]
+async fn revoke_join_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(token_id): Path<JoinTokenId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+
+    let repo = JoinTokenRepo::new(state.db());
+    let token = repo.get(token_id).await?;
+
+    // Verify the token belongs to this org (tenant scope check)
+    if token.scope == JoinTokenScope::Tenant {
+        if token.scope_id != Some(admin.org_id.as_uuid()) {
+            return Err(ApiError::forbidden("cannot revoke tokens from other organizations"));
+        }
+    }
+
+    repo.revoke(token_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        token_id = %token_id,
+        "join token revoked"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "join token revoked" })))
 }

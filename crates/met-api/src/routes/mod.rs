@@ -5,24 +5,34 @@
 //! Admin routes are mounted at `/admin/*` for user, group, and system management.
 
 use crate::middleware::{cors_layer, logging_layer, rate_limit_layer};
+use crate::openapi::ApiDoc;
 use crate::state::AppState;
-use axum::Router;
+use axum::{Json, Router};
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 pub mod admin;
 pub mod agents;
+pub mod artifacts;
 pub mod auth;
+pub mod debug;
 pub mod health;
 pub mod oauth;
+pub mod orgs;
 pub mod pipelines;
 pub mod projects;
 pub mod runs;
+pub mod secrets;
+pub mod tokens;
+pub mod variables;
 pub mod webhooks;
 pub mod websocket;
+pub mod workflows;
 
 /// Build the complete API router with all middleware.
 pub fn build_router(state: AppState) -> Router {
@@ -46,8 +56,20 @@ pub fn build_router(state: AppState) -> Router {
         .merge(pipelines::router())
         .merge(runs::router())
         .merge(agents::router())
+        .merge(tokens::router())
+        .merge(orgs::router())
+        .merge(secrets::router())
+        .merge(variables::router())
+        .merge(workflows::router())
+        .merge(debug::router())
+        .merge(artifacts::router())
         .merge(webhooks::router())
         .merge(websocket::router());
+
+    let openapi_spec = ApiDoc::openapi();
+    let swagger_router: Router<()> = SwaggerUi::new("/docs")
+        .url("/api/v1/openapi.json", openapi_spec)
+        .into();
 
     // Assemble the complete router
     let mut router = Router::new()
@@ -64,7 +86,9 @@ pub fn build_router(state: AppState) -> Router {
         // Apply middleware stack
         .layer(middleware_stack)
         // Attach state
-        .with_state(state.clone());
+        .with_state(state.clone())
+        // Swagger UI and OpenAPI spec (stateless)
+        .merge(swagger_router);
 
     // Conditionally add rate limiting
     if let Some(rate_limit) = rate_limit_layer(&config.rate_limit) {

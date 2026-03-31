@@ -2,10 +2,12 @@
 	import { Button, Card, Input, Badge, Dialog, Alert, CopyButton } from '$components/ui';
 	import { Skeleton, EmptyState } from '$components/data';
 	import { Key, Plus, Trash2, Shield, Eye, EyeOff, Copy } from 'lucide-svelte';
+	import { api } from '$lib/api';
 
 	interface ApiToken {
 		id: string;
 		name: string;
+		description?: string;
 		prefix: string;
 		scopes: string[];
 		created_at: string;
@@ -15,12 +17,18 @@
 
 	let tokens = $state<ApiToken[]>([]);
 	let loading = $state(true);
+	let error = $state<string | null>(null);
 	let showCreateDialog = $state(false);
 	let showNewTokenDialog = $state(false);
+	let showDeleteDialog = $state(false);
+	let tokenToDelete = $state<ApiToken | null>(null);
+	let deleting = $state(false);
 	let newTokenValue = $state<string | null>(null);
+	let creating = $state(false);
 
 	let newToken = $state({
 		name: '',
+		description: '',
 		scopes: ['read'] as string[],
 		expiresIn: '90'
 	});
@@ -44,50 +52,68 @@
 
 	async function loadTokens() {
 		loading = true;
+		error = null;
 		try {
-			await new Promise((resolve) => setTimeout(resolve, 500));
-			tokens = [
-				{
-					id: '1',
-					name: 'CI/CD Token',
-					prefix: 'met_live_abc1',
-					scopes: ['read', 'write'],
-					created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-					last_used_at: new Date(Date.now() - 60 * 60 * 1000).toISOString()
-				},
-				{
-					id: '2',
-					name: 'Deploy Key',
-					prefix: 'met_live_xyz9',
-					scopes: ['read'],
-					created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-					expires_at: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString()
-				}
-			];
+			const response = await api.get<{ items: ApiToken[] }>('/api/v1/tokens');
+			tokens = response.items || [];
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load tokens';
+			console.error('Failed to load tokens:', e);
 		} finally {
 			loading = false;
 		}
 	}
 
 	async function createToken() {
-		showCreateDialog = false;
-		newTokenValue = 'met_live_' + crypto.randomUUID().replace(/-/g, '').slice(0, 32);
-		showNewTokenDialog = true;
+		if (!newToken.name.trim()) return;
 		
-		const token: ApiToken = {
-			id: crypto.randomUUID(),
-			name: newToken.name,
-			prefix: newTokenValue.slice(0, 13),
-			scopes: newToken.scopes,
-			created_at: new Date().toISOString()
-		};
-		tokens = [token, ...tokens];
-		
-		newToken = { name: '', scopes: ['read'], expiresIn: '90' };
+		creating = true;
+		error = null;
+		try {
+			const expiresInDays = newToken.expiresIn === 'never' ? null : parseInt(newToken.expiresIn);
+			const description = newToken.description.trim() || undefined;
+			
+			const response = await api.post<{ token: ApiToken; plain_token: string }>('/api/v1/tokens', {
+				name: newToken.name.trim(),
+				description,
+				scopes: newToken.scopes,
+				expires_in_days: expiresInDays
+			});
+			
+			showCreateDialog = false;
+			newTokenValue = response.plain_token;
+			showNewTokenDialog = true;
+			tokens = [response.token, ...tokens];
+			newToken = { name: '', description: '', scopes: ['read'], expiresIn: '90' };
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to create token';
+			console.error('Failed to create token:', e);
+		} finally {
+			creating = false;
+		}
 	}
 
-	async function deleteToken(id: string) {
-		tokens = tokens.filter((t) => t.id !== id);
+	function confirmDeleteToken(token: ApiToken) {
+		tokenToDelete = token;
+		showDeleteDialog = true;
+	}
+
+	async function deleteToken() {
+		if (!tokenToDelete) return;
+
+		deleting = true;
+		error = null;
+		try {
+			await api.delete(`/api/v1/tokens/${tokenToDelete.id}`);
+			tokens = tokens.filter((t) => t.id !== tokenToDelete!.id);
+			showDeleteDialog = false;
+			tokenToDelete = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to delete token';
+			console.error('Failed to delete token:', e);
+		} finally {
+			deleting = false;
+		}
 	}
 
 	function formatDate(date: string): string {
@@ -125,6 +151,12 @@
 			New API Token
 		</Button>
 	</div>
+
+	{#if error}
+		<Alert variant="error" title="Error">
+			{error}
+		</Alert>
+	{/if}
 
 	<Card>
 		<div class="mb-4 flex items-center gap-3">
@@ -170,6 +202,9 @@
 								<span class="font-medium text-[var(--text-primary)]">{token.name}</span>
 								<code class="text-xs text-[var(--text-tertiary)]">{token.prefix}...</code>
 							</div>
+							{#if token.description}
+								<p class="mt-0.5 text-sm text-[var(--text-secondary)]">{token.description}</p>
+							{/if}
 							<div class="mt-1 flex flex-wrap gap-1">
 								{#each token.scopes as scope (scope)}
 									<Badge variant="outline" size="sm">{scope}</Badge>
@@ -189,7 +224,7 @@
 						<Button
 							variant="ghost"
 							size="sm"
-							onclick={() => deleteToken(token.id)}
+							onclick={() => confirmDeleteToken(token)}
 						>
 							<Trash2 class="h-4 w-4 text-error-500" />
 						</Button>
@@ -230,6 +265,19 @@
 				bind:value={newToken.name}
 				class="mt-1"
 				required
+			/>
+		</div>
+
+		<div>
+			<label for="token-description" class="block text-sm font-medium text-[var(--text-primary)]">
+				Description
+				<span class="font-normal text-[var(--text-tertiary)]">(optional)</span>
+			</label>
+			<Input
+				id="token-description"
+				placeholder="e.g., Used by GitHub Actions to deploy staging"
+				bind:value={newToken.description}
+				class="mt-1"
 			/>
 		</div>
 
@@ -275,11 +323,11 @@
 		</div>
 
 		<div class="flex justify-end gap-3 pt-4">
-			<Button variant="outline" onclick={() => (showCreateDialog = false)}>
+			<Button variant="outline" onclick={() => (showCreateDialog = false)} disabled={creating}>
 				Cancel
 			</Button>
-			<Button variant="primary" type="submit" disabled={!newToken.name || newToken.scopes.length === 0}>
-				Create Token
+			<Button variant="primary" type="submit" disabled={!newToken.name || newToken.scopes.length === 0 || creating}>
+				{creating ? 'Creating...' : 'Create Token'}
 			</Button>
 		</div>
 	</form>
@@ -301,6 +349,38 @@
 		<div class="flex justify-end">
 			<Button variant="primary" onclick={() => { showNewTokenDialog = false; newTokenValue = null; }}>
 				Done
+			</Button>
+		</div>
+	</div>
+</Dialog>
+
+<Dialog bind:open={showDeleteDialog} title="Delete API Token">
+	<div class="space-y-4">
+		<p class="text-sm text-[var(--text-secondary)]">
+			Are you sure you want to delete this token? Any applications or scripts using this token
+			will no longer be able to authenticate.
+		</p>
+
+		{#if tokenToDelete}
+			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+				<p class="font-medium text-[var(--text-primary)]">{tokenToDelete.name}</p>
+				{#if tokenToDelete.description}
+					<p class="mt-0.5 text-sm text-[var(--text-secondary)]">{tokenToDelete.description}</p>
+				{/if}
+				<code class="mt-1 block text-xs text-[var(--text-tertiary)]">{tokenToDelete.prefix}...</code>
+			</div>
+		{/if}
+
+		<Alert variant="error" title="This action cannot be undone">
+			The token will be permanently revoked and cannot be recovered.
+		</Alert>
+
+		<div class="flex justify-end gap-3">
+			<Button variant="outline" onclick={() => { showDeleteDialog = false; tokenToDelete = null; }} disabled={deleting}>
+				Cancel
+			</Button>
+			<Button variant="destructive" onclick={deleteToken} disabled={deleting}>
+				{deleting ? 'Deleting...' : 'Delete Token'}
 			</Button>
 		</div>
 	</div>

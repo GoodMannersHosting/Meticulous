@@ -32,6 +32,203 @@ message JobDispatch {
     repeated string required_tags = 10;
     // Priority (higher = more urgent).
     int32 priority = 11;
+    // Cache restore configuration.
+    CacheRestore cache_restore = 12;
+    // Input artifacts from dependent jobs.
+    repeated ArtifactRef input_artifacts = 13;
+    // Sidecar services to start.
+    repeated ServiceSpec services = 14;
+    // Retry policy.
+    RetryPolicy retry_policy = 15;
+    // Trace ID for distributed tracing.
+    string trace_id = 16;
+    // Job attempt number (1 for first attempt).
+    int32 attempt = 17;
+}
+
+// Full job payload message (comprehensive version).
+message JobPayload {
+    // Job run ID.
+    string job_run_id = 1;
+    // Run ID.
+    string run_id = 2;
+    // Organization ID.
+    string org_id = 3;
+    // Pipeline ID.
+    string pipeline_id = 4;
+    // Pipeline name.
+    string pipeline_name = 5;
+    // Job ID (from IR).
+    string job_id = 6;
+    // Job name.
+    string job_name = 7;
+    // Steps to execute.
+    repeated StepPayload steps = 8;
+    // Variables for the job.
+    map<string, string> variables = 9;
+    // Encrypted secrets (key -> encrypted data).
+    map<string, EncryptedSecret> secrets = 10;
+    // Cache restore configuration.
+    CacheRestore cache_restore = 11;
+    // Input artifacts from dependent jobs.
+    repeated ArtifactRef input_artifacts = 12;
+    // Pool selector for agent matching.
+    PoolSelector pool_selector = 13;
+    // Job timeout.
+    int64 timeout_ms = 14;
+    // Retry policy.
+    RetryPolicy retry_policy = 15;
+    // Sidecar services.
+    repeated ServiceSpec services = 16;
+    // Trace ID for distributed tracing.
+    string trace_id = 17;
+    // Job attempt number.
+    int32 attempt = 18;
+    // Workspace configuration.
+    WorkspaceConfig workspace = 19;
+}
+
+// Step payload within a job.
+message StepPayload {
+    // Step run ID.
+    string step_run_id = 1;
+    // Step ID (from IR).
+    string step_id = 2;
+    // Step name.
+    string name = 3;
+    // Command type.
+    oneof command {
+        ShellCommand shell = 4;
+        ActionCommand action = 5;
+    }
+    // Environment variables.
+    map<string, string> env = 6;
+    // Working directory (relative to workspace).
+    string working_directory = 7;
+    // Step timeout in milliseconds.
+    int64 timeout_ms = 8;
+    // Continue on error flag.
+    bool continue_on_error = 9;
+    // Execution sequence number.
+    int32 sequence = 10;
+}
+
+// Shell command execution.
+message ShellCommand {
+    // Shell type (bash, sh, powershell, etc.).
+    string shell = 1;
+    // Script content to execute.
+    string script = 2;
+}
+
+// Built-in action execution.
+message ActionCommand {
+    // Action name.
+    string name = 1;
+    // Action version.
+    string version = 2;
+    // Action inputs.
+    map<string, string> inputs = 3;
+}
+
+// Cache restore configuration.
+message CacheRestore {
+    // Primary cache key.
+    string key = 1;
+    // Fallback restore keys.
+    repeated string restore_keys = 2;
+    // Presigned download URL (if cache hit).
+    string download_url = 3;
+    // Paths to restore.
+    repeated string paths = 4;
+}
+
+// Cache save configuration (included in completion).
+message CacheSave {
+    // Cache key to save.
+    string key = 1;
+    // Paths to cache.
+    repeated string paths = 2;
+}
+
+// Artifact reference for downloading.
+message ArtifactRef {
+    // Artifact ID.
+    string artifact_id = 1;
+    // Artifact name.
+    string name = 2;
+    // Presigned download URL.
+    string download_url = 3;
+    // SHA-256 checksum.
+    string sha256 = 4;
+    // Size in bytes.
+    int64 size_bytes = 5;
+    // Source job run ID.
+    string source_job_run_id = 6;
+}
+
+// Pool selector for agent matching.
+message PoolSelector {
+    // Required tags (all must match).
+    map<string, string> required_tags = 1;
+    // Pool name (alternative to tags).
+    string pool_name = 2;
+}
+
+// Retry policy configuration.
+message RetryPolicy {
+    // Maximum number of attempts.
+    int32 max_attempts = 1;
+    // Initial backoff in milliseconds.
+    int64 backoff_ms = 2;
+    // Backoff multiplier.
+    double backoff_multiplier = 3;
+    // Maximum backoff in milliseconds.
+    int64 max_backoff_ms = 4;
+}
+
+// Service (sidecar container) specification.
+message ServiceSpec {
+    // Service name.
+    string name = 1;
+    // Container image.
+    string image = 2;
+    // Exposed ports.
+    repeated int32 ports = 3;
+    // Environment variables.
+    map<string, string> env = 4;
+    // Command override.
+    repeated string command = 5;
+    // Health check configuration.
+    HealthCheck health_check = 6;
+}
+
+// Health check configuration.
+message HealthCheck {
+    // Check type.
+    oneof method {
+        string cmd = 1;
+        string http = 2;
+        int32 tcp = 3;
+    }
+    // Interval between checks in milliseconds.
+    int64 interval_ms = 4;
+    // Timeout for each check in milliseconds.
+    int64 timeout_ms = 5;
+    // Retries before marking unhealthy.
+    int32 retries = 6;
+}
+
+// Workspace configuration.
+message WorkspaceConfig {
+    // Workspace root path.
+    string root = 1;
+    // Git repository URL.
+    string repo_url = 2;
+    // Git ref to checkout.
+    string ref = 3;
+    // Commit SHA.
+    string sha = 4;
 }
 
 // Step specification (embedded in JobDispatch).
@@ -102,6 +299,84 @@ message JobCompletion {
     int64 duration_ms = 7;
     // Timestamp.
     meticulous.common.v1.Timestamp timestamp = 8;
+    // Job outputs (key-value pairs).
+    map<string, string> outputs = 9;
+    // Step completions.
+    repeated StepCompletion steps = 10;
+    // Uploaded artifacts.
+    repeated ArtifactUpload artifacts = 11;
+    // Cache save info (if cache was saved).
+    CacheSaveResult cache_save = 12;
+    // Execution metadata.
+    ExecutionMetadata metadata = 13;
+}
+
+// Step completion information.
+message StepCompletion {
+    // Step run ID.
+    string step_run_id = 1;
+    // Step ID.
+    string step_id = 2;
+    // Final status.
+    meticulous.common.v1.RunStatus status = 3;
+    // Exit code.
+    optional int32 exit_code = 4;
+    // Error message.
+    string error_message = 5;
+    // Duration in milliseconds.
+    int64 duration_ms = 6;
+    // Started at timestamp.
+    meticulous.common.v1.Timestamp started_at = 7;
+    // Finished at timestamp.
+    meticulous.common.v1.Timestamp finished_at = 8;
+    // Step outputs.
+    map<string, string> outputs = 9;
+    // Log path in object storage.
+    string log_path = 10;
+}
+
+// Artifact upload information.
+message ArtifactUpload {
+    // Artifact name.
+    string name = 1;
+    // Storage path.
+    string storage_path = 2;
+    // Content type.
+    string content_type = 3;
+    // Size in bytes.
+    int64 size_bytes = 4;
+    // SHA-256 checksum.
+    string sha256 = 5;
+}
+
+// Cache save result.
+message CacheSaveResult {
+    // Cache key saved.
+    string key = 1;
+    // Storage path.
+    string storage_path = 2;
+    // Size in bytes.
+    int64 size_bytes = 3;
+    // Whether save was successful.
+    bool success = 4;
+    // Error message if failed.
+    string error_message = 5;
+}
+
+// Execution metadata for supply chain tracking.
+message ExecutionMetadata {
+    // Agent OS.
+    string os = 1;
+    // Agent architecture.
+    string arch = 2;
+    // Agent version.
+    string agent_version = 3;
+    // Container runtime used (if any).
+    string container_runtime = 4;
+    // Binary hashes for supply chain verification.
+    map<string, string> binary_hashes = 5;
+    // Environment fingerprint.
+    string env_fingerprint = 6;
 }
 
 // Agent event (published by controller for agent lifecycle).

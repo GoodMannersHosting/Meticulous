@@ -4,12 +4,13 @@
 //! agents, and other resources, plus WebSocket streaming for logs.
 
 use clap::Parser;
-use met_api::{config::ApiConfig, routes, state::AppState};
+use met_api::{ApiDoc, config::ApiConfig, routes, state::AppState};
 use met_core::MetConfig;
 use met_store::{PoolConfig, create_pool};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::signal;
+use utoipa::OpenApi;
 
 #[derive(Parser)]
 #[command(name = "met-api")]
@@ -26,12 +27,22 @@ struct Args {
     /// Config file path
     #[arg(long, env = "MET_CONFIG")]
     config: Option<String>,
+
+    /// Print the OpenAPI spec as JSON to stdout and exit
+    #[arg(long)]
+    dump_openapi: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI args
     let args = Args::parse();
+
+    if args.dump_openapi {
+        let spec = ApiDoc::openapi();
+        println!("{}", serde_json::to_string_pretty(&spec)?);
+        return Ok(());
+    }
 
     // Initialize tracing
     tracing_subscriber::fmt()

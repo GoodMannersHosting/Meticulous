@@ -1,0 +1,57 @@
+# Cargo configuration for Meticulous cross-compilation
+
+# Build profiles
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
+
+# Cross-compilation targets for Linux with musl (produces static binaries)
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-linux-musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"
+
+# Linux GNU targets (for development on Linux)
+[target.x86_64-unknown-linux-gnu]
+# Uses system linker
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+# macOS targets (native compilation only)
+[target.x86_64-apple-darwin]
+# Uses system linker
+
+[target.aarch64-apple-darwin]
+# Uses system linker
+
+# Windows MSVC target
+[target.x86_64-pc-windows-msvc]
+# Uses MSVC linker
+
+# Build settings
+[build]
+# Default to the native target
+# target = "x86_64-unknown-linux-gnu"
+
+# Cargo feature flags
+[features]
+# Default features
+# default = []
+
+# Environment variables for build scripts
+[env]
+# Reduce build time with incremental compilation
+CARGO_INCREMENTAL = "1"
+
+# Registry configuration
+[registries.crates-io]
+protocol = "sparse"
+
+# Network settings for CI
+[net]
+retry = 3
+git-fetch-with-cli = true

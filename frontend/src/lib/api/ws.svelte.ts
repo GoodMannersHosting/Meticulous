@@ -58,10 +58,7 @@ class WebSocketManager {
 		this.setState('connecting');
 
 		try {
-			const token = localStorage.getItem('auth_token');
-			const wsUrl = token ? `${this.url}?token=${encodeURIComponent(token)}` : this.url;
-
-			this.ws = new WebSocket(wsUrl);
+			this.ws = new WebSocket(this.url);
 			this.setupEventHandlers();
 		} catch (error) {
 			console.error('WebSocket connection error:', error);
@@ -81,6 +78,12 @@ class WebSocketManager {
 		if (!this.ws) return;
 
 		this.ws.onopen = () => {
+			// Send auth message immediately after connection (before 'connected' state)
+			// Server requires auth within 10 seconds or will close the connection
+			const token = localStorage.getItem('auth_token');
+			if (token && this.ws?.readyState === WebSocket.OPEN) {
+				this.ws.send(JSON.stringify({ type: 'auth', token }));
+			}
 			this.setState('connected');
 			this.currentReconnectDelay = this.reconnectDelay;
 			this.startHeartbeat();

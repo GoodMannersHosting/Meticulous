@@ -99,9 +99,12 @@
 
 pub mod audit;
 pub mod error;
+pub mod masking;
 pub mod oidc;
+pub mod pki;
 pub mod providers;
 pub mod rbac;
+pub mod syscall_audit;
 pub mod traits;
 pub mod types;
 
@@ -124,6 +127,27 @@ pub use audit::{AuditAction, AuditEvent, AuditFilter, AuditLogger, Outcome, Seve
 
 // Re-export OIDC types
 pub use oidc::{OidcConfig, OidcValidator, OidcValidatorBuilder, ValidatedClaims};
+
+// Re-export PKI types
+pub use pki::{
+    CaConfig, CertificateAuthority, CertificateSigningRequest, EncryptedEnvelope, EphemeralKeypair,
+    HybridDecryption, HybridEncryption, SignedCertificate,
+};
+
+// Re-export masking
+pub use masking::SecretMaskingFilter;
+
+// Re-export broker config
+pub use providers::{BrokerConfig, MultiProviderBrokerBuilder};
+
+// Re-export syscall audit / blast radius
+pub use syscall_audit::{
+    AffectedRun, BlastRadiusResult, BlastRadiusTracker, BinaryExecution, KnownBinary,
+    NetworkConnection, NetworkMetadataCollector, SyscallAuditCollector,
+};
+
+// Re-export OIDC pipeline types
+pub use oidc::{OidcDiscoveryDocument, PipelineIdentityClaims, PipelineTokenIssuer, SigningKey};
 
 #[cfg(test)]
 mod tests {

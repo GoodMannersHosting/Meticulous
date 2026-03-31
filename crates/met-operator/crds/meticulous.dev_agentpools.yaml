@@ -1,0 +1,251 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentpools.meticulous.dev
+spec:
+  group: meticulous.dev
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - replicas
+                - template
+                - controllerUrl
+                - joinTokenSecretRef
+              properties:
+                replicas:
+                  type: object
+                  properties:
+                    min:
+                      type: integer
+                      default: 0
+                      minimum: 0
+                    max:
+                      type: integer
+                      minimum: 1
+                    idle:
+                      type: integer
+                      default: 1
+                      minimum: 0
+                selector:
+                  type: object
+                  properties:
+                    os:
+                      type: string
+                      default: linux
+                    arch:
+                      type: string
+                      default: amd64
+                    labels:
+                      type: array
+                      items:
+                        type: string
+                poolTags:
+                  type: array
+                  items:
+                    type: string
+                template:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                controllerUrl:
+                  type: string
+                joinTokenSecretRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+                      default: token
+                dindEnabled:
+                  type: boolean
+                  default: false
+            status:
+              type: object
+              properties:
+                ready:
+                  type: integer
+                  default: 0
+                busy:
+                  type: integer
+                  default: 0
+                idle:
+                  type: integer
+                  default: 0
+                totalJobsCompleted:
+                  type: integer
+                  format: int64
+                  default: 0
+                lastScaleTime:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                observedGeneration:
+                  type: integer
+                  format: int64
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: integer
+          jsonPath: .status.ready
+        - name: Busy
+          type: integer
+          jsonPath: .status.busy
+        - name: Idle
+          type: integer
+          jsonPath: .status.idle
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: agentpools
+    singular: agentpool
+    kind: AgentPool
+    shortNames:
+      - ap
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentpoolautoscalers.meticulous.dev
+spec:
+  group: meticulous.dev
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - poolRef
+                - metrics
+              properties:
+                poolRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                metrics:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - target
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - QueueDepth
+                          - IdleAgents
+                          - Cpu
+                          - Memory
+                      target:
+                        type: object
+                        properties:
+                          subject:
+                            type: string
+                          threshold:
+                            type: integer
+                          min:
+                            type: integer
+                behavior:
+                  type: object
+                  properties:
+                    scaleUp:
+                      type: object
+                      properties:
+                        stabilizationWindowSeconds:
+                          type: integer
+                          default: 60
+                        policies:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - type
+                              - value
+                              - periodSeconds
+                            properties:
+                              type:
+                                type: string
+                                enum:
+                                  - Pods
+                                  - Percent
+                              value:
+                                type: integer
+                              periodSeconds:
+                                type: integer
+                    scaleDown:
+                      type: object
+                      properties:
+                        stabilizationWindowSeconds:
+                          type: integer
+                          default: 300
+                        policies:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - type
+                              - value
+                              - periodSeconds
+                            properties:
+                              type:
+                                type: string
+                                enum:
+                                  - Pods
+                                  - Percent
+                              value:
+                                type: integer
+                              periodSeconds:
+                                type: integer
+  scope: Namespaced
+  names:
+    plural: agentpoolautoscalers
+    singular: agentpoolautoscaler
+    kind: AgentPoolAutoscaler
+    shortNames:
+      - apa

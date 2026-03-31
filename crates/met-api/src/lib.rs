@@ -14,11 +14,13 @@ pub mod config;
 pub mod error;
 pub mod extractors;
 pub mod middleware;
+pub mod openapi;
 pub mod routes;
 pub mod state;
 
 pub use config::ApiConfig;
 pub use error::{ApiError, ApiResult};
+pub use openapi::ApiDoc;
 pub use state::AppState;
 
 /// Package version for health endpoint.

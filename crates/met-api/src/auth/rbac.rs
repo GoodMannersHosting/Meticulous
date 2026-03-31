@@ -1,100 +1,131 @@
-//! Role-Based Access Control (RBAC) enforcement.
+//! RBAC authorization middleware for the API.
 //!
-//! Provides permission checking utilities and macros for protecting endpoints.
+//! Provides the `authorize()` function and `RequirePermission` extractor
+//! that checks RBAC permissions before handler execution.
+
+use axum::{
+    extract::{FromRef, FromRequestParts},
+    http::request::Parts,
+};
+use met_core::{OrganizationId, ProjectId};
+use tracing::{debug, warn};
 
 use crate::error::ApiError;
-use crate::extractors::CurrentUser;
+use crate::extractors::auth::{Auth, CurrentUser};
+use crate::state::AppState;
 
-/// Standard permissions used in the API.
-///
-/// Permissions follow the pattern `resource:action` where:
-/// - resource: pipelines, runs, agents, secrets, etc.
-/// - action: read, write, delete, admin
-pub struct Permission;
-
-impl Permission {
-    // Organization permissions
-    pub const ORG_READ: &'static str = "org:read";
-    pub const ORG_WRITE: &'static str = "org:write";
-    pub const ORG_ADMIN: &'static str = "org:admin";
-
-    // Project permissions
-    pub const PROJECT_READ: &'static str = "project:read";
-    pub const PROJECT_WRITE: &'static str = "project:write";
-    pub const PROJECT_DELETE: &'static str = "project:delete";
-
-    // Pipeline permissions
-    pub const PIPELINE_READ: &'static str = "pipeline:read";
-    pub const PIPELINE_WRITE: &'static str = "pipeline:write";
-    pub const PIPELINE_DELETE: &'static str = "pipeline:delete";
-    pub const PIPELINE_TRIGGER: &'static str = "pipeline:trigger";
-
-    // Run permissions
-    pub const RUN_READ: &'static str = "run:read";
-    pub const RUN_CANCEL: &'static str = "run:cancel";
-    pub const RUN_RETRY: &'static str = "run:retry";
-
-    // Agent permissions
-    pub const AGENT_READ: &'static str = "agent:read";
-    pub const AGENT_WRITE: &'static str = "agent:write";
-    pub const AGENT_DELETE: &'static str = "agent:delete";
-
-    // Secret permissions
-    pub const SECRET_READ: &'static str = "secret:read";
-    pub const SECRET_WRITE: &'static str = "secret:write";
-    pub const SECRET_DELETE: &'static str = "secret:delete";
-
-    // Variable permissions
-    pub const VARIABLE_READ: &'static str = "variable:read";
-    pub const VARIABLE_WRITE: &'static str = "variable:write";
-    pub const VARIABLE_DELETE: &'static str = "variable:delete";
-
-    // Admin permissions
-    pub const ADMIN: &'static str = "*";
+/// Five-tier role hierarchy matching met-secrets RBAC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ApiRole {
+    PlatformAdmin = 100,
+    OrgAdmin = 80,
+    ProjectAdmin = 60,
+    Developer = 40,
+    Viewer = 20,
 }
 
-/// Check if a user has a required permission.
-///
-/// Returns `Ok(())` if the user has the permission, or an `ApiError::Forbidden` if not.
-pub fn require_permission(user: &CurrentUser, permission: &str) -> Result<(), ApiError> {
-    if user.has_permission(permission) {
+impl ApiRole {
+    pub fn from_permissions(perms: &std::collections::HashSet<String>) -> Self {
+        if perms.contains("*") || perms.contains("platform_admin") {
+            return Self::PlatformAdmin;
+        }
+        if perms.contains("org_admin") { return Self::OrgAdmin; }
+        if perms.contains("project_admin") { return Self::ProjectAdmin; }
+        if perms.contains("developer") { return Self::Developer; }
+        Self::Viewer
+    }
+
+    pub fn has_at_least(&self, required: ApiRole) -> bool {
+        (*self as u8) >= (required as u8)
+    }
+}
+
+/// Check if a user has the required role level.
+pub fn authorize(user: &CurrentUser, required_role: ApiRole) -> Result<(), ApiError> {
+    let user_role = ApiRole::from_permissions(&user.permissions);
+
+    if user_role.has_at_least(required_role) {
+        debug!(
+            user_id = %user.user_id,
+            user_role = ?user_role,
+            required = ?required_role,
+            "Authorization granted"
+        );
         Ok(())
     } else {
+        warn!(
+            user_id = %user.user_id,
+            user_role = ?user_role,
+            required = ?required_role,
+            "Authorization denied: insufficient permissions"
+        );
         Err(ApiError::forbidden(format!(
-            "missing required permission: {permission}"
+            "requires {:?} role, you have {:?}",
+            required_role, user_role
         )))
     }
 }
 
-/// Check if a user has any of the required permissions.
-pub fn require_any_permission(user: &CurrentUser, permissions: &[&str]) -> Result<(), ApiError> {
-    if user.has_any_permission(permissions) {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(format!(
-            "missing required permission: one of {}",
-            permissions.join(", ")
-        )))
+/// Check if a user can access a specific project.
+pub fn authorize_project(user: &CurrentUser, project_id: ProjectId) -> Result<(), ApiError> {
+    if !user.can_access_project(project_id) {
+        warn!(
+            user_id = %user.user_id,
+            project_id = %project_id,
+            "Authorization denied: no project access"
+        );
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+    Ok(())
+}
+
+/// Extractor that requires a specific permission string.
+///
+/// Usage:
+/// ```ignore
+/// async fn admin_handler(
+///     RequirePermission("org_admin"): RequirePermission<"org_admin">,
+/// ) -> impl IntoResponse { ... }
+/// ```
+pub struct RequireRole<const ROLE: u8>;
+
+// Convenience type aliases
+pub type RequirePlatformAdmin = RequireRole<100>;
+pub type RequireOrgAdmin = RequireRole<80>;
+pub type RequireProjectAdmin = RequireRole<60>;
+pub type RequireDeveloper = RequireRole<40>;
+pub type RequireViewer = RequireRole<20>;
+
+/// Extractor that validates the user has a minimum role and extracts the user.
+pub struct Authorized<const MIN_ROLE: u8>(pub CurrentUser);
+
+impl<S, const MIN_ROLE: u8> FromRequestParts<S> for Authorized<MIN_ROLE>
+where
+    S: Send + Sync,
+    AppState: FromRef<S>,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Auth(user) = Auth::from_request_parts(parts, state).await?;
+
+        let required = match MIN_ROLE {
+            100 => ApiRole::PlatformAdmin,
+            80 => ApiRole::OrgAdmin,
+            60 => ApiRole::ProjectAdmin,
+            40 => ApiRole::Developer,
+            _ => ApiRole::Viewer,
+        };
+
+        authorize(&user, required)?;
+        Ok(Authorized(user))
     }
 }
 
-/// Check if a user has all of the required permissions.
-pub fn require_all_permissions(user: &CurrentUser, permissions: &[&str]) -> Result<(), ApiError> {
-    if user.has_all_permissions(permissions) {
-        Ok(())
-    } else {
-        let missing: Vec<_> = permissions
-            .iter()
-            .filter(|p| !user.has_permission(p))
-            .collect();
-        Err(ApiError::forbidden(format!(
-            "missing required permissions: {}",
-            missing
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )))
+impl<const N: u8> std::ops::Deref for Authorized<N> {
+    type Target = CurrentUser;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -102,62 +133,67 @@ pub fn require_all_permissions(user: &CurrentUser, permissions: &[&str]) -> Resu
 mod tests {
     use super::*;
     use met_core::{OrganizationId, UserId};
+    use std::collections::HashSet;
 
-    fn test_user(permissions: &[&str]) -> CurrentUser {
+    fn make_user(perms: &[&str]) -> CurrentUser {
         CurrentUser {
             user_id: UserId::new(),
             org_id: OrganizationId::new(),
             email: "test@example.com".to_string(),
             name: None,
-            permissions: permissions.iter().map(|s| s.to_string()).collect(),
+            permissions: perms.iter().map(|s| s.to_string()).collect(),
             is_api_token: false,
+            project_ids: None,
         }
     }
 
     #[test]
-    fn test_require_permission_success() {
-        let user = test_user(&[Permission::PIPELINE_READ]);
-        assert!(require_permission(&user, Permission::PIPELINE_READ).is_ok());
+    fn test_authorize_platform_admin() {
+        let user = make_user(&["*"]);
+        assert!(authorize(&user, ApiRole::PlatformAdmin).is_ok());
+        assert!(authorize(&user, ApiRole::Viewer).is_ok());
     }
 
     #[test]
-    fn test_require_permission_failure() {
-        let user = test_user(&[Permission::PIPELINE_READ]);
-        assert!(require_permission(&user, Permission::PIPELINE_WRITE).is_err());
+    fn test_authorize_developer() {
+        let user = make_user(&["developer"]);
+        assert!(authorize(&user, ApiRole::Developer).is_ok());
+        assert!(authorize(&user, ApiRole::Viewer).is_ok());
+        assert!(authorize(&user, ApiRole::ProjectAdmin).is_err());
     }
 
     #[test]
-    fn test_admin_has_all_permissions() {
-        let admin = test_user(&[Permission::ADMIN]);
-        assert!(require_permission(&admin, Permission::PIPELINE_READ).is_ok());
-        assert!(require_permission(&admin, Permission::SECRET_DELETE).is_ok());
-        assert!(require_permission(&admin, "any:permission").is_ok());
+    fn test_authorize_viewer_insufficient() {
+        let user = make_user(&["viewer"]);
+        assert!(authorize(&user, ApiRole::Viewer).is_ok());
+        assert!(authorize(&user, ApiRole::Developer).is_err());
+        assert!(authorize(&user, ApiRole::OrgAdmin).is_err());
     }
 
     #[test]
-    fn test_require_any_permission() {
-        let user = test_user(&[Permission::PIPELINE_READ]);
-        assert!(
-            require_any_permission(&user, &[Permission::PIPELINE_READ, Permission::PIPELINE_WRITE])
-                .is_ok()
-        );
-        assert!(
-            require_any_permission(&user, &[Permission::SECRET_READ, Permission::SECRET_WRITE])
-                .is_err()
-        );
+    fn test_project_access() {
+        let project1 = ProjectId::new();
+        let project2 = ProjectId::new();
+
+        let user = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "test@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: true,
+            project_ids: Some(vec![project1]),
+        };
+
+        assert!(authorize_project(&user, project1).is_ok());
+        assert!(authorize_project(&user, project2).is_err());
     }
 
     #[test]
-    fn test_require_all_permissions() {
-        let user = test_user(&[Permission::PIPELINE_READ, Permission::PIPELINE_WRITE]);
-        assert!(
-            require_all_permissions(&user, &[Permission::PIPELINE_READ, Permission::PIPELINE_WRITE])
-                .is_ok()
-        );
-        assert!(require_all_permissions(
-            &user,
-            &[Permission::PIPELINE_READ, Permission::PIPELINE_DELETE]
-        )
-        .is_err());
+    fn test_role_from_permissions() {
+        assert_eq!(ApiRole::from_permissions(&["*"].iter().map(|s| s.to_string()).collect()), ApiRole::PlatformAdmin);
+        assert_eq!(ApiRole::from_permissions(&["org_admin"].iter().map(|s| s.to_string()).collect()), ApiRole::OrgAdmin);
+        assert_eq!(ApiRole::from_permissions(&["developer"].iter().map(|s| s.to_string()).collect()), ApiRole::Developer);
+        assert_eq!(ApiRole::from_permissions(&["read"].iter().map(|s| s.to_string()).collect()), ApiRole::Viewer);
     }
 }

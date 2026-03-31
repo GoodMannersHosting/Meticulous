@@ -56,7 +56,11 @@ pub mod context;
 pub mod error;
 pub mod events;
 pub mod executor;
+pub mod log_streaming;
+pub mod persistence;
+pub mod retry;
 pub mod scheduler;
+pub mod secrets;
 pub mod state;
 
 pub use artifacts::{ArtifactBackend, ArtifactManager, ArtifactMetadata, MemoryArtifactStore};
@@ -65,7 +69,11 @@ pub use context::{ArtifactRef, CacheHit, ExecutionContext, ResolvedSecret};
 pub use error::{EngineError, Result};
 pub use events::{subjects as event_subjects, EventBroadcaster};
 pub use executor::{topological_order, ExecutionResult, Executor, ExecutorConfig};
+pub use log_streaming::{LogChunk, LogStreamRelay};
+pub use persistence::{MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
+pub use retry::{RetryExecutor, RetryPolicy, RetryState};
 pub use scheduler::{JobCompletionNotification, JobDispatchMessage, Scheduler, SchedulerConfig, StepDispatch};
+pub use secrets::SecretEncryption;
 pub use state::{JobState, RunState, StepState};
 
 use async_nats::jetstream::Context as JetStreamContext;

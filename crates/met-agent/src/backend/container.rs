@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
-use super::{ExecutionBackend, StepSpec};
+use super::{ExecutionBackend, StepResult, StepSpec};
 use crate::error::{AgentError, Result};
+use crate::process_watcher::ProcessWatcher;
 
 /// Container runtime type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +161,12 @@ impl Default for ContainerBackend {
 
 #[async_trait]
 impl ExecutionBackend for ContainerBackend {
-    async fn execute(&self, step: &StepSpec, workspace: &Path) -> Result<i32> {
+    async fn execute_with_watcher(
+        &self,
+        step: &StepSpec,
+        workspace: &Path,
+        watcher: &mut ProcessWatcher,
+    ) -> Result<StepResult> {
         if step.image.is_empty() {
             return Err(AgentError::ContainerRuntime(
                 "container image is required for container backend".to_string(),
@@ -185,6 +191,14 @@ impl ExecutionBackend for ContainerBackend {
         let mut child = cmd.spawn().map_err(|e| {
             AgentError::ContainerRuntime(format!("failed to spawn container: {e}"))
         })?;
+
+        // Get the PID and start process watching
+        // Note: For containers, we watch the container runtime process and its children
+        let pid = child.id().unwrap_or(0);
+        if pid > 0 {
+            watcher.start_watching(pid, &step.step_id).await?;
+            debug!(pid, step = %step.name, "started process watching for container");
+        }
 
         // Get stdout and stderr
         let stdout = child.stdout.take();
@@ -217,22 +231,49 @@ impl ExecutionBackend for ContainerBackend {
             None
         };
 
-        // Wait for completion with timeout
-        let result = if step.timeout.is_zero() {
-            child.wait().await
+        // Compute deadline for timeout
+        let deadline = if step.timeout.is_zero() {
+            None
         } else {
-            match tokio::time::timeout(step.timeout, child.wait()).await {
-                Ok(r) => r,
-                Err(_) => {
-                    // Kill the container on timeout
+            Some(tokio::time::Instant::now() + step.timeout)
+        };
+
+        // Poll for child processes while waiting for completion
+        let poll_interval = Duration::from_millis(100);
+        let result: std::result::Result<std::process::ExitStatus, AgentError> = loop {
+            // Check if we've exceeded the timeout
+            if let Some(deadline) = deadline {
+                if tokio::time::Instant::now() >= deadline {
+                    // Kill the child process on timeout
                     let _ = child.kill().await;
+                    watcher.stop_watching().await;
                     return Err(AgentError::Timeout(format!(
                         "step {} timed out after {:?}",
                         step.name, step.timeout
                     )));
                 }
             }
+
+            tokio::select! {
+                status = child.wait() => {
+                    match status {
+                        Ok(s) => break Ok(s),
+                        Err(e) => break Err(AgentError::ContainerRuntime(format!(
+                            "container wait failed: {e}"
+                        ))),
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {
+                    // Poll for new child processes
+                    if let Err(e) = watcher.poll().await {
+                        trace!(error = %e, "process watcher poll error");
+                    }
+                }
+            }
         };
+
+        // Final poll to catch any remaining processes
+        let _ = watcher.poll().await;
 
         // Wait for output tasks
         if let Some(h) = stdout_handle {
@@ -242,9 +283,20 @@ impl ExecutionBackend for ContainerBackend {
             let _ = h.await;
         }
 
-        let status = result.map_err(|e| {
-            AgentError::ContainerRuntime(format!("container wait failed: {e}"))
-        })?;
+        // Handle error case
+        let status = match result {
+            Ok(s) => s,
+            Err(e) => {
+                watcher.stop_watching().await;
+                // Kill the container on error
+                let _ = child.kill().await;
+                return Err(e);
+            }
+        };
+
+        // Aggregate execution metadata
+        let metadata = watcher.aggregate_metadata(&step.step_id).await;
+        watcher.stop_watching().await;
 
         let exit_code = status.code().unwrap_or(-1);
         let duration = start.elapsed();
@@ -253,10 +305,18 @@ impl ExecutionBackend for ContainerBackend {
             step = %step.name,
             exit_code,
             duration = ?duration,
+            processes_spawned = metadata.total_processes_spawned,
+            binaries_executed = metadata.executed_binaries.len(),
             "container step completed"
         );
 
-        Ok(exit_code)
+        Ok(StepResult {
+            exit_code,
+            duration,
+            executed_binaries: metadata.executed_binaries,
+            processes_spawned: metadata.total_processes_spawned,
+            execution_tree_depth: metadata.execution_tree_depth,
+        })
     }
 
     fn name(&self) -> &'static str {

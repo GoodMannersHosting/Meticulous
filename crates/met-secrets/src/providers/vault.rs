@@ -1,47 +1,36 @@
 //! HashiCorp Vault / OpenBao secrets provider.
 //!
-//! This provider integrates with HashiCorp Vault or its open-source fork OpenBao
-//! for secret management. It supports both KV v1 and KV v2 secret engines.
-//!
-//! # Configuration
-//!
-//! Required settings:
-//! - `address`: The Vault server address (e.g., `https://vault.example.com:8200`)
-//! - `token`: Authentication token (or use other auth methods)
-//!
-//! Optional settings:
-//! - `namespace`: Vault namespace for enterprise features
-//! - `mount_path`: KV engine mount path (default: `secret`)
-//! - `kv_version`: KV engine version, `1` or `2` (default: `2`)
-//!
-//! # Authentication Methods
-//!
-//! The provider supports multiple authentication methods:
-//! - Token authentication (simplest)
-//! - Kubernetes auth (for pods)
-//! - AppRole auth (for applications)
-//! - AWS IAM auth (for EC2/Lambda)
+//! Supports KV v1 and KV v2 secret engines with AppRole and JWT authentication.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 
 use crate::error::{Result, SecretsError};
-use crate::traits::{ProviderConfig, SecretsProvider};
+use crate::traits::{ProviderConfig, SecretsProvider, SecretsWriter};
 use crate::types::{ProviderType, SecretMetadata, SecretValue};
+
+/// Authentication method for Vault.
+#[derive(Debug, Clone)]
+pub enum VaultAuth {
+    /// Direct token authentication.
+    Token(String),
+    /// AppRole authentication.
+    AppRole { role_id: String, secret_id: String },
+    /// JWT authentication (preferred for zero-credential setups).
+    Jwt { role: String, jwt: String },
+}
 
 /// Configuration for the Vault provider.
 #[derive(Debug, Clone)]
 pub struct VaultConfig {
-    /// Vault server address.
     pub address: String,
-    /// Authentication token (if using token auth).
-    pub token: Option<String>,
-    /// Vault namespace (enterprise feature).
+    pub auth: Option<VaultAuth>,
     pub namespace: Option<String>,
-    /// KV engine mount path.
     pub mount_path: String,
-    /// KV engine version (1 or 2).
     pub kv_version: u8,
-    /// Request timeout in seconds.
     pub timeout_secs: u64,
 }
 
@@ -49,7 +38,7 @@ impl Default for VaultConfig {
     fn default() -> Self {
         Self {
             address: "http://127.0.0.1:8200".into(),
-            token: None,
+            auth: None,
             namespace: None,
             mount_path: "secret".into(),
             kv_version: 2,
@@ -59,193 +48,251 @@ impl Default for VaultConfig {
 }
 
 impl VaultConfig {
-    /// Create configuration from provider config.
     pub fn from_provider_config(config: &ProviderConfig) -> Result<Self> {
         let address = config.require("address")?.to_string();
-        let token = config.get("token").map(String::from);
         let namespace = config.get("namespace").map(String::from);
         let mount_path = config.get("mount_path").unwrap_or("secret").to_string();
-        let kv_version = config
-            .get("kv_version")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2);
+        let kv_version = config.get("kv_version").and_then(|v| v.parse().ok()).unwrap_or(2);
 
-        Ok(Self {
-            address,
-            token,
-            namespace,
-            mount_path,
-            kv_version,
-            timeout_secs: 30,
-        })
+        let auth = if let Some(token) = config.get("token") {
+            Some(VaultAuth::Token(token.to_string()))
+        } else if let (Some(role_id), Some(secret_id)) = (config.get("role_id"), config.get("secret_id")) {
+            Some(VaultAuth::AppRole {
+                role_id: role_id.to_string(),
+                secret_id: secret_id.to_string(),
+            })
+        } else if let (Some(role), Some(jwt)) = (config.get("jwt_role"), config.get("jwt")) {
+            Some(VaultAuth::Jwt {
+                role: role.to_string(),
+                jwt: jwt.to_string(),
+            })
+        } else {
+            None
+        };
+
+        Ok(Self { address, auth, namespace, mount_path, kv_version, timeout_secs: 30 })
     }
 }
 
-/// HashiCorp Vault / OpenBao secrets provider.
-///
-/// # Example
-///
-/// ```ignore
-/// use met_secrets::providers::VaultProvider;
-///
-/// let provider = VaultProvider::new(VaultConfig {
-///     address: "https://vault.example.com:8200".into(),
-///     token: Some("s.mytoken".into()),
-///     ..Default::default()
-/// }).await?;
-///
-/// let secret = provider.get_secret("myapp/api-key").await?;
-/// ```
+#[derive(Debug, Deserialize)]
+struct VaultResponse<T> {
+    data: T,
+    lease_duration: Option<u64>,
+    renewable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KvV2Data {
+    data: std::collections::HashMap<String, serde_json::Value>,
+    metadata: Option<KvV2Metadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KvV2Metadata {
+    version: Option<u64>,
+    created_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VaultAuthResponse {
+    client_token: String,
+    lease_duration: u64,
+    renewable: bool,
+}
+
 #[derive(Debug)]
 pub struct VaultProvider {
     config: VaultConfig,
-    // TODO: Add HTTP client when implementing real integration
-    // client: reqwest::Client,
+    client: reqwest::Client,
+    token: Arc<RwLock<Option<String>>>,
 }
 
 impl VaultProvider {
-    /// Create a new Vault provider with the given configuration.
     pub async fn new(config: VaultConfig) -> Result<Self> {
-        // TODO: Validate connection to Vault
-        // TODO: Initialize HTTP client with TLS
-        tracing::info!(
-            address = %config.address,
-            namespace = ?config.namespace,
-            mount_path = %config.mount_path,
-            "Initializing Vault provider"
-        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(config.timeout_secs))
+            .build()
+            .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
 
-        Ok(Self { config })
+        let token = match &config.auth {
+            Some(VaultAuth::Token(t)) => Some(t.clone()),
+            _ => None,
+        };
+
+        let provider = Self {
+            config,
+            client,
+            token: Arc::new(RwLock::new(token)),
+        };
+
+        if matches!(&provider.config.auth, Some(VaultAuth::AppRole { .. }) | Some(VaultAuth::Jwt { .. })) {
+            provider.authenticate().await?;
+        }
+
+        info!(address = %provider.config.address, "Vault provider initialized");
+        Ok(provider)
     }
 
-    /// Create from generic provider config.
     pub async fn from_config(config: &ProviderConfig) -> Result<Self> {
-        let vault_config = VaultConfig::from_provider_config(config)?;
-        Self::new(vault_config).await
+        Self::new(VaultConfig::from_provider_config(config)?).await
     }
 
-    /// Build the full path for a secret in KV v2.
-    fn build_kv2_path(&self, path: &str) -> String {
-        // KV v2 uses /data/ in the path
-        format!("{}/data/{}", self.config.mount_path, path)
+    async fn authenticate(&self) -> Result<()> {
+        let token = match &self.config.auth {
+            Some(VaultAuth::AppRole { role_id, secret_id }) => {
+                let url = format!("{}/v1/auth/approle/login", self.config.address);
+                let body = serde_json::json!({ "role_id": role_id, "secret_id": secret_id });
+                let resp = self.client.post(&url).json(&body).send().await
+                    .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
+                let auth_resp: serde_json::Value = resp.json().await
+                    .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
+                auth_resp["auth"]["client_token"].as_str()
+                    .ok_or_else(|| SecretsError::auth_failed("vault", "no client_token in response"))?
+                    .to_string()
+            }
+            Some(VaultAuth::Jwt { role, jwt }) => {
+                let url = format!("{}/v1/auth/jwt/login", self.config.address);
+                let body = serde_json::json!({ "role": role, "jwt": jwt });
+                let resp = self.client.post(&url).json(&body).send().await
+                    .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
+                let auth_resp: serde_json::Value = resp.json().await
+                    .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
+                auth_resp["auth"]["client_token"].as_str()
+                    .ok_or_else(|| SecretsError::auth_failed("vault", "no client_token in response"))?
+                    .to_string()
+            }
+            _ => return Ok(()),
+        };
+        *self.token.write().await = Some(token);
+        debug!("Vault authentication successful");
+        Ok(())
     }
 
-    /// Build the full path for a secret in KV v1.
-    fn build_kv1_path(&self, path: &str) -> String {
-        format!("{}/{}", self.config.mount_path, path)
+    async fn get_token(&self) -> Result<String> {
+        self.token.read().await.clone()
+            .ok_or_else(|| SecretsError::auth_failed("vault", "no token available"))
+    }
+
+    fn build_url(&self, path: &str) -> String {
+        if self.config.kv_version == 2 {
+            format!("{}/v1/{}/data/{}", self.config.address, self.config.mount_path, path)
+        } else {
+            format!("{}/v1/{}/{}", self.config.address, self.config.mount_path, path)
+        }
+    }
+
+    async fn request(&self, url: &str) -> Result<reqwest::Response> {
+        let token = self.get_token().await?;
+        let mut req = self.client.get(url).header("X-Vault-Token", &token);
+        if let Some(ns) = &self.config.namespace {
+            req = req.header("X-Vault-Namespace", ns);
+        }
+        let resp = req.send().await
+            .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(SecretsError::not_found(url));
+        }
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(SecretsError::access_denied(url, None::<String>));
+        }
+        if !resp.status().is_success() {
+            return Err(SecretsError::ProviderError {
+                provider: "vault".into(),
+                message: format!("HTTP {}", resp.status()),
+            });
+        }
+        Ok(resp)
+    }
+
+    /// Generate a Vault policy HCL document for a given set of secret paths.
+    pub fn generate_policy(paths: &[&str], mount_path: &str) -> String {
+        let mut policy = String::new();
+        for path in paths {
+            policy.push_str(&format!(
+                "path \"{mount_path}/data/{path}\" {{\n  capabilities = [\"read\"]\n}}\n\n"
+            ));
+            policy.push_str(&format!(
+                "path \"{mount_path}/metadata/{path}\" {{\n  capabilities = [\"read\", \"list\"]\n}}\n\n"
+            ));
+        }
+        policy
     }
 }
 
 #[async_trait]
 impl SecretsProvider for VaultProvider {
     async fn get_secret(&self, path: &str) -> Result<SecretValue> {
-        let full_path = if self.config.kv_version == 2 {
-            self.build_kv2_path(path)
+        let url = self.build_url(path);
+        debug!(path, url = %url, "Fetching secret from Vault");
+
+        let resp = self.request(&url).await?;
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| SecretsError::ProviderError {
+                provider: "vault".into(),
+                message: format!("failed to parse response: {e}"),
+            })?;
+
+        if self.config.kv_version == 2 {
+            let data = body["data"]["data"].as_object().ok_or_else(|| {
+                SecretsError::InvalidFormat { message: "unexpected KV v2 response format".into() }
+            })?;
+            let value_str = serde_json::to_string(data).unwrap_or_default();
+            let version = body["data"]["metadata"]["version"].as_u64().map(|v| v.to_string());
+            Ok(SecretValue::with_metadata(value_str, SecretMetadata { version, ..Default::default() }))
         } else {
-            self.build_kv1_path(path)
-        };
-
-        tracing::debug!(
-            path = %path,
-            full_path = %full_path,
-            "Fetching secret from Vault"
-        );
-
-        // TODO: Implement actual Vault API call
-        // For now, return a stub error to indicate not implemented
-        //
-        // Real implementation would:
-        // 1. Build request URL: {address}/v1/{full_path}
-        // 2. Add X-Vault-Token header
-        // 3. Add X-Vault-Namespace header if configured
-        // 4. Make GET request
-        // 5. Parse response and extract secret data
-        // 6. For KV v2, data is nested under .data.data
-        // 7. Handle lease information for dynamic secrets
-
-        Err(SecretsError::provider_unavailable(
-            "vault",
-            "Vault provider not yet implemented - API integration pending",
-        ))
+            let data = body["data"].as_object().ok_or_else(|| {
+                SecretsError::InvalidFormat { message: "unexpected KV v1 response format".into() }
+            })?;
+            let value_str = serde_json::to_string(data).unwrap_or_default();
+            Ok(SecretValue::new(value_str))
+        }
     }
 
     async fn get_secret_version(&self, path: &str, version: &str) -> Result<SecretValue> {
         if self.config.kv_version != 2 {
-            tracing::warn!(
-                path = %path,
-                version = %version,
-                "Version requested but KV v1 doesn't support versions"
-            );
             return self.get_secret(path).await;
         }
-
-        // TODO: Implement versioned secret retrieval
-        // Add ?version={version} query parameter to the request
-        tracing::debug!(
-            path = %path,
-            version = %version,
-            "Fetching secret version from Vault"
-        );
-
-        Err(SecretsError::provider_unavailable(
-            "vault",
-            "Vault provider not yet implemented - API integration pending",
+        let url = format!("{}?version={}", self.build_url(path), version);
+        let resp = self.request(&url).await?;
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| SecretsError::ProviderError { provider: "vault".into(), message: e.to_string() })?;
+        let data = body["data"]["data"].as_object().ok_or_else(|| {
+            SecretsError::InvalidFormat { message: "unexpected response".into() }
+        })?;
+        Ok(SecretValue::with_metadata(
+            serde_json::to_string(data).unwrap_or_default(),
+            SecretMetadata { version: Some(version.to_string()), ..Default::default() },
         ))
     }
 
     async fn list_secrets(&self, prefix: &str) -> Result<Vec<String>> {
-        let list_path = if self.config.kv_version == 2 {
-            format!("{}/metadata/{}", self.config.mount_path, prefix)
+        let url = if self.config.kv_version == 2 {
+            format!("{}/v1/{}/metadata/{}?list=true", self.config.address, self.config.mount_path, prefix)
         } else {
-            format!("{}/{}", self.config.mount_path, prefix)
+            format!("{}/v1/{}/{}?list=true", self.config.address, self.config.mount_path, prefix)
         };
-
-        tracing::debug!(
-            prefix = %prefix,
-            list_path = %list_path,
-            "Listing secrets from Vault"
-        );
-
-        // TODO: Implement actual Vault LIST operation
-        // Real implementation would:
-        // 1. Build request URL: {address}/v1/{list_path}
-        // 2. Make LIST request (HTTP method = LIST or GET with ?list=true)
-        // 3. Parse response and extract keys
-
-        Err(SecretsError::provider_unavailable(
-            "vault",
-            "Vault provider not yet implemented - API integration pending",
-        ))
+        let token = self.get_token().await?;
+        let resp = self.client.get(&url).header("X-Vault-Token", &token).send().await
+            .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| SecretsError::ProviderError { provider: "vault".into(), message: e.to_string() })?;
+        let keys = body["data"]["keys"].as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        Ok(keys)
     }
 
-    fn provider_type(&self) -> ProviderType {
-        ProviderType::Vault
-    }
+    fn provider_type(&self) -> ProviderType { ProviderType::Vault }
 
     async fn health_check(&self) -> Result<()> {
-        // TODO: Implement health check
-        // Call GET /v1/sys/health
-        tracing::debug!(address = %self.config.address, "Vault health check");
-
-        Err(SecretsError::provider_unavailable(
-            "vault",
-            "Vault provider not yet implemented",
-        ))
-    }
-
-    async fn get_secret_metadata(&self, path: &str) -> Result<SecretMetadata> {
-        if self.config.kv_version != 2 {
-            return Ok(SecretMetadata::default());
+        let url = format!("{}/v1/sys/health", self.config.address);
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
+        if resp.status().is_success() || resp.status().as_u16() == 429 {
+            Ok(())
+        } else {
+            Err(SecretsError::provider_unavailable("vault", format!("health check returned {}", resp.status())))
         }
-
-        // TODO: Implement metadata retrieval
-        // GET /v1/{mount}/metadata/{path}
-        tracing::debug!(path = %path, "Fetching secret metadata from Vault");
-
-        Err(SecretsError::provider_unavailable(
-            "vault",
-            "Vault provider not yet implemented",
-        ))
     }
 }
 
@@ -262,27 +309,10 @@ mod tests {
     }
 
     #[test]
-    fn test_kv2_path_building() {
-        let provider = VaultProvider {
-            config: VaultConfig::default(),
-        };
-        assert_eq!(
-            provider.build_kv2_path("myapp/config"),
-            "secret/data/myapp/config"
-        );
-    }
-
-    #[test]
-    fn test_kv1_path_building() {
-        let provider = VaultProvider {
-            config: VaultConfig {
-                kv_version: 1,
-                ..Default::default()
-            },
-        };
-        assert_eq!(
-            provider.build_kv1_path("myapp/config"),
-            "secret/myapp/config"
-        );
+    fn test_generate_policy() {
+        let policy = VaultProvider::generate_policy(&["myapp/config", "myapp/db"], "secret");
+        assert!(policy.contains("secret/data/myapp/config"));
+        assert!(policy.contains("secret/metadata/myapp/db"));
+        assert!(policy.contains("capabilities"));
     }
 }

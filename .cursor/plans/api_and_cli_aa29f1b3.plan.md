@@ -1,7 +1,145 @@
 ---
 name: API and CLI
 overview: "Phase 4 detailed plan for the Meticulous API server (met-api, Axum) and developer CLI (met-cli, clap): REST endpoints, WebSocket log streaming, OIDC/JWT + API token auth, RBAC, webhook ingestion, CLI command tree, debug mode, and OpenAPI generation."
-todos: []
+todos:
+  - id: api-skeleton
+    content: "Scaffold met-api crate: Axum entrypoint, AppState with placeholder deps, graceful shutdown, health check endpoint, integration test harness with sqlx::test"
+    status: completed
+  - id: api-error-pagination
+    content: Implement ApiError type with consistent JSON error responses, and cursor-based pagination extractor (keyset on created_at + id)
+    status: completed
+  - id: api-middleware
+    content: "Build tower middleware stack: request ID (UUID v7), structured request logging, CORS, compression (gzip/zstd)"
+    status: completed
+  - id: api-jwt-auth
+    content: "Implement JWT authentication middleware: decode, verify signature, extract claims, populate CurrentUser in request extensions"
+    status: completed
+  - id: api-token-auth
+    content: "Implement API token authentication: lookup by met_ prefix, Argon2id verification, scope resolution"
+    status: completed
+  - id: api-rbac
+    content: Build Auth extractor with RBAC permission checking (platform_admin, org_admin, project_admin, developer, viewer) and per-resource authorization
+    status: completed
+  - id: api-oidc
+    content: "Implement OIDC login flow: /auth/login redirect, /auth/callback code exchange, JWT+refresh token issuance, token refresh endpoint"
+    status: completed
+  - id: api-oidc-providers
+    content: Implement OIDC provider configuration CRUD (GitHub, GitLab, Google, generic OIDC per-org)
+    status: completed
+  - id: api-schema-auth
+    content: Write DB migration for api_tokens, oidc_providers, and user_sessions tables with indexes
+    status: completed
+  - id: api-org-crud
+    content: "Implement Organization endpoints: list, create, get, update, delete"
+    status: completed
+  - id: api-project-crud
+    content: "Implement Project endpoints: list (by org), create, get, update, delete with ownership and ACL"
+    status: completed
+  - id: api-pipeline-crud
+    content: "Implement Pipeline endpoints: list, create, get, update, delete, validate (via met-parser)"
+    status: completed
+  - id: api-run-endpoints
+    content: "Implement Run endpoints: trigger (manual), list, get status, cancel, retry, get DAG -- integrated with met-engine"
+    status: completed
+  - id: api-job-step-endpoints
+    content: "Implement Job and Step endpoints: list jobs by run, get job details, list steps, get step details, get job/step logs"
+    status: completed
+  - id: api-secret-variable-crud
+    content: Implement Secret reference CRUD (metadata only, never values) and Variable CRUD at project and org scope
+    status: completed
+  - id: api-workflow-endpoints
+    content: "Implement Reusable Workflow endpoints: list global/project, create, get definition, list versions"
+    status: completed
+  - id: api-ws-logs
+    content: "Implement WebSocket log streaming: upgrade handler with token auth, NATS subscription for logs.job.<id>, log frame relay with backpressure (10k buffer, gap frames)"
+    status: completed
+  - id: api-ws-reconnect-sse
+    content: Implement WebSocket reconnection support (last_seq parameter, JetStream replay) and SSE fallback endpoint
+    status: completed
+  - id: api-webhook-github
+    content: "Implement GitHub webhook receiver: X-Hub-Signature-256 validation, parse push/PR/release/dispatch events into normalized ScmEvent"
+    status: completed
+  - id: api-webhook-gitlab-bb
+    content: Implement GitLab and Bitbucket webhook receivers with signature validation and event normalization
+    status: completed
+  - id: api-webhook-trigger
+    content: "Implement trigger matching logic: match ScmEvent against pipeline trigger rules, enqueue runs via met-engine, return 202"
+    status: completed
+  - id: api-schema-webhooks
+    content: Write DB migration for webhook_registrations table
+    status: completed
+  - id: api-github-app-setup
+    content: Implement one-click GitHub App webhook setup endpoint (POST /projects/:project_id/scm/setup)
+    status: completed
+  - id: api-agent-endpoints
+    content: "Implement Agent management endpoints: list/detail (from met-controller data), revocation (NATS revoke command), join token CRUD"
+    status: completed
+  - id: api-token-endpoints
+    content: "Implement API token CRUD: personal tokens (GET/POST /users/me/tokens, DELETE), org-level service tokens (admin)"
+    status: completed
+  - id: api-user-group-endpoints
+    content: "Implement User and Group endpoints: list users, invite, get/update profile, group CRUD and membership"
+    status: completed
+  - id: api-artifact-endpoints
+    content: "Implement Artifact endpoints: list by run, download (proxied from object store), SBOM and attestation retrieval"
+    status: completed
+  - id: api-debug-sessions
+    content: "Implement debug session API: POST /debug/sessions, short-lived secrets proxy endpoint, audit logging for secret access"
+    status: completed
+  - id: api-schema-debug
+    content: Write DB migration for debug_sessions and rate_limit_counters tables
+    status: completed
+  - id: api-rate-limiting
+    content: "Implement token-bucket rate limiting middleware: per API-token/IP, per-route overrides, 429 with Retry-After header"
+    status: completed
+  - id: api-openapi
+    content: Add utoipa annotations to all handlers, serve OpenAPI 3.1 spec at /api/v1/openapi.json, Swagger UI at /api/docs
+    status: completed
+  - id: api-openapi-ci
+    content: Add CI check that generated OpenAPI spec matches handler code (spec drift detection)
+    status: completed
+  - id: cli-scaffold
+    content: "Scaffold met-cli crate: clap command tree with all subcommands, main entrypoint, shell completion generation"
+    status: completed
+  - id: cli-config
+    content: Implement config file loading (~/.config/meticulous/config.toml), context resolution (flags > env > project-local > global), met config show/set/init
+    status: completed
+  - id: cli-http-client
+    content: "Build HTTP client wrapper: base URL, auth header injection, automatic token refresh, retry logic, --verbose request debugging"
+    status: completed
+  - id: cli-auth-login
+    content: "Implement met auth login: browser-based OIDC flow (temp localhost server, browser open, callback), OS keyring storage via keyring crate"
+    status: completed
+  - id: cli-auth-misc
+    content: Implement met auth logout, met auth status, met auth token create/list/revoke, non-interactive login (--token flag)
+    status: completed
+  - id: cli-output
+    content: "Implement output formatting layer: human-readable tables (comfy-table), JSON output (--output json), terminal color utilities, indicatif spinners/progress bars"
+    status: completed
+  - id: cli-org-project
+    content: Implement met org list/switch/info and met project list/create/info/switch commands
+    status: completed
+  - id: cli-pipeline-cmds
+    content: Implement met pipeline list/show/validate/trigger/diff commands (validate is offline-capable via met-parser)
+    status: completed
+  - id: cli-run-cmds
+    content: Implement met run list/status/cancel/retry/artifacts commands
+    status: completed
+  - id: cli-log-streaming
+    content: Implement met run logs with WebSocket streaming (--follow, --job, --step, --tail), multi-job color-coded output, timestamp formatting
+    status: completed
+  - id: cli-secret-variable
+    content: Implement met secret list/set/delete and met variable list/set/delete commands
+    status: completed
+  - id: cli-agent-workflow
+    content: Implement met agent list/info/revoke, met agent join-token create/list/revoke, and met workflow list/show/versions commands
+    status: completed
+  - id: cli-debug-run
+    content: "Implement met debug run: local pipeline execution engine (met-parser + container runtime via bollard), variable injection, debug session creation for secret proxy"
+    status: completed
+  - id: cli-debug-shell-replay
+    content: Implement met debug shell (interactive container with env injection) and met debug replay (fetch failed run inputs, replay locally with overrides)
+    status: completed
 isProject: false
 ---
 

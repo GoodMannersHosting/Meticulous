@@ -305,6 +305,12 @@ impl Scheduler {
             timeout_secs: msg.timeout_secs as i32,
             required_tags: msg.required_tags.clone(),
             priority: msg.priority,
+            cache_restore: None,
+            input_artifacts: Vec::new(),
+            services: Vec::new(),
+            retry_policy: None,
+            trace_id: String::new(),
+            attempt: 1,
         })
     }
 

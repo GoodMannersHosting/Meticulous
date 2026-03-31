@@ -15,21 +15,38 @@ jobs:
     strategy:
       matrix:
         include:
+          # Linux musl targets (fully static binaries, preferred for production)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: met-linux-amd64-static
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: met-linux-arm64-static
+            use_cross: true
+          # Linux GNU targets (for compatibility with glibc systems)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: met-linux-amd64
+            use_cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: met-linux-arm64
+            use_cross: true
+          # macOS targets
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: met-darwin-amd64
+            use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: met-darwin-arm64
+            use_cross: false
+          # Windows target
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: met-windows-amd64
+            use_cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -44,16 +61,28 @@ jobs:
         with:
           version: "25.x"
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (GNU)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - name: Install cross (for musl builds)
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release
+      - name: Build release (with cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }} --bin met --bin met-api --bin met-agent
+        env:
+          SQLX_OFFLINE: true
+          CROSS_CONTAINER_ENGINE: podman
+
+      - name: Build release (native)
+        if: matrix.use_cross != true
         run: cargo build --release --target ${{ matrix.target }} --bin met --bin met-api --bin met-agent
         env:
           SQLX_OFFLINE: true

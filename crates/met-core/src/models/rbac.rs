@@ -76,6 +76,9 @@ pub struct ApiToken {
     pub user_id: UserId,
     /// Token name for display.
     pub name: String,
+    /// Optional description of the token's purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Hash of the token secret.
     #[serde(skip_serializing)]
     pub token_hash: String,
@@ -126,6 +129,9 @@ impl ApiToken {
 pub struct CreateApiToken {
     /// Token name.
     pub name: String,
+    /// Optional description of the token's purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Scopes/permissions.
     #[serde(default)]
     pub scopes: Vec<String>,

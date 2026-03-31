@@ -37,23 +37,33 @@
 
 pub mod dag;
 pub mod error;
+pub mod hash_files;
 pub mod ir;
 pub mod parser;
+pub mod providers;
 pub mod schema;
+pub mod semver;
+pub mod span;
 pub mod variable;
 pub mod workflow;
 
 pub use dag::{build_dag, DagNode, ValidatedDag};
 pub use error::{ErrorCode, ParseDiagnostics, ParseError, Result, Severity, SourceLocation};
+pub use hash_files::{hash_files, hash_files_with_glob, HashFilesOptions};
 pub use ir::{
     CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, PipelineIR, PoolSelector,
     RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
     TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
 };
 pub use parser::{ParserConfig, PipelineParser};
+#[cfg(feature = "database")]
+pub use providers::DatabaseWorkflowProvider;
+pub use providers::GitWorkflowProvider;
 pub use schema::{
     RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef, RawService,
     RawStep, RawTriggers, RawWorkflowDef, RawWorkflowInvocation,
 };
+pub use semver::{parse_version_constraint, resolve_version, VersionConstraint};
+pub use span::{SpanTracker, SpannedYamlParser};
 pub use variable::{extract_vars, has_refs, interpolate, validate_refs, VariableContext};
 pub use workflow::{MockWorkflowProvider, WorkflowFetchError, WorkflowProvider, WorkflowResolver};

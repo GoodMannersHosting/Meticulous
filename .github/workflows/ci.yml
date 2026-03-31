@@ -146,6 +146,41 @@ jobs:
       - name: Check sqlx offline cache
         run: cargo sqlx prepare --workspace --check
 
+  openapi-check:
+    name: OpenAPI Spec Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Generate OpenAPI spec
+        run: cargo run --bin met-api -- --dump-openapi > /tmp/openapi-generated.json
+        env:
+          SQLX_OFFLINE: true
+
+      - name: Check spec matches committed file
+        run: |
+          if [ ! -f openapi.json ]; then
+            echo "openapi.json not found in repo root. Run 'just openapi-generate' to create it."
+            exit 1
+          fi
+          diff -u openapi.json /tmp/openapi-generated.json || {
+            echo ""
+            echo "OpenAPI spec is out of date!"
+            echo "Run 'just openapi-generate' and commit the updated openapi.json"
+            exit 1
+          }
+
   proto:
     name: Proto Lint
     runs-on: ubuntu-latest

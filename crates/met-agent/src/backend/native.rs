@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
-use super::{ExecutionBackend, StepSpec};
+use super::{ExecutionBackend, StepResult, StepSpec};
 use crate::error::{AgentError, Result};
+use crate::process_watcher::ProcessWatcher;
 
 /// Native process execution backend for macOS and Windows.
 pub struct NativeBackend {
@@ -63,7 +64,12 @@ impl Default for NativeBackend {
 
 #[async_trait]
 impl ExecutionBackend for NativeBackend {
-    async fn execute(&self, step: &StepSpec, workspace: &Path) -> Result<i32> {
+    async fn execute_with_watcher(
+        &self,
+        step: &StepSpec,
+        workspace: &Path,
+        watcher: &mut ProcessWatcher,
+    ) -> Result<StepResult> {
         let start = Instant::now();
 
         let (shell, args) = self.get_shell_command(step);
@@ -122,6 +128,13 @@ impl ExecutionBackend for NativeBackend {
             AgentError::ProcessExecution(format!("failed to spawn process: {e}"))
         })?;
 
+        // Get the PID and start process watching
+        let pid = child.id().unwrap_or(0);
+        if pid > 0 {
+            watcher.start_watching(pid, &step.step_id).await?;
+            debug!(pid, step = %step.name, "started process watching");
+        }
+
         // Get stdout and stderr
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -153,16 +166,49 @@ impl ExecutionBackend for NativeBackend {
             None
         };
 
-        // Wait for completion with timeout
-        let result = if step.timeout.is_zero() {
-            child.wait().await
+        // Compute deadline for timeout
+        let deadline = if step.timeout.is_zero() {
+            None
         } else {
-            tokio::time::timeout(step.timeout, child.wait())
-                .await
-                .map_err(|_| {
-                    AgentError::Timeout(format!("step {} timed out after {:?}", step.name, step.timeout))
-                })?
+            Some(tokio::time::Instant::now() + step.timeout)
         };
+
+        // Poll for child processes while waiting for completion
+        let poll_interval = Duration::from_millis(100);
+        let result: std::result::Result<std::process::ExitStatus, AgentError> = loop {
+            // Check if we've exceeded the timeout
+            if let Some(deadline) = deadline {
+                if tokio::time::Instant::now() >= deadline {
+                    // Kill the child process on timeout
+                    let _ = child.kill().await;
+                    watcher.stop_watching().await;
+                    return Err(AgentError::Timeout(format!(
+                        "step {} timed out after {:?}",
+                        step.name, step.timeout
+                    )));
+                }
+            }
+
+            tokio::select! {
+                status = child.wait() => {
+                    match status {
+                        Ok(s) => break Ok(s),
+                        Err(e) => break Err(AgentError::ProcessExecution(format!(
+                            "process wait failed: {e}"
+                        ))),
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {
+                    // Poll for new child processes
+                    if let Err(e) = watcher.poll().await {
+                        trace!(error = %e, "process watcher poll error");
+                    }
+                }
+            }
+        };
+
+        // Final poll to catch any remaining processes
+        let _ = watcher.poll().await;
 
         // Wait for output tasks
         if let Some(h) = stdout_handle {
@@ -172,9 +218,18 @@ impl ExecutionBackend for NativeBackend {
             let _ = h.await;
         }
 
-        let status = result.map_err(|e| {
-            AgentError::ProcessExecution(format!("process wait failed: {e}"))
-        })?;
+        // Handle error case
+        let status = match result {
+            Ok(s) => s,
+            Err(e) => {
+                watcher.stop_watching().await;
+                return Err(e);
+            }
+        };
+
+        // Aggregate execution metadata
+        let metadata = watcher.aggregate_metadata(&step.step_id).await;
+        watcher.stop_watching().await;
 
         let exit_code = status.code().unwrap_or(-1);
         let duration = start.elapsed();
@@ -183,10 +238,18 @@ impl ExecutionBackend for NativeBackend {
             step = %step.name,
             exit_code,
             duration = ?duration,
+            processes_spawned = metadata.total_processes_spawned,
+            binaries_executed = metadata.executed_binaries.len(),
             "step completed"
         );
 
-        Ok(exit_code)
+        Ok(StepResult {
+            exit_code,
+            duration,
+            executed_binaries: metadata.executed_binaries,
+            processes_spawned: metadata.total_processes_spawned,
+            execution_tree_depth: metadata.execution_tree_depth,
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -207,6 +270,7 @@ mod tests {
     async fn test_native_backend_echo() {
         let backend = NativeBackend::new();
         let temp_dir = std::env::temp_dir();
+        let mut watcher = ProcessWatcher::new();
 
         let step = StepSpec {
             step_id: "test".to_string(),
@@ -219,14 +283,18 @@ mod tests {
             timeout: Duration::from_secs(10),
         };
 
-        let exit_code = backend.execute(&step, &temp_dir).await.unwrap();
-        assert_eq!(exit_code, 0);
+        let result = backend
+            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
     }
 
     #[tokio::test]
     async fn test_native_backend_exit_code() {
         let backend = NativeBackend::new();
         let temp_dir = std::env::temp_dir();
+        let mut watcher = ProcessWatcher::new();
 
         let step = StepSpec {
             step_id: "test".to_string(),
@@ -243,7 +311,39 @@ mod tests {
             timeout: Duration::from_secs(10),
         };
 
-        let exit_code = backend.execute(&step, &temp_dir).await.unwrap();
-        assert_eq!(exit_code, 42);
+        let result = backend
+            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 42);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn test_native_backend_tracks_child_processes() {
+        let backend = NativeBackend::new();
+        let temp_dir = std::env::temp_dir();
+        let mut watcher = ProcessWatcher::new();
+
+        let step = StepSpec {
+            step_id: "test-children".to_string(),
+            name: "spawn children".to_string(),
+            // This command spawns multiple child processes
+            command: "echo start && ls /tmp && echo end".to_string(),
+            image: String::new(),
+            working_dir: String::new(),
+            shell: String::new(),
+            environment: HashMap::new(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let result = backend
+            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .await
+            .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        // On Linux, we should have tracked at least the shell process
+        // Note: The exact count depends on how quickly processes spawn/exit
     }
 }

@@ -2,8 +2,11 @@
 
 use std::process::Command;
 
+use met_secrets::pki::{EncryptedEnvelope, HybridDecryption};
+use rand::rngs::OsRng;
 use rcgen::{CertificateParams, KeyPair};
 use tracing::{debug, warn};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroizing;
 
 /// Collected security bundle for registration.
@@ -257,36 +260,61 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
 }
 
 /// Per-job PKI for secret encryption.
+///
+/// Holds both an rcgen keypair (for X.509 CSRs) and an X25519 static secret
+/// (for hybrid decryption of secrets encrypted by the controller).
 pub struct JobPki {
-    /// One-time keypair for this job.
+    /// One-time keypair for this job (X.509/CSR use).
     key_pair: KeyPair,
     /// Private key (zeroized on drop).
     private_key_der: Zeroizing<Vec<u8>>,
+    /// X25519 static secret for hybrid decryption.
+    x25519_secret: X25519StaticSecret,
 }
 
 impl JobPki {
-    /// Generate a new per-job PKI keypair.
+    /// Generate a new per-job PKI keypair and X25519 secret.
     pub fn generate() -> Result<Self, rcgen::Error> {
         let key_pair = KeyPair::generate()?;
         let private_key_der = Zeroizing::new(key_pair.serialize_der().to_vec());
+        let x25519_secret = X25519StaticSecret::random_from_rng(OsRng);
 
         Ok(Self {
             key_pair,
             private_key_der,
+            x25519_secret,
         })
     }
 
-    /// Get the public key in DER format.
+    /// Get the public key in DER format (for X.509 CSR).
     pub fn public_key_der(&self) -> Vec<u8> {
         self.key_pair.public_key_der().to_vec()
     }
 
-    /// Decrypt a secret value.
-    pub fn decrypt(&self, _encrypted: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
-        // TODO: Implement actual decryption using hybrid encryption
-        // 1. Decrypt the symmetric key with our private key
-        // 2. Decrypt the actual secret with the symmetric key
-        // For now, just return a placeholder
-        Err("decryption not yet implemented".to_string())
+    /// Get the X25519 public key (32 bytes) for hybrid encryption.
+    ///
+    /// The controller encrypts secrets with this public key using
+    /// X25519 ECDH + HKDF-SHA256 + AES-256-GCM.
+    pub fn x25519_public_key(&self) -> [u8; 32] {
+        X25519PublicKey::from(&self.x25519_secret).to_bytes()
+    }
+
+    /// Decrypt a secret value using X25519 + AES-256-GCM hybrid decryption.
+    ///
+    /// Expects `encrypted` to be a serialized `EncryptedEnvelope` (ephemeral public
+    /// key || nonce || HMAC || ciphertext length || ciphertext). The `hmac_key` is
+    /// the shared HMAC key used for plaintext integrity verification.
+    pub fn decrypt(
+        &self,
+        encrypted: &[u8],
+        hmac_key: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, String> {
+        let envelope = EncryptedEnvelope::from_bytes(encrypted)
+            .map_err(|e| format!("failed to parse encrypted envelope: {e}"))?;
+
+        let private_key_bytes = self.x25519_secret.to_bytes();
+
+        HybridDecryption::decrypt(&private_key_bytes, &envelope, hmac_key)
+            .map_err(|e| format!("hybrid decryption failed: {e}"))
     }
 }

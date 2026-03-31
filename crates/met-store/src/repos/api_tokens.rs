@@ -34,14 +34,15 @@ impl<'a> ApiTokenRepo<'a> {
 
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            INSERT INTO api_tokens (id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            INSERT INTO api_tokens (id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(user_id.as_uuid())
         .bind(&input.name)
+        .bind(&input.description)
         .bind(token_hash)
         .bind(prefix)
         .bind(&input.scopes)
@@ -58,7 +59,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get(&self, id: ApiTokenId) -> Result<ApiToken> {
         sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE id = $1
             "#,
@@ -73,7 +74,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get_by_hash(&self, token_hash: &str) -> Result<Option<ApiToken>> {
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE token_hash = $1 AND revoked_at IS NULL
             "#,
@@ -89,7 +90,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiToken>> {
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE prefix = $1 AND revoked_at IS NULL
             "#,
@@ -105,7 +106,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn list_by_user(&self, user_id: UserId, limit: i64, offset: i64) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE user_id = $1 AND revoked_at IS NULL
             ORDER BY created_at DESC
@@ -125,7 +126,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn list_all(&self, limit: i64, offset: i64) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE revoked_at IS NULL
             ORDER BY created_at DESC
@@ -222,7 +223,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn list_by_project(&self, project_id: ProjectId, limit: i64) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
             FROM api_tokens
             WHERE revoked_at IS NULL
               AND (project_ids IS NULL OR $1 = ANY(project_ids))

@@ -202,6 +202,69 @@ impl<'a> JoinTokenRepo<'a> {
         Ok(token)
     }
 
+    /// Validate a join token hash, check expiry/revocation/max_uses, and atomically
+    /// increment the use count. Returns the token if valid, or an error if the token
+    /// is expired, revoked, exhausted, or not found.
+    pub async fn validate_and_consume(&self, token_hash: &str) -> Result<JoinToken> {
+        let token = sqlx::query_as::<_, JoinToken>(
+            r#"
+            UPDATE join_tokens
+            SET current_uses = current_uses + 1,
+                updated_at = NOW()
+            WHERE token_hash = $1
+                AND NOT revoked
+                AND (expires_at IS NULL OR expires_at > NOW())
+                AND (max_uses IS NULL OR current_uses < max_uses)
+            RETURNING id, token_hash, scope, scope_id, max_uses, current_uses, labels, pool_tags, expires_at, revoked, created_by, created_at, updated_at
+            "#,
+        )
+        .bind(token_hash)
+        .fetch_optional(self.pool)
+        .await?;
+
+        match token {
+            Some(t) => Ok(t),
+            None => {
+                // Distinguish between "not found" and "invalid" by checking existence
+                let exists = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM join_tokens WHERE token_hash = $1)",
+                )
+                .bind(token_hash)
+                .fetch_one(self.pool)
+                .await?;
+
+                if exists {
+                    Err(StoreError::Constraint(
+                        "join token is expired, revoked, or has reached max uses".into(),
+                    ))
+                } else {
+                    Err(StoreError::not_found("join_token", token_hash))
+                }
+            }
+        }
+    }
+
+    /// List all active (non-revoked, non-expired) join tokens with optional pagination.
+    pub async fn list_active(&self, limit: i64, offset: i64) -> Result<Vec<JoinToken>> {
+        let tokens = sqlx::query_as::<_, JoinToken>(
+            r#"
+            SELECT id, token_hash, scope, scope_id, max_uses, current_uses, labels, pool_tags, expires_at, revoked, created_by, created_at, updated_at
+            FROM join_tokens
+            WHERE NOT revoked
+                AND (expires_at IS NULL OR expires_at > NOW())
+                AND (max_uses IS NULL OR current_uses < max_uses)
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(tokens)
+    }
+
     /// List tokens for an organization (by tenant scope).
     pub async fn list_by_org(
         &self,

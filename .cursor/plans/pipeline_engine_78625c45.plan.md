@@ -1,7 +1,94 @@
 ---
 name: Pipeline Engine
 overview: "Detailed plan for the Meticulous pipeline engine: YAML parser with source-span errors, pipeline IR, reusable workflow resolution with semver versioning, DAG execution with concurrent branch scheduling, NATS-based job dispatch, multi-layer caching, artifact passing, conditional execution (CEL), retry/timeout, and an event broadcast system."
-todos: []
+todos:
+  - id: parser-source-spans
+    content: Add source span tracking to YAML parser using serde_yaml's Location API for line-numbered error messages
+    status: completed
+  - id: parser-workflow-fetch-db
+    content: Implement DatabaseWorkflowProvider to fetch global workflows from PostgreSQL (requires met-store integration)
+    status: completed
+  - id: parser-workflow-fetch-git
+    content: Implement GitWorkflowProvider to fetch project workflows from .stable/workflows/ in git repos
+    status: completed
+  - id: parser-semver-resolution
+    content: Implement semver version resolution for workflow references (parse version constraints, find best match)
+    status: completed
+  - id: parser-hash-files
+    content: Implement hashFiles() helper function for cache key templates (SHA-256 of glob-matched file contents)
+    status: completed
+  - id: parser-tests
+    content: "Add comprehensive parser tests: edge cases, error messages, workflow resolution, variable interpolation"
+    status: completed
+  - id: engine-db-persistence
+    content: "Persist pipeline runs to database: create runs/job_runs/step_runs records, update status transitions"
+    status: completed
+  - id: engine-retry-logic
+    content: "Implement retry policy execution: exponential backoff, max attempts, re-queue failed jobs"
+    status: completed
+  - id: engine-artifact-upload
+    content: Implement artifact upload to object storage after job completion (tarball + metadata)
+    status: completed
+  - id: engine-artifact-download
+    content: Include presigned artifact download URLs in JobPayload for dependent jobs
+    status: completed
+  - id: engine-cache-objstore
+    content: "Complete ObjectStoreCache implementation: S3 upload/download, zstd compression, metadata tracking"
+    status: completed
+  - id: engine-cache-eviction
+    content: "Implement cache eviction: LRU by last_hit_at, per-project storage quotas, garbage collection"
+    status: completed
+  - id: engine-secret-encryption
+    content: Integrate with met-secrets for per-job secret encryption (PKI handshake with agent pubkey)
+    status: completed
+  - id: engine-completion-listener
+    content: Wire up CompletionListener to receive agent job completions and update run state
+    status: completed
+  - id: engine-log-streaming
+    content: "Implement log streaming relay: receive from gRPC, store in object storage, emit WebSocket events"
+    status: completed
+  - id: db-pipeline-tables
+    content: Write migration for pipeline execution tables (pipeline_runs, job_runs, step_runs, cache_entries, artifacts)
+    status: completed
+  - id: db-run-queries
+    content: "Implement met-store queries: create_run, update_run_status, list_runs_by_pipeline, get_run_with_jobs"
+    status: completed
+  - id: proto-job-payload
+    content: Define JobPayload protobuf (steps, secrets, cache, artifacts, pool selector) in proto/job.proto
+    status: completed
+  - id: proto-completion
+    content: Define JobCompletion protobuf (status, outputs, execution metadata) for agent->controller reporting
+    status: completed
+  - id: api-trigger-run
+    content: Implement POST /api/pipelines/{id}/runs endpoint to trigger pipeline execution
+    status: completed
+  - id: api-run-status
+    content: Implement GET /api/runs/{id} endpoint with job/step status and log URLs
+    status: completed
+  - id: api-run-cancel
+    content: Implement POST /api/runs/{id}/cancel endpoint to request run cancellation
+    status: completed
+  - id: api-websocket-events
+    content: Expose run/job/step events over WebSocket for real-time UI updates
+    status: completed
+  - id: test-parser-e2e
+    content: "End-to-end parser test: parse example pipeline YAML, verify IR structure"
+    status: completed
+  - id: test-engine-simple
+    content: "Integration test: execute simple pipeline with single job (mock agent completion)"
+    status: completed
+  - id: test-engine-dag
+    content: "Integration test: execute diamond DAG, verify correct execution order and concurrency"
+    status: completed
+  - id: test-engine-cache
+    content: "Integration test: verify cache hit skips job, cache miss executes job"
+    status: completed
+  - id: test-engine-retry
+    content: "Integration test: job fails, retry executes, succeeds on retry"
+    status: completed
+  - id: test-engine-cancel
+    content: "Integration test: cancel mid-run, verify jobs marked cancelled"
+    status: completed
 isProject: false
 ---
 
@@ -458,4 +545,352 @@ Evaluated server-side by the DAG executor before dispatching each job.
 
 ### 4.10 Timeout and Retry
 
-**Timeouts**: Every job and step has a timeout (explicit or inherited from global/project defaults). Engine starts
+**Timeouts**: Every job and step has a timeout (explicit or inherited from global/project defaults). The engine starts a timer when dispatching a job:
+
+- If the agent doesn't report completion within the timeout, the job is marked `TimedOut`
+- The agent also enforces timeouts locally and will kill long-running steps
+- Double-enforcement ensures timeouts are respected even if agent-controller communication is delayed
+
+**Retries**: Jobs can specify a retry policy:
+
+```rust
+pub struct RetryPolicy {
+    pub max_attempts: u32,      // Including the initial attempt
+    pub backoff: Duration,      // Initial backoff duration
+    pub backoff_multiplier: f64, // Exponential backoff factor (default 2.0)
+    pub max_backoff: Duration,  // Cap on backoff duration
+}
+```
+
+When a job fails and has retries remaining:
+
+1. Engine increments the attempt counter
+2. Computes backoff: `min(backoff * multiplier^attempt, max_backoff)`
+3. Waits for backoff duration
+4. Re-dispatches the job to NATS
+5. Agent receives as a new job (unaware of retry status)
+
+Retry state is tracked in the database (`job_runs.attempt` column) and surfaced in the UI.
+
+### 4.11 Event Broadcasting
+
+The engine emits events for all state transitions, enabling real-time UI updates and external integrations:
+
+```rust
+pub enum RunEvent {
+    RunQueued { run_id: RunId, pipeline_id: PipelineId, triggered_by: String },
+    RunStarted { run_id: RunId, pipeline_id: PipelineId },
+    RunCompleted { run_id: RunId, pipeline_id: PipelineId, success: bool, duration_ms: u64 },
+    RunCancelled { run_id: RunId, pipeline_id: PipelineId },
+    JobQueued { job_run_id: JobRunId, run_id: RunId, job_name: String },
+    JobStarted { job_run_id: JobRunId, run_id: RunId, agent_id: AgentId },
+    JobCompleted { job_run_id: JobRunId, run_id: RunId, success: bool, duration_ms: u64 },
+    JobCancelled { job_run_id: JobRunId, run_id: RunId },
+    StepStarted { step_run_id: StepRunId, job_run_id: JobRunId, step_name: String },
+    StepCompleted { step_run_id: StepRunId, job_run_id: JobRunId, exit_code: i32 },
+    LogChunk { job_run_id: JobRunId, step_run_id: StepRunId, chunk: String },
+}
+```
+
+Events are published to NATS subjects for fan-out:
+
+- `met.events.<org_id>.runs.<run_id>` -- all events for a specific run
+- `met.events.<org_id>.pipelines.<pipeline_id>` -- all events for a pipeline
+
+The API layer subscribes to these subjects and relays to WebSocket connections.
+
+---
+
+## 5. Database Schema (Pipeline Tables)
+
+These tables track pipeline definitions and execution history.
+
+```sql
+-- Pipeline definitions (parsed from YAML, stored for fast access)
+CREATE TABLE pipelines (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    slug            TEXT NOT NULL,
+    definition      JSONB NOT NULL,              -- Serialized PipelineIR
+    source_file     TEXT,                        -- Path in repo
+    source_sha      TEXT,                        -- Git commit SHA when parsed
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(project_id, slug)
+);
+
+-- Pipeline runs (one per execution)
+CREATE TABLE pipeline_runs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pipeline_id     UUID NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    org_id          UUID NOT NULL REFERENCES organizations(id),
+    status          run_status NOT NULL DEFAULT 'pending',
+    triggered_by    TEXT NOT NULL,               -- 'manual', 'webhook', 'schedule', etc.
+    trigger_data    JSONB,                       -- Event payload that triggered the run
+    trace_id        UUID NOT NULL,               -- For distributed tracing
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_pipeline_runs_pipeline ON pipeline_runs(pipeline_id, created_at DESC);
+CREATE INDEX idx_pipeline_runs_status ON pipeline_runs(status) WHERE status IN ('pending', 'queued', 'running');
+
+-- Job runs (one per job per pipeline run)
+CREATE TABLE job_runs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id          UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    job_id          UUID NOT NULL,               -- From PipelineIR, not a foreign key
+    job_name        TEXT NOT NULL,
+    status          run_status NOT NULL DEFAULT 'pending',
+    agent_id        UUID REFERENCES agents(id),
+    attempt         INT NOT NULL DEFAULT 1,
+    exit_code       INT,
+    error_message   TEXT,
+    cache_hit       BOOLEAN NOT NULL DEFAULT FALSE,
+    cache_key       TEXT,
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_job_runs_run ON job_runs(run_id);
+CREATE INDEX idx_job_runs_agent ON job_runs(agent_id) WHERE status = 'running';
+
+-- Step runs (one per step per job run)
+CREATE TABLE step_runs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_run_id      UUID NOT NULL REFERENCES job_runs(id) ON DELETE CASCADE,
+    step_id         UUID NOT NULL,               -- From PipelineIR
+    step_name       TEXT NOT NULL,
+    status          run_status NOT NULL DEFAULT 'pending',
+    exit_code       INT,
+    log_path        TEXT,                        -- Object storage path
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_step_runs_job ON step_runs(job_run_id);
+
+-- Cache entries
+CREATE TABLE cache_entries (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    cache_key       TEXT NOT NULL,
+    storage_path    TEXT NOT NULL,               -- Object storage path
+    size_bytes      BIGINT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_hit_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    hit_count       INT NOT NULL DEFAULT 0,
+    expires_at      TIMESTAMPTZ,
+    UNIQUE(project_id, cache_key)
+);
+
+CREATE INDEX idx_cache_entries_project ON cache_entries(project_id);
+CREATE INDEX idx_cache_entries_lru ON cache_entries(project_id, last_hit_at);
+
+-- Artifacts
+CREATE TABLE artifacts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id          UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    job_run_id      UUID NOT NULL REFERENCES job_runs(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    storage_path    TEXT NOT NULL,
+    content_type    TEXT,
+    size_bytes      BIGINT NOT NULL,
+    sha256          TEXT NOT NULL,
+    pinned          BOOLEAN NOT NULL DEFAULT FALSE,
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_artifacts_run ON artifacts(run_id);
+CREATE INDEX idx_artifacts_job ON artifacts(job_run_id);
+
+-- Reusable workflows (global scope)
+CREATE TABLE reusable_workflows (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id          UUID REFERENCES organizations(id),  -- NULL for platform-global
+    scope           TEXT NOT NULL CHECK (scope IN ('platform', 'organization')),
+    name            TEXT NOT NULL,
+    version         TEXT NOT NULL,
+    description     TEXT,
+    definition      JSONB NOT NULL,              -- Serialized RawWorkflowDef
+    deprecated      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(org_id, name, version)
+);
+
+CREATE INDEX idx_workflows_name ON reusable_workflows(name, version);
+```
+
+---
+
+## 6. API Endpoints
+
+### 6.1 Pipeline Execution
+
+```
+POST /api/projects/{project_id}/pipelines/{pipeline_id}/runs
+  Request: { trigger: "manual", inputs: { ... } }
+  Response: { run_id: "...", status: "queued" }
+
+GET /api/runs/{run_id}
+  Response: { id, pipeline_id, status, jobs: [...], started_at, finished_at }
+
+GET /api/runs/{run_id}/jobs
+  Response: [{ id, name, status, agent_id, steps: [...] }, ...]
+
+GET /api/runs/{run_id}/jobs/{job_run_id}/logs
+  Response: Streaming log content (text/plain or JSON lines)
+
+POST /api/runs/{run_id}/cancel
+  Response: { status: "cancelling" }
+
+GET /api/runs/{run_id}/artifacts
+  Response: [{ id, name, size_bytes, download_url }, ...]
+```
+
+### 6.2 WebSocket Events
+
+```
+WS /api/ws/runs/{run_id}
+  Subscribes to real-time events for a run
+  Messages: RunEvent JSON
+
+WS /api/ws/pipelines/{pipeline_id}
+  Subscribes to all runs for a pipeline
+  Messages: RunEvent JSON
+```
+
+### 6.3 Cache Management
+
+```
+GET /api/projects/{project_id}/cache
+  Response: [{ key, size_bytes, last_hit_at, hit_count }, ...]
+
+DELETE /api/projects/{project_id}/cache/{key}
+  Evict a specific cache entry
+
+POST /api/projects/{project_id}/cache/purge
+  Request: { older_than: "30d" }
+  Purge cache entries older than threshold
+```
+
+---
+
+## 7. Crate Dependency Map
+
+```
+met-parser
+  ├── met-core          (shared types, IDs)
+  ├── serde / serde_yaml (YAML parsing)
+  ├── indexmap          (ordered maps)
+  ├── regex             (pattern matching)
+  ├── humantime         (duration parsing)
+  ├── thiserror         (error types)
+  └── tracing           (instrumentation)
+
+met-engine
+  ├── met-core          (shared types, IDs)
+  ├── met-store         (database access)
+  ├── met-parser        (PipelineIR)
+  ├── met-secrets       (secret encryption)
+  ├── met-proto         (protobuf messages)
+  ├── met-objstore      (object storage) -- deferred
+  ├── async-nats        (NATS JetStream)
+  ├── cel-interpreter   (CEL conditions)
+  ├── sqlx              (database queries)
+  ├── tokio             (async runtime)
+  ├── sha2              (cache key hashing)
+  ├── futures           (async utilities)
+  ├── indexmap          (ordered maps)
+  ├── prost             (protobuf encoding)
+  └── tracing           (instrumentation)
+```
+
+---
+
+## 8. Build Order (Within Phase 2)
+
+
+| Step | Work                                                | Depends On            |
+| ---- | --------------------------------------------------- | --------------------- |
+| 2.0  | Parser source span tracking                         | Phase 0               |
+| 2.1  | Database migrations (pipeline_runs, job_runs, etc.) | Phase 0 DB            |
+| 2.2  | DatabaseWorkflowProvider implementation             | 2.1, met-store        |
+| 2.3  | hashFiles() and cache key template helpers          | -                     |
+| 2.4  | JobPayload protobuf definition                      | Phase 0 proto tooling |
+| 2.5  | Engine database persistence (create/update runs)    | 2.1                   |
+| 2.6  | Engine retry logic                                  | 2.5                   |
+| 2.7  | Secret encryption integration                       | Phase 1 met-secrets   |
+| 2.8  | Object storage cache backend                        | Phase 0 met-objstore  |
+| 2.9  | Artifact upload/download                            | 2.8                   |
+| 2.10 | Completion listener (agent -> engine)               | Phase 1 controller    |
+| 2.11 | Log streaming relay                                 | 2.10                  |
+| 2.12 | API endpoints (trigger, status, cancel)             | 2.5                   |
+| 2.13 | WebSocket event relay                               | 2.12                  |
+| 2.14 | Integration tests                                   | 2.0 -- 2.13           |
+
+
+---
+
+## 9. Current Implementation Status
+
+### 9.1 `met-parser` (Substantially Complete)
+
+The parser crate has a working 6-stage pipeline:
+
+- **Stage 1 (Deserialize)**: ✅ Using serde_yaml
+- **Stage 2 (Schema Validate)**: ✅ Required fields, types, duplicate IDs
+- **Stage 3 (Workflow Resolution)**: ✅ MockWorkflowProvider works; needs DB/git providers
+- **Stage 4 (Variable Resolution)**: ✅ ${...} validation implemented
+- **Stage 5 (DAG Construction)**: ✅ Cycle detection with Kahn's algorithm
+- **Stage 6 (Emit IR)**: ✅ Full PipelineIR generation
+
+**Remaining work**:
+
+- Source span tracking for line-numbered errors
+- DatabaseWorkflowProvider for global workflows
+- GitWorkflowProvider for project workflows
+- Semver version resolution
+- hashFiles() helper function
+
+### 9.2 `met-engine` (Core Loop Complete)
+
+The engine has a working execution loop:
+
+- **DAG Executor**: ✅ Topological ordering, dependency tracking, concurrent dispatch
+- **Job Scheduler**: ✅ NATS dispatch, timeout tracking, cancellation
+- **Cache Manager**: ✅ MemoryCache works; ObjectStoreCache stubbed
+- **CEL Conditions**: ✅ Basic condition evaluation
+- **Event Broadcasting**: ✅ NATS event publishing
+
+**Remaining work**:
+
+- Database persistence of run state
+- Retry policy execution
+- Artifact passing between jobs
+- ObjectStoreCache completion
+- Secret encryption integration
+- Completion listener wiring
+- Log streaming relay
+
+---
+
+## 10. Open Questions and Decisions
+
+
+| Question                                                | Current Leaning                    | Notes                                                  |
+| ------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------ |
+| Should cache keys be content-addressed or user-defined? | User-defined with helper functions | Matches GitHub Actions model, more predictable         |
+| How to handle workflow version conflicts?               | Semver resolution with lockfile    | Lockfile optional, default to latest matching          |
+| Should artifacts be typed (binary, log, report)?        | Yes, with content_type             | Enables UI rendering (logs as text, reports as HTML)   |
+| Maximum workflow nesting depth?                         | 5 levels                           | Prevents infinite recursion, keeps debugging tractable |
+| Retry scope: job-level only or step-level too?          | Job-level only for now             | Step-level retries add complexity, defer to later      |
+| Cache isolation: per-branch or shared?                  | Shared with branch in key          | User controls isolation via cache key template         |
+
+

@@ -12,6 +12,7 @@ use met_core::{
 use met_store::repos::PipelineRepo;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/pipelines/by-slug/{project_id}/{slug}", get(get_pipeline_by_slug))
         .route("/pipelines/{id}/trigger", post(trigger_pipeline))
+        .route("/pipelines/{id}/validate", post(validate_pipeline))
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,12 +37,27 @@ pub struct ListPipelinesQuery {
     project_id: Option<ProjectId>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PipelineResponse {
     #[serde(flatten)]
+    #[schema(value_type = Object)]
     pub pipeline: Pipeline,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/pipelines",
+    params(
+        ("project_id" = Option<String>, Query, description = "Filter by project ID"),
+        ("cursor" = Option<String>, Query, description = "Pagination cursor"),
+        ("limit" = Option<u32>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "List of pipelines", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state))]
 async fn list_pipelines(
     State(state): State<AppState>,
@@ -67,8 +84,9 @@ async fn list_pipelines(
     Ok(Json(response))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreatePipelineRequest {
+    #[schema(value_type = String)]
     pub project_id: ProjectId,
     pub name: String,
     pub slug: String,
@@ -77,6 +95,17 @@ pub struct CreatePipelineRequest {
     pub definition_path: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/pipelines",
+    request_body = CreatePipelineRequest,
+    responses(
+        (status = 200, description = "Pipeline created", body = PipelineResponse),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state, req))]
 async fn create_pipeline(
     State(state): State<AppState>,
@@ -98,6 +127,16 @@ async fn create_pipeline(
     Ok(Json(PipelineResponse { pipeline }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/pipelines/{id}",
+    params(("id" = String, Path, description = "Pipeline ID")),
+    responses(
+        (status = 200, description = "Pipeline details", body = PipelineResponse),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state))]
 async fn get_pipeline(
     State(state): State<AppState>,
@@ -120,7 +159,7 @@ async fn get_pipeline_by_slug(
     Ok(Json(PipelineResponse { pipeline }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdatePipelineRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -128,6 +167,18 @@ pub struct UpdatePipelineRequest {
     pub enabled: Option<bool>,
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/v1/pipelines/{id}",
+    params(("id" = String, Path, description = "Pipeline ID")),
+    request_body = UpdatePipelineRequest,
+    responses(
+        (status = 200, description = "Pipeline updated", body = PipelineResponse),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state, req))]
 async fn update_pipeline(
     State(state): State<AppState>,
@@ -149,6 +200,16 @@ async fn update_pipeline(
     Ok(Json(PipelineResponse { pipeline }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/pipelines/{id}",
+    params(("id" = String, Path, description = "Pipeline ID")),
+    responses(
+        (status = 200, description = "Pipeline deleted"),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state))]
 async fn delete_pipeline(
     State(state): State<AppState>,
@@ -160,20 +221,32 @@ async fn delete_pipeline(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TriggerPipelineRequest {
     pub branch: Option<String>,
     pub commit_sha: Option<String>,
     pub variables: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TriggerPipelineResponse {
+    #[schema(value_type = String)]
     pub run_id: met_core::ids::RunId,
     pub run_number: i64,
     pub status: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/pipelines/{id}/trigger",
+    params(("id" = String, Path, description = "Pipeline ID")),
+    request_body = TriggerPipelineRequest,
+    responses(
+        (status = 200, description = "Pipeline triggered", body = TriggerPipelineResponse),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
 #[instrument(skip(state))]
 async fn trigger_pipeline(
     State(state): State<AppState>,
@@ -193,5 +266,59 @@ async fn trigger_pipeline(
         run_id: run.id,
         run_number: run.run_number,
         status: format!("{:?}", run.status).to_lowercase(),
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ValidatePipelineRequest {
+    pub definition: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ValidatePipelineResponse {
+    pub valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/pipelines/{id}/validate",
+    params(("id" = String, Path, description = "Pipeline ID")),
+    request_body = ValidatePipelineRequest,
+    responses(
+        (status = 200, description = "Validation result", body = ValidatePipelineResponse),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
+#[instrument(skip(state, req))]
+async fn validate_pipeline(
+    State(state): State<AppState>,
+    Auth(_user): Auth,
+    Path(id): Path<PipelineId>,
+    Json(req): Json<ValidatePipelineRequest>,
+) -> ApiResult<Json<ValidatePipelineResponse>> {
+    let _pipeline = PipelineRepo::new(state.db()).get(id).await?;
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    if req.definition.is_null() {
+        errors.push("definition cannot be null".to_string());
+    }
+
+    if let Some(obj) = req.definition.as_object() {
+        if !obj.contains_key("jobs") && !obj.contains_key("steps") {
+            warnings.push("definition should contain 'jobs' or 'steps'".to_string());
+        }
+    } else {
+        errors.push("definition must be a JSON object".to_string());
+    }
+
+    Ok(Json(ValidatePipelineResponse {
+        valid: errors.is_empty(),
+        errors,
+        warnings,
     }))
 }

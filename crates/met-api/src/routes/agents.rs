@@ -12,6 +12,7 @@ use met_core::{
 use met_store::repos::AgentRepo;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
@@ -25,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}/drain", axum::routing::post(drain_agent))
         .route("/agents/{id}/resume", axum::routing::post(resume_agent))
+        .route("/agents/{id}/revoke", axum::routing::post(revoke_agent))
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,11 +37,14 @@ pub struct ListAgentsQuery {
     tags: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AgentResponse {
+    #[schema(value_type = String)]
     pub id: AgentId,
+    #[schema(value_type = String)]
     pub org_id: OrganizationId,
     pub name: String,
+    #[schema(value_type = String)]
     pub status: AgentStatus,
     pub pool: Option<String>,
     pub tags: Vec<String>,
@@ -75,6 +80,22 @@ impl From<Agent> for AgentResponse {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents",
+    params(
+        ("status" = Option<String>, Query, description = "Filter by agent status"),
+        ("pool" = Option<String>, Query, description = "Filter by pool"),
+        ("tags" = Option<String>, Query, description = "Filter by tags (comma-separated)"),
+        ("cursor" = Option<String>, Query, description = "Pagination cursor"),
+        ("limit" = Option<u32>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "List of agents", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "agents",
+)]
 #[instrument(skip(state))]
 async fn list_agents(
     State(state): State<AppState>,
@@ -122,6 +143,17 @@ async fn list_agents(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents/{id}",
+    params(("id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent details", body = AgentResponse),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 #[instrument(skip(state))]
 async fn get_agent(
     State(state): State<AppState>,
@@ -138,13 +170,25 @@ async fn get_agent(
     Ok(Json(AgentResponse::from(agent)))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AgentActionResponse {
+    #[schema(value_type = String)]
     pub agent_id: AgentId,
     pub status: String,
     pub message: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{id}/drain",
+    params(("id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent draining", body = AgentActionResponse),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 #[instrument(skip(state))]
 async fn drain_agent(
     State(state): State<AppState>,
@@ -175,6 +219,17 @@ async fn drain_agent(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{id}/resume",
+    params(("id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent resumed", body = AgentActionResponse),
+        (status = 403, description = "Forbidden"),
+        (status = 409, description = "Agent not in draining state"),
+    ),
+    tag = "agents",
+)]
 #[instrument(skip(state))]
 async fn resume_agent(
     State(state): State<AppState>,
@@ -207,5 +262,46 @@ async fn resume_agent(
         agent_id: id,
         status: format!("{:?}", new_status).to_lowercase(),
         message: "Agent resumed and accepting new jobs".to_string(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{id}/revoke",
+    params(("id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent revoked", body = AgentActionResponse),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
+#[instrument(skip(state))]
+async fn revoke_agent(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<AgentId>,
+) -> ApiResult<Json<AgentActionResponse>> {
+    let repo = AgentRepo::new(state.db());
+
+    let agent = repo.get(id).await?;
+    if agent.org_id != user.org_id {
+        return Err(ApiError::forbidden("Agent belongs to another organization"));
+    }
+
+    if agent.status == AgentStatus::Revoked {
+        return Ok(Json(AgentActionResponse {
+            agent_id: id,
+            status: "revoked".to_string(),
+            message: "Agent is already revoked".to_string(),
+        }));
+    }
+
+    repo.update_status(id, AgentStatus::Revoked).await?;
+
+    Ok(Json(AgentActionResponse {
+        agent_id: id,
+        status: "revoked".to_string(),
+        message: "Agent has been revoked and can no longer connect".to_string(),
     }))
 }

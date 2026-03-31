@@ -10,6 +10,7 @@ use axum::{
     http::request::Parts,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Default number of items per page.
 const DEFAULT_LIMIT: u32 = 25;
@@ -77,7 +78,7 @@ where
 }
 
 /// Response wrapper for paginated results.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PaginatedResponse<T> {
     /// The items in this page.
     pub data: Vec<T>,
@@ -86,7 +87,7 @@ pub struct PaginatedResponse<T> {
 }
 
 /// Pagination metadata included in responses.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PaginationMeta {
     /// Cursor for the next page (null if no more pages).
     #[serde(skip_serializing_if = "Option::is_none")]

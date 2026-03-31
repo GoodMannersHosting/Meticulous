@@ -19,6 +19,7 @@ use axum::{
 use met_core::MetError;
 use serde::Serialize;
 use std::borrow::Cow;
+use utoipa::ToSchema;
 
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -100,18 +101,19 @@ impl ApiError {
 }
 
 /// JSON error response body.
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: ErrorBody,
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
 }
 
 /// Inner error body.
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    code: Cow<'static, str>,
-    message: String,
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorBody {
+    #[schema(value_type = String)]
+    pub code: Cow<'static, str>,
+    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    request_id: Option<String>,
+    pub request_id: Option<String>,
 }
 
 impl IntoResponse for ApiError {

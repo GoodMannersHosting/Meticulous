@@ -1,9 +1,10 @@
 //! Run repository.
 
-use chrono::Utc;
-use met_core::ids::{PipelineId, RunId, TriggerId};
-use met_core::models::{Run, RunStatus};
+use chrono::{DateTime, Utc};
+use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId, StepId, StepRunId, TriggerId};
+use met_core::models::{JobRun, JobStatus, Run, RunStatus, StepRun};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
 
@@ -19,7 +20,50 @@ impl<'a> RunRepo<'a> {
         Self { pool }
     }
 
-    /// Create a new run.
+    /// Create a new run with full options.
+    pub async fn create_full(
+        &self,
+        pipeline_id: PipelineId,
+        org_id: OrganizationId,
+        trigger_id: Option<TriggerId>,
+        triggered_by: &str,
+        trace_id: Option<Uuid>,
+        commit_sha: Option<&str>,
+        branch: Option<&str>,
+        trigger_data: Option<serde_json::Value>,
+    ) -> Result<Run> {
+        let id = RunId::new();
+        let now = Utc::now();
+        let run_number = self.next_run_number(pipeline_id).await?;
+
+        let run = sqlx::query_as::<_, Run>(
+            r#"
+            INSERT INTO runs (id, pipeline_id, org_id, trigger_id, status, run_number, triggered_by, 
+                              trace_id, commit_sha, branch, trigger_data, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+                      triggered_by, created_at, started_at, finished_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(pipeline_id.as_uuid())
+        .bind(org_id.as_uuid())
+        .bind(trigger_id.map(|t| t.as_uuid()))
+        .bind(RunStatus::Pending)
+        .bind(run_number)
+        .bind(triggered_by)
+        .bind(trace_id)
+        .bind(commit_sha)
+        .bind(branch)
+        .bind(trigger_data)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(run)
+    }
+
+    /// Create a new run (simple version for backward compatibility).
     pub async fn create(
         &self,
         pipeline_id: PipelineId,
@@ -165,5 +209,478 @@ impl<'a> RunRepo<'a> {
         .await?;
 
         Ok(count)
+    }
+
+    /// Get run with all job runs.
+    pub async fn get_with_jobs(&self, id: RunId) -> Result<RunWithJobs> {
+        let run = self.get(id).await?;
+        
+        let job_runs = sqlx::query_as::<_, JobRun>(
+            r#"
+            SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            FROM job_runs
+            WHERE run_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(RunWithJobs { run, job_runs })
+    }
+
+    /// Set run to running status.
+    pub async fn start_run(&self, id: RunId) -> Result<Run> {
+        let now = Utc::now();
+        
+        let run = sqlx::query_as::<_, Run>(
+            r#"
+            UPDATE runs
+            SET status = 'running', started_at = $2
+            WHERE id = $1 AND status IN ('pending', 'queued')
+            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+                      triggered_by, created_at, started_at, finished_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(run)
+    }
+
+    /// Complete a run with final status.
+    pub async fn complete_run(&self, id: RunId, status: RunStatus, error_message: Option<&str>) -> Result<Run> {
+        let now = Utc::now();
+        
+        let run = sqlx::query_as::<_, Run>(
+            r#"
+            UPDATE runs
+            SET status = $2, finished_at = $3, error_message = $4
+            WHERE id = $1
+            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+                      triggered_by, created_at, started_at, finished_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status)
+        .bind(now)
+        .bind(error_message)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(run)
+    }
+
+    /// List active runs (pending, queued, or running).
+    pub async fn list_active(&self, org_id: OrganizationId, limit: i64) -> Result<Vec<Run>> {
+        let runs = sqlx::query_as::<_, Run>(
+            r#"
+            SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+                   triggered_by, created_at, started_at, finished_at
+            FROM runs
+            WHERE org_id = $1 AND status IN ('pending', 'queued', 'running')
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(runs)
+    }
+}
+
+/// Run with associated job runs.
+#[derive(Debug)]
+pub struct RunWithJobs {
+    pub run: Run,
+    pub job_runs: Vec<JobRun>,
+}
+
+/// Repository for job run operations.
+pub struct JobRunRepo<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> JobRunRepo<'a> {
+    /// Create a new job run repository.
+    #[must_use]
+    pub const fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Create a new job run.
+    pub async fn create(
+        &self,
+        run_id: RunId,
+        job_id: JobId,
+        job_name: &str,
+    ) -> Result<JobRun> {
+        let id = JobRunId::new();
+        let now = Utc::now();
+
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            INSERT INTO job_runs (id, run_id, job_id, job_name, status, attempt, created_at)
+            VALUES ($1, $2, $3, $4, 'pending', 1, $5)
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(run_id.as_uuid())
+        .bind(job_id.as_uuid())
+        .bind(job_name)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+
+    /// Get a job run by ID.
+    pub async fn get(&self, id: JobRunId) -> Result<JobRun> {
+        sqlx::query_as::<_, JobRun>(
+            r#"
+            SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            FROM job_runs
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("job_run", id))
+    }
+
+    /// List job runs for a run.
+    pub async fn list_by_run(&self, run_id: RunId) -> Result<Vec<JobRun>> {
+        let job_runs = sqlx::query_as::<_, JobRun>(
+            r#"
+            SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            FROM job_runs
+            WHERE run_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(run_id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(job_runs)
+    }
+
+    /// Update job run status to queued.
+    pub async fn mark_queued(&self, id: JobRunId) -> Result<JobRun> {
+        self.update_status(id, JobStatus::Queued, None, None).await
+    }
+
+    /// Update job run status to running with agent assignment.
+    pub async fn mark_running(&self, id: JobRunId, agent_id: AgentId) -> Result<JobRun> {
+        let now = Utc::now();
+        
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            UPDATE job_runs
+            SET status = 'running', agent_id = $2, started_at = $3
+            WHERE id = $1
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(agent_id.as_uuid())
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+
+    /// Mark job as completed.
+    pub async fn mark_completed(
+        &self,
+        id: JobRunId,
+        success: bool,
+        exit_code: Option<i32>,
+        error_message: Option<&str>,
+        outputs: Option<serde_json::Value>,
+    ) -> Result<JobRun> {
+        let now = Utc::now();
+        let status = if success { JobStatus::Succeeded } else { JobStatus::Failed };
+        
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            UPDATE job_runs
+            SET status = $2, exit_code = $3, error_message = $4, outputs = COALESCE($5, outputs), finished_at = $6
+            WHERE id = $1
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status)
+        .bind(exit_code)
+        .bind(error_message)
+        .bind(outputs)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+
+    /// Mark job as skipped.
+    pub async fn mark_skipped(&self, id: JobRunId, reason: Option<&str>) -> Result<JobRun> {
+        self.update_status(id, JobStatus::Skipped, None, reason).await
+    }
+
+    /// Mark job as cancelled.
+    pub async fn mark_cancelled(&self, id: JobRunId) -> Result<JobRun> {
+        self.update_status(id, JobStatus::Cancelled, None, Some("Cancelled by user")).await
+    }
+
+    /// Mark job as timed out.
+    pub async fn mark_timed_out(&self, id: JobRunId) -> Result<JobRun> {
+        self.update_status(id, JobStatus::TimedOut, None, Some("Job execution timed out")).await
+    }
+
+    /// Set cache hit information.
+    pub async fn set_cache_hit(&self, id: JobRunId, cache_key: &str) -> Result<JobRun> {
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            UPDATE job_runs
+            SET cache_hit = true, cache_key = $2
+            WHERE id = $1
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(cache_key)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+
+    /// Increment attempt counter for retry.
+    pub async fn increment_attempt(&self, id: JobRunId) -> Result<JobRun> {
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            UPDATE job_runs
+            SET attempt = attempt + 1, status = 'pending', 
+                started_at = NULL, finished_at = NULL, exit_code = NULL, error_message = NULL
+            WHERE id = $1
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+
+    /// Update status helper.
+    async fn update_status(
+        &self,
+        id: JobRunId,
+        status: JobStatus,
+        exit_code: Option<i32>,
+        error_message: Option<&str>,
+    ) -> Result<JobRun> {
+        let now = Utc::now();
+        let is_terminal = status.is_terminal();
+        
+        let job_run = sqlx::query_as::<_, JobRun>(
+            r#"
+            UPDATE job_runs
+            SET status = $2, 
+                exit_code = COALESCE($3, exit_code), 
+                error_message = COALESCE($4, error_message),
+                finished_at = CASE WHEN $5 THEN $6 ELSE finished_at END
+            WHERE id = $1
+            RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
+                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status)
+        .bind(exit_code)
+        .bind(error_message)
+        .bind(is_terminal)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(job_run)
+    }
+}
+
+/// Repository for step run operations.
+pub struct StepRunRepo<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> StepRunRepo<'a> {
+    /// Create a new step run repository.
+    #[must_use]
+    pub const fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Create a new step run.
+    pub async fn create(
+        &self,
+        job_run_id: JobRunId,
+        step_id: StepId,
+        step_name: &str,
+    ) -> Result<StepRun> {
+        let id = StepRunId::new();
+        let now = Utc::now();
+
+        let step_run = sqlx::query_as::<_, StepRun>(
+            r#"
+            INSERT INTO step_runs (id, job_run_id, step_id, step_name, status, created_at)
+            VALUES ($1, $2, $3, $4, 'pending', $5)
+            RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                      log_path, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(job_run_id.as_uuid())
+        .bind(step_id.as_uuid())
+        .bind(step_name)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(step_run)
+    }
+
+    /// Get a step run by ID.
+    pub async fn get(&self, id: StepRunId) -> Result<StepRun> {
+        sqlx::query_as::<_, StepRun>(
+            r#"
+            SELECT id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                   log_path, outputs, started_at, finished_at, created_at
+            FROM step_runs
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("step_run", id))
+    }
+
+    /// List step runs for a job run.
+    pub async fn list_by_job_run(&self, job_run_id: JobRunId) -> Result<Vec<StepRun>> {
+        let step_runs = sqlx::query_as::<_, StepRun>(
+            r#"
+            SELECT id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                   log_path, outputs, started_at, finished_at, created_at
+            FROM step_runs
+            WHERE job_run_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(step_runs)
+    }
+
+    /// Mark step as running.
+    pub async fn mark_running(&self, id: StepRunId) -> Result<StepRun> {
+        let now = Utc::now();
+        
+        let step_run = sqlx::query_as::<_, StepRun>(
+            r#"
+            UPDATE step_runs
+            SET status = 'running', started_at = $2
+            WHERE id = $1
+            RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                      log_path, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(step_run)
+    }
+
+    /// Mark step as completed.
+    pub async fn mark_completed(
+        &self,
+        id: StepRunId,
+        exit_code: i32,
+        error_message: Option<&str>,
+        log_path: Option<&str>,
+        outputs: Option<serde_json::Value>,
+    ) -> Result<StepRun> {
+        let now = Utc::now();
+        let status = if exit_code == 0 { 
+            met_core::models::StepStatus::Succeeded 
+        } else { 
+            met_core::models::StepStatus::Failed 
+        };
+        
+        let step_run = sqlx::query_as::<_, StepRun>(
+            r#"
+            UPDATE step_runs
+            SET status = $2, exit_code = $3, error_message = $4, log_path = $5, 
+                outputs = COALESCE($6, outputs), finished_at = $7
+            WHERE id = $1
+            RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                      log_path, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status)
+        .bind(exit_code)
+        .bind(error_message)
+        .bind(log_path)
+        .bind(outputs)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(step_run)
+    }
+
+    /// Mark step as skipped.
+    pub async fn mark_skipped(&self, id: StepRunId, reason: Option<&str>) -> Result<StepRun> {
+        let now = Utc::now();
+        
+        let step_run = sqlx::query_as::<_, StepRun>(
+            r#"
+            UPDATE step_runs
+            SET status = 'skipped', error_message = $2, finished_at = $3
+            WHERE id = $1
+            RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                      log_path, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(reason)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(step_run)
     }
 }

@@ -9,8 +9,9 @@ use async_nats::jetstream::consumer::pull::Stream as PullStream;
 use chrono::Utc;
 use futures::StreamExt;
 use met_proto::agent::v1::{
-    agent_service_client::AgentServiceClient, JobAssignment, JobKeyExchange, JobStatusUpdate,
-    StepSpec, StepStatusUpdate,
+    agent_service_client::AgentServiceClient, ExecutedBinary as ProtoExecutedBinary,
+    JobAssignment, JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange,
+    JobStatusUpdate, StepSpec, StepStatusUpdate,
 };
 use met_proto::common::v1::{RunStatus, StepKind, Timestamp};
 use prost::Message;
@@ -22,6 +23,7 @@ use crate::backend::ExecutionBackend;
 use crate::config::{AgentConfig, AgentIdentity};
 use crate::error::{AgentError, Result};
 use crate::heartbeat::HeartbeatState;
+use crate::process_watcher::{merge_execution_metadata, JobExecutionMetadata, ProcessWatcher};
 use crate::security::JobPki;
 
 /// Job executor that pulls jobs from NATS and executes them.
@@ -167,7 +169,7 @@ impl JobExecutor {
         }
 
         // Report job accepted
-        self.report_job_status(&job.job_run_id, RunStatus::Running, None, None)
+        self.report_job_status(&job.job_run_id, RunStatus::Running, None, None, None)
             .await?;
 
         // Create workspace
@@ -182,6 +184,9 @@ impl JobExecutor {
             HashMap::new()
         };
 
+        // Collect execution metadata from all steps
+        let mut step_metadata: Vec<(String, JobExecutionMetadata)> = Vec::new();
+
         // Execute steps sequentially
         let mut job_success = true;
         for step in &job.steps {
@@ -190,7 +195,12 @@ impl JobExecutor {
                 .await;
 
             match step_result {
-                Ok(exit_code) => {
+                Ok((exit_code, metadata)) => {
+                    // Collect step metadata
+                    if let Some(meta) = metadata {
+                        step_metadata.push((step.step_id.clone(), meta));
+                    }
+
                     if exit_code != 0 && !step.continue_on_error {
                         job_success = false;
                         break;
@@ -206,13 +216,41 @@ impl JobExecutor {
             }
         }
 
-        // Report job completion
+        // Merge execution metadata from all steps
+        let job_metadata = if !step_metadata.is_empty() {
+            Some(merge_execution_metadata(step_metadata))
+        } else {
+            None
+        };
+
+        // Log execution summary
+        if let Some(ref meta) = job_metadata {
+            info!(
+                job_run_id = %job.job_run_id,
+                total_processes = meta.total_processes_spawned,
+                unique_binaries = meta.executed_binaries.len(),
+                max_depth = meta.execution_tree_depth,
+                "job execution metadata collected"
+            );
+
+            // Log each unique binary for audit purposes
+            for binary in &meta.executed_binaries {
+                debug!(
+                    path = %binary.path,
+                    sha256 = %binary.sha256,
+                    execution_count = binary.execution_count,
+                    "executed binary"
+                );
+            }
+        }
+
+        // Report job completion with execution metadata
         let final_status = if job_success {
             RunStatus::Succeeded
         } else {
             RunStatus::Failed
         };
-        self.report_job_status(&job.job_run_id, final_status, Some(0), None)
+        self.report_job_status(&job.job_run_id, final_status, Some(0), None, job_metadata)
             .await?;
 
         // Cleanup workspace
@@ -238,6 +276,7 @@ impl JobExecutor {
     }
 
     /// Execute a single step.
+    /// Returns (exit_code, execution_metadata).
     #[instrument(skip(self, step, workspace, variables, secrets), fields(step_name = %step.name))]
     async fn execute_step(
         &mut self,
@@ -245,7 +284,7 @@ impl JobExecutor {
         workspace: &Path,
         variables: &HashMap<String, String>,
         secrets: &HashMap<String, String>,
-    ) -> Result<i32> {
+    ) -> Result<(i32, Option<JobExecutionMetadata>)> {
         info!(step = %step.name, "executing step");
 
         // Report step started
@@ -269,11 +308,18 @@ impl JobExecutor {
             timeout: Duration::from_secs(step.timeout_secs as u64),
         };
 
-        // Execute
-        let result = self.backend.execute(&backend_step, workspace).await;
+        // Create a process watcher for this step
+        let mut watcher = ProcessWatcher::new();
+
+        // Execute with process watching
+        let result = self
+            .backend
+            .execute_with_watcher(&backend_step, workspace, &mut watcher)
+            .await;
 
         match result {
-            Ok(exit_code) => {
+            Ok(step_result) => {
+                let exit_code = step_result.exit_code;
                 let status = if exit_code == 0 {
                     RunStatus::Succeeded
                 } else {
@@ -287,7 +333,15 @@ impl JobExecutor {
                     None,
                 )
                 .await?;
-                Ok(exit_code)
+
+                // Create metadata from step result
+                let metadata = JobExecutionMetadata {
+                    executed_binaries: step_result.executed_binaries,
+                    total_processes_spawned: step_result.processes_spawned,
+                    execution_tree_depth: step_result.execution_tree_depth,
+                };
+
+                Ok((exit_code, Some(metadata)))
             }
             Err(e) => {
                 self.report_step_status(
@@ -361,7 +415,34 @@ impl JobExecutor {
         status: RunStatus,
         exit_code: Option<i32>,
         error_message: Option<String>,
+        execution_metadata: Option<JobExecutionMetadata>,
     ) -> Result<()> {
+        // Convert execution metadata to protobuf format
+        let proto_metadata = execution_metadata.map(|meta| ProtoJobExecutionMetadata {
+            job_run_id: job_run_id.to_string(),
+            executed_binaries: meta
+                .executed_binaries
+                .into_iter()
+                .map(|b| ProtoExecutedBinary {
+                    path: b.path,
+                    sha256: b.sha256,
+                    execution_count: b.execution_count,
+                    first_executed_at: Some(Timestamp {
+                        seconds: b.first_executed_at.timestamp(),
+                        nanos: 0,
+                    }),
+                    last_executed_at: Some(Timestamp {
+                        seconds: b.last_executed_at.timestamp(),
+                        nanos: 0,
+                    }),
+                    step_ids: b.step_ids,
+                })
+                .collect(),
+            total_processes_spawned: meta.total_processes_spawned,
+            execution_tree_depth: meta.execution_tree_depth,
+            unique_binaries_count: 0, // Will be set from executed_binaries.len()
+        });
+
         let update = JobStatusUpdate {
             job_run_id: job_run_id.to_string(),
             status: status as i32,
@@ -371,10 +452,16 @@ impl JobExecutor {
                 seconds: Utc::now().timestamp(),
                 nanos: 0,
             }),
+            execution_metadata: proto_metadata,
         };
 
         // Would stream this in production
-        debug!(job_run_id, status = ?status, "reported job status");
+        debug!(
+            job_run_id,
+            status = ?status,
+            has_metadata = update.execution_metadata.is_some(),
+            "reported job status"
+        );
 
         Ok(())
     }

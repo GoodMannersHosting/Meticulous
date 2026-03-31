@@ -122,6 +122,8 @@ pub struct JobRun {
     pub run_id: RunId,
     /// The job being executed.
     pub job_id: JobId,
+    /// Job name for display.
+    pub job_name: String,
     /// The agent executing the job (if assigned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentId>,
@@ -130,6 +132,15 @@ pub struct JobRun {
     /// Retry attempt number (0 for first attempt).
     #[serde(default)]
     pub attempt: i32,
+    /// Exit code from job execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Error message if job failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    /// Whether the job was restored from cache.
+    #[serde(default)]
+    pub cache_hit: bool,
     /// Path to log storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
@@ -146,18 +157,31 @@ pub struct JobRun {
 impl JobRun {
     /// Create a new job run in pending status.
     #[must_use]
-    pub fn new(run_id: RunId, job_id: JobId) -> Self {
+    pub fn new(run_id: RunId, job_id: JobId, job_name: impl Into<String>) -> Self {
         Self {
             id: JobRunId::new(),
             run_id,
             job_id,
+            job_name: job_name.into(),
             agent_id: None,
             status: JobStatus::Pending,
             attempt: 0,
+            exit_code: None,
+            error_message: None,
+            cache_hit: false,
             log_path: None,
             started_at: None,
             finished_at: None,
             created_at: Utc::now(),
+        }
+    }
+
+    /// Get the duration of the job run.
+    #[must_use]
+    pub fn duration(&self) -> Option<chrono::Duration> {
+        match (self.started_at, self.finished_at) {
+            (Some(start), Some(end)) => Some(end - start),
+            _ => None,
         }
     }
 }
@@ -172,11 +196,16 @@ pub struct StepRun {
     pub job_run_id: JobRunId,
     /// The step being executed.
     pub step_id: StepId,
+    /// Step name for display.
+    pub step_name: String,
     /// Current status.
     pub status: JobStatus,
     /// Exit code (if applicable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Error message if step failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     /// Path to log storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
@@ -193,17 +222,28 @@ pub struct StepRun {
 impl StepRun {
     /// Create a new step run in pending status.
     #[must_use]
-    pub fn new(job_run_id: JobRunId, step_id: StepId) -> Self {
+    pub fn new(job_run_id: JobRunId, step_id: StepId, step_name: impl Into<String>) -> Self {
         Self {
             id: StepRunId::new(),
             job_run_id,
             step_id,
+            step_name: step_name.into(),
             status: JobStatus::Pending,
             exit_code: None,
+            error_message: None,
             log_path: None,
             started_at: None,
             finished_at: None,
             created_at: Utc::now(),
+        }
+    }
+
+    /// Get the duration of the step run.
+    #[must_use]
+    pub fn duration(&self) -> Option<chrono::Duration> {
+        match (self.started_at, self.finished_at) {
+            (Some(start), Some(end)) => Some(end - start),
+            _ => None,
         }
     }
 }

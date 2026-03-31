@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::error::Result;
+use crate::process_watcher::{ExecutedBinaryRecord, ProcessWatcher};
 
 #[cfg(target_os = "linux")]
 mod container;
@@ -34,13 +35,41 @@ pub struct StepSpec {
 pub struct StepResult {
     pub exit_code: i32,
     pub duration: Duration,
+    pub executed_binaries: Vec<ExecutedBinaryRecord>,
+    pub processes_spawned: u64,
+    pub execution_tree_depth: u32,
+}
+
+impl StepResult {
+    /// Create a minimal result without execution metadata.
+    pub fn simple(exit_code: i32, duration: Duration) -> Self {
+        Self {
+            exit_code,
+            duration,
+            executed_binaries: Vec::new(),
+            processes_spawned: 0,
+            execution_tree_depth: 0,
+        }
+    }
 }
 
 /// Trait for step execution backends.
 #[async_trait]
 pub trait ExecutionBackend: Send + Sync {
-    /// Execute a step and return the exit code.
-    async fn execute(&self, step: &StepSpec, workspace: &Path) -> Result<i32>;
+    /// Execute a step and return the result including execution metadata.
+    async fn execute_with_watcher(
+        &self,
+        step: &StepSpec,
+        workspace: &Path,
+        watcher: &mut ProcessWatcher,
+    ) -> Result<StepResult>;
+
+    /// Execute a step and return the exit code (simple interface without process watching).
+    async fn execute(&self, step: &StepSpec, workspace: &Path) -> Result<i32> {
+        let mut watcher = ProcessWatcher::new();
+        let result = self.execute_with_watcher(step, workspace, &mut watcher).await?;
+        Ok(result.exit_code)
+    }
 
     /// Get the backend name.
     fn name(&self) -> &'static str;
@@ -50,12 +79,12 @@ pub trait ExecutionBackend: Send + Sync {
 }
 
 /// Create the default execution backend for the current platform.
-pub fn default_backend() -> Box<dyn ExecutionBackend> {
+pub async fn default_backend() -> Box<dyn ExecutionBackend> {
     #[cfg(target_os = "linux")]
     {
         // Try container backend first
         let container = ContainerBackend::new();
-        if futures::executor::block_on(container.is_available()) {
+        if container.is_available().await {
             return Box::new(container);
         }
     }

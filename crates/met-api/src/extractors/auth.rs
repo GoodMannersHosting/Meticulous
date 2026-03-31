@@ -11,6 +11,7 @@ use axum::{
     extract::{FromRef, FromRequestParts},
     http::{header::AUTHORIZATION, request::Parts},
 };
+use met_core::ids::ProjectId;
 use met_core::{OrganizationId, UserId};
 use met_store::PgPool;
 use std::collections::HashSet;
@@ -30,6 +31,9 @@ pub struct CurrentUser {
     pub permissions: HashSet<String>,
     /// Whether this is an API token (vs JWT).
     pub is_api_token: bool,
+    /// Project IDs this token can access (None = all projects).
+    /// Only set for API tokens with project scope restrictions.
+    pub project_ids: Option<Vec<ProjectId>>,
 }
 
 impl CurrentUser {
@@ -46,6 +50,17 @@ impl CurrentUser {
     /// Check if the user has all of the specified permissions.
     pub fn has_all_permissions(&self, permissions: &[&str]) -> bool {
         permissions.iter().all(|p| self.has_permission(p))
+    }
+
+    /// Check if the user can access a specific project.
+    /// 
+    /// Returns true if:
+    /// - `project_ids` is None (user has access to all projects)
+    /// - `project_ids` contains the specified project
+    pub fn can_access_project(&self, project_id: ProjectId) -> bool {
+        self.project_ids
+            .as_ref()
+            .map_or(true, |ids| ids.contains(&project_id))
     }
 }
 
@@ -184,6 +199,7 @@ mod tests {
                 .map(|s| s.to_string())
                 .collect(),
             is_api_token: false,
+            project_ids: None,
         };
 
         assert!(user.has_permission("pipelines:read"));
@@ -206,9 +222,44 @@ mod tests {
             name: None,
             permissions: ["*"].iter().map(|s| s.to_string()).collect(),
             is_api_token: false,
+            project_ids: None,
         };
 
         assert!(admin.has_permission("pipelines:read"));
         assert!(admin.has_permission("anything:at:all"));
+    }
+
+    #[test]
+    fn test_project_access() {
+        let project1 = ProjectId::new();
+        let project2 = ProjectId::new();
+        let project3 = ProjectId::new();
+
+        // User with no project restrictions
+        let unrestricted = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "user@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: false,
+            project_ids: None,
+        };
+        assert!(unrestricted.can_access_project(project1));
+        assert!(unrestricted.can_access_project(project2));
+
+        // User with specific project access
+        let restricted = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "user@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: true,
+            project_ids: Some(vec![project1, project2]),
+        };
+        assert!(restricted.can_access_project(project1));
+        assert!(restricted.can_access_project(project2));
+        assert!(!restricted.can_access_project(project3));
     }
 }

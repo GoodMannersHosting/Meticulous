@@ -144,6 +144,8 @@ message JobStatusUpdate {
     string error_message = 4;
     // Timestamp.
     meticulous.common.v1.Timestamp timestamp = 5;
+    // Execution metadata (populated on job completion).
+    optional JobExecutionMetadata execution_metadata = 6;
 }
 
 // Step status update from agent.
@@ -160,4 +162,34 @@ message StepStatusUpdate {
     string error_message = 5;
     // Timestamp.
     meticulous.common.v1.Timestamp timestamp = 6;
+}
+
+// Metadata about a binary that was executed during a job.
+message ExecutedBinary {
+    // Absolute path to the binary.
+    string path = 1;
+    // SHA-256 checksum of the binary file (hex-encoded).
+    string sha256 = 2;
+    // Number of times this binary was executed.
+    uint32 execution_count = 3;
+    // First execution timestamp.
+    meticulous.common.v1.Timestamp first_executed_at = 4;
+    // Last execution timestamp.
+    meticulous.common.v1.Timestamp last_executed_at = 5;
+    // Step IDs where this binary was executed.
+    repeated string step_ids = 6;
+}
+
+// Execution metadata collected during job run.
+message JobExecutionMetadata {
+    // Job run ID.
+    string job_run_id = 1;
+    // All binaries that were executed during the job.
+    repeated ExecutedBinary executed_binaries = 2;
+    // Total number of processes spawned (including nested children).
+    uint64 total_processes_spawned = 3;
+    // Maximum depth of the process tree.
+    uint32 execution_tree_depth = 4;
+    // Number of unique binaries executed.
+    uint32 unique_binaries_count = 5;
 }

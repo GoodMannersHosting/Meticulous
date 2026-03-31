@@ -7,13 +7,15 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use met_core::ids::{OrganizationId, TriggerId};
+use met_core::ids::{OrganizationId, ProjectId, TriggerId};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, instrument};
+use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
+    extractors::Auth,
     state::AppState,
 };
 
@@ -22,9 +24,11 @@ pub fn router() -> Router<AppState> {
         .route("/webhooks/{org_id}/{trigger_id}", post(handle_webhook))
         .route("/webhooks/github/{org_id}/{trigger_id}", post(handle_github_webhook))
         .route("/webhooks/gitlab/{org_id}/{trigger_id}", post(handle_gitlab_webhook))
+        .route("/webhooks/bitbucket/{org_id}/{trigger_id}", post(handle_bitbucket_webhook))
+        .route("/projects/{project_id}/scm/setup", post(setup_scm_webhook))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WebhookResponse {
     pub accepted: bool,
     pub run_id: Option<String>,
@@ -39,6 +43,19 @@ pub struct GenericWebhookPayload {
     pub ref_name: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/{org_id}/{trigger_id}",
+    params(
+        ("org_id" = String, Path, description = "Organization ID"),
+        ("trigger_id" = String, Path, description = "Trigger ID"),
+    ),
+    responses(
+        (status = 200, description = "Webhook accepted", body = WebhookResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "webhooks",
+)]
 #[instrument(skip(body))]
 async fn handle_webhook(
     State(_state): State<AppState>,
@@ -128,9 +145,23 @@ const GITHUB_SIGNATURE_HEADER: &str = "x-hub-signature-256";
 const GITHUB_EVENT_HEADER: &str = "x-github-event";
 const GITHUB_DELIVERY_HEADER: &str = "x-github-delivery";
 
-#[instrument(skip(headers, body))]
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/github/{org_id}/{trigger_id}",
+    params(
+        ("org_id" = String, Path, description = "Organization ID"),
+        ("trigger_id" = String, Path, description = "Trigger ID"),
+    ),
+    responses(
+        (status = 200, description = "GitHub webhook accepted", body = WebhookResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Invalid signature"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state, headers, body))]
 async fn handle_github_webhook(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
     headers: HeaderMap,
     body: Bytes,
@@ -152,6 +183,17 @@ async fn handle_github_webhook(
         delivery_id = ?delivery_id,
         "received GitHub webhook"
     );
+
+    if let Some(secret) = lookup_webhook_secret(state.db(), trigger_id).await? {
+        let signature = headers
+            .get(GITHUB_SIGNATURE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
+
+        if !verify_github_signature(secret.as_bytes(), &body, signature) {
+            return Err(ApiError::forbidden("Invalid webhook signature"));
+        }
+    }
 
     let payload: GitHubWebhookPayload = serde_json::from_slice(&body)
         .map_err(|e| ApiError::bad_request(format!("Invalid GitHub payload: {e}")))?;
@@ -230,6 +272,19 @@ pub struct GitLabCommit {
 const GITLAB_EVENT_HEADER: &str = "x-gitlab-event";
 const GITLAB_TOKEN_HEADER: &str = "x-gitlab-token";
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/gitlab/{org_id}/{trigger_id}",
+    params(
+        ("org_id" = String, Path, description = "Organization ID"),
+        ("trigger_id" = String, Path, description = "Trigger ID"),
+    ),
+    responses(
+        (status = 200, description = "GitLab webhook accepted", body = WebhookResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "webhooks",
+)]
 #[instrument(skip(headers, body))]
 async fn handle_gitlab_webhook(
     State(_state): State<AppState>,
@@ -315,4 +370,222 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b.iter()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+async fn lookup_webhook_secret(
+    pool: &sqlx::PgPool,
+    trigger_id: TriggerId,
+) -> ApiResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT secret_hash FROM webhook_registrations WHERE id = $1 AND active = true",
+    )
+    .bind(trigger_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    Ok(row.map(|(s,)| s))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketWebhookPayload {
+    pub push: Option<BitbucketPush>,
+    pub pullrequest: Option<BitbucketPullRequest>,
+    pub repository: Option<BitbucketRepository>,
+    pub actor: Option<BitbucketActor>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketPush {
+    pub changes: Vec<BitbucketChange>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketChange {
+    pub new: Option<BitbucketRef>,
+    pub old: Option<BitbucketRef>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketRef {
+    pub name: String,
+    pub target: Option<BitbucketTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketTarget {
+    pub hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketPullRequest {
+    pub id: i64,
+    pub title: String,
+    pub source: BitbucketPRRef,
+    pub destination: BitbucketPRRef,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketPRRef {
+    pub branch: BitbucketBranch,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketBranch {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketRepository {
+    pub uuid: String,
+    pub full_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitbucketActor {
+    pub display_name: String,
+}
+
+const BITBUCKET_EVENT_HEADER: &str = "x-event-key";
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/webhooks/bitbucket/{org_id}/{trigger_id}",
+    params(
+        ("org_id" = String, Path, description = "Organization ID"),
+        ("trigger_id" = String, Path, description = "Trigger ID"),
+    ),
+    responses(
+        (status = 200, description = "Bitbucket webhook accepted", body = WebhookResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state, headers, body))]
+async fn handle_bitbucket_webhook(
+    State(state): State<AppState>,
+    Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<WebhookResponse>> {
+    let event = headers
+        .get(BITBUCKET_EVENT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    debug!(
+        org_id = %org_id,
+        trigger_id = %trigger_id,
+        event = %event,
+        "received Bitbucket webhook"
+    );
+
+    let _secret = lookup_webhook_secret(state.db(), trigger_id).await?;
+
+    let payload: BitbucketWebhookPayload = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::bad_request(format!("Invalid Bitbucket payload: {e}")))?;
+
+    let (branch, commit_sha) = if let Some(ref push) = payload.push {
+        let change = push.changes.first();
+        let branch = change.and_then(|c| c.new.as_ref()).map(|r| r.name.clone());
+        let commit_sha = change
+            .and_then(|c| c.new.as_ref())
+            .and_then(|r| r.target.as_ref())
+            .map(|t| t.hash.clone());
+        (branch, commit_sha)
+    } else if let Some(ref pr) = payload.pullrequest {
+        (Some(pr.source.branch.name.clone()), None)
+    } else {
+        (None, None)
+    };
+
+    info!(
+        event = %event,
+        branch = ?branch,
+        commit = ?commit_sha,
+        "Bitbucket webhook processed"
+    );
+
+    Ok(Json(WebhookResponse {
+        accepted: true,
+        run_id: None,
+        message: format!("Bitbucket {} event received", event),
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetupScmWebhookRequest {
+    pub provider: String,
+    pub repository_url: String,
+    pub events: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SetupScmWebhookResponse {
+    pub webhook_id: String,
+    pub webhook_url: String,
+    pub provider: String,
+    pub events: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/scm/setup",
+    params(("project_id" = String, Path, description = "Project ID")),
+    request_body = SetupScmWebhookRequest,
+    responses(
+        (status = 200, description = "SCM webhook configured", body = SetupScmWebhookResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn setup_scm_webhook(
+    State(state): State<AppState>,
+    Auth(_user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<SetupScmWebhookRequest>,
+) -> ApiResult<Json<SetupScmWebhookResponse>> {
+    let provider = req.provider.to_lowercase();
+    if !matches!(provider.as_str(), "github" | "gitlab" | "bitbucket") {
+        return Err(ApiError::bad_request(format!(
+            "Unsupported SCM provider: {}. Supported: github, gitlab, bitbucket",
+            req.provider
+        )));
+    }
+
+    let events = req.events.unwrap_or_else(|| vec!["push".to_string(), "pull_request".to_string()]);
+
+    let secret = uuid::Uuid::new_v4().to_string();
+    let secret_hash = format!("{:x}", Sha256::digest(secret.as_bytes()));
+
+    let webhook_id: (uuid::Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO webhook_registrations (project_id, provider, secret_hash, events)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        "#,
+    )
+    .bind(project_id.as_uuid())
+    .bind(&provider)
+    .bind(&secret_hash)
+    .bind(&events)
+    .fetch_one(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let trigger_id = webhook_id.0;
+    let webhook_url = format!(
+        "/api/v1/webhooks/{provider}/{org}/{trigger}",
+        provider = provider,
+        org = _user.org_id,
+        trigger = trigger_id,
+    );
+
+    Ok(Json(SetupScmWebhookResponse {
+        webhook_id: trigger_id.to_string(),
+        webhook_url,
+        provider,
+        events,
+    }))
 }

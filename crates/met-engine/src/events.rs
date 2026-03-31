@@ -349,6 +349,73 @@ impl EventBroadcaster {
         debug!(success, exit_code, duration_ms, "published step.completed event");
         Ok(())
     }
+
+    /// Publish a log chunk event for real-time streaming.
+    #[instrument(skip(self, content), fields(job_run_id = %job_run_id))]
+    pub async fn log_chunk(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+        content: &str,
+    ) -> Result<()> {
+        #[derive(serde::Serialize)]
+        struct LogChunkEvent {
+            job_run_id: JobRunId,
+            step_run_id: Option<StepRunId>,
+            content: String,
+        }
+
+        let event = EventEnvelope::new(
+            "log.chunk",
+            &self.source,
+            LogChunkEvent {
+                job_run_id,
+                step_run_id,
+                content: content.to_string(),
+            },
+        );
+
+        let subject = format!("met.logs.{}", job_run_id.as_uuid());
+        self.publish(&subject, event).await?;
+        Ok(())
+    }
+
+    /// Publish a run cancelled event.
+    #[instrument(skip(self), fields(run_id = %run_id, pipeline_id = %pipeline_id))]
+    pub async fn run_cancelled(
+        &self,
+        run_id: RunId,
+        pipeline_id: PipelineId,
+        cancelled_by: Option<&str>,
+        trace_id: Option<&str>,
+    ) -> Result<()> {
+        #[derive(serde::Serialize)]
+        struct RunCancelled {
+            run_id: RunId,
+            pipeline_id: PipelineId,
+            cancelled_by: Option<String>,
+        }
+
+        let event = EventEnvelope::new(
+            "run.cancelled",
+            &self.source,
+            RunCancelled {
+                run_id,
+                pipeline_id,
+                cancelled_by: cancelled_by.map(|s| s.to_string()),
+            },
+        );
+        let event = if let Some(tid) = trace_id {
+            event.with_trace_id(tid)
+        } else {
+            event
+        };
+
+        let subject = subjects::run_events(pipeline_id);
+        self.publish(&subject, event).await?;
+        debug!("published run.cancelled event");
+        Ok(())
+    }
 }
 
 /// Null broadcaster for testing without NATS.

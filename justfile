@@ -179,6 +179,19 @@ dev-all: up db-migrate
     @just frontend-dev
 
 # ============================================================================
+# OpenAPI
+# ============================================================================
+
+# Generate the OpenAPI spec JSON
+openapi-generate:
+    cargo run --bin met-api -- --dump-openapi > openapi.json
+
+# Check that the committed OpenAPI spec is up to date
+openapi-check:
+    cargo run --bin met-api -- --dump-openapi > /tmp/openapi-check.json
+    diff -u openapi.json /tmp/openapi-check.json || (echo "OpenAPI spec is out of date. Run 'just openapi-generate' to update." && exit 1)
+
+# ============================================================================
 # CI Simulation
 # ============================================================================
 
@@ -187,3 +200,98 @@ ci: check fmt-check clippy test
 
 # Full CI with database tests
 ci-full: up db-migrate ci sqlx-check
+
+# ============================================================================
+# Agent Build & Deployment
+# ============================================================================
+
+# Build agent container image (amd64)
+agent-build-container:
+    podman build -t meticulous/agent:latest -f Dockerfile.agent --platform linux/amd64 .
+
+# Build agent container with a custom tag
+agent-build-container-tag tag:
+    podman build -t meticulous/agent:{{ tag }} -f Dockerfile.agent --platform linux/amd64 .
+
+# Build agent binary for the current platform
+agent-build-binary:
+    cargo build --release --bin met-agent
+
+# Build agent binary for amd64 Linux (cross-compile)
+agent-build-binary-amd64:
+    cargo build --release --bin met-agent --target x86_64-unknown-linux-gnu
+
+# Run agent locally (for development)
+agent-run:
+    cargo run --bin met-agent
+
+# Run agent with specific controller URL
+agent-run-with-controller url:
+    MET_CONTROLLER_URL={{ url }} cargo run --bin met-agent
+
+# ============================================================================
+# Cross-Platform Builds
+# ============================================================================
+
+# Install cross-compilation tool
+cross-install:
+    cargo install cross --git https://github.com/cross-rs/cross
+
+# Build all binaries for Linux amd64 (musl - static)
+build-linux-amd64-static:
+    cross build --release --target x86_64-unknown-linux-musl --bin met --bin met-api --bin met-agent
+
+# Build all binaries for Linux arm64 (musl - static)
+build-linux-arm64-static:
+    cross build --release --target aarch64-unknown-linux-musl --bin met --bin met-api --bin met-agent
+
+# Build all binaries for Linux amd64 (glibc)
+build-linux-amd64:
+    cargo build --release --target x86_64-unknown-linux-gnu --bin met --bin met-api --bin met-agent
+
+# Build all binaries for macOS amd64 (requires macOS host)
+build-darwin-amd64:
+    cargo build --release --target x86_64-apple-darwin --bin met --bin met-api --bin met-agent
+
+# Build all binaries for macOS arm64 (requires macOS host)
+build-darwin-arm64:
+    cargo build --release --target aarch64-apple-darwin --bin met --bin met-api --bin met-agent
+
+# Build agent for all Linux targets (requires cross)
+agent-build-all-linux: cross-install
+    @echo "Building met-agent for Linux amd64 (musl)..."
+    cross build --release --target x86_64-unknown-linux-musl --bin met-agent
+    @echo "Building met-agent for Linux arm64 (musl)..."
+    cross build --release --target aarch64-unknown-linux-musl --bin met-agent
+    @echo "Done! Binaries in target/*/release/"
+
+# Create release tarballs for all built targets
+package-release tag:
+    @mkdir -p dist
+    @echo "Packaging Linux amd64 static..."
+    @if [ -f target/x86_64-unknown-linux-musl/release/met-agent ]; then \
+        tar -czvf dist/met-agent-{{ tag }}-linux-amd64-static.tar.gz \
+            -C target/x86_64-unknown-linux-musl/release met-agent; \
+    fi
+    @echo "Packaging Linux arm64 static..."
+    @if [ -f target/aarch64-unknown-linux-musl/release/met-agent ]; then \
+        tar -czvf dist/met-agent-{{ tag }}-linux-arm64-static.tar.gz \
+            -C target/aarch64-unknown-linux-musl/release met-agent; \
+    fi
+    @echo "Release artifacts in dist/"
+
+# ============================================================================
+# Operator Build & Deploy
+# ============================================================================
+
+# Build operator container image
+operator-build-container:
+    podman build -t meticulous/operator:latest -f Dockerfile.operator --platform linux/amd64 .
+
+# Install CRDs to current Kubernetes cluster
+operator-install-crds:
+    kubectl apply -f crates/met-operator/crds/
+
+# Run operator locally (for development)
+operator-run:
+    cargo run --bin met-operator

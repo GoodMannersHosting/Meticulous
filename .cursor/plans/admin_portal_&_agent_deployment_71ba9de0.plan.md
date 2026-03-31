@@ -34,22 +34,22 @@ todos:
     status: pending
   - id: phase3-github
     content: Implement GitHub OAuth provider
-    status: pending
+    status: completed
   - id: phase3-provider-ui
     content: Create auth providers management UI at /admin/auth
     status: pending
   - id: phase4-tokens
     content: Complete API token validation with project scoping
-    status: pending
+    status: completed
   - id: phase4-token-api
     content: Add token CRUD endpoints and wire frontend
-    status: pending
+    status: completed
   - id: phase5-dockerfile
     content: Create Dockerfile.agent for amd64 container builds
-    status: pending
+    status: completed
   - id: phase5-join-tokens
     content: Add join token management UI at /admin/agents
-    status: pending
+    status: completed
 isProject: false
 ---
 

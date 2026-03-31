@@ -19,6 +19,7 @@ use met_core::ids::UserId;
 use met_core::models::{CreateOrganization, User};
 use met_store::repos::{AuthProviderRepo, OrganizationRepo, UserRepo};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Build the auth router.
 pub fn router() -> Router<AppState> {
@@ -34,7 +35,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Public auth provider info (for login page).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PublicAuthProvider {
     pub id: String,
     pub name: String,
@@ -42,7 +43,7 @@ pub struct PublicAuthProvider {
 }
 
 /// Auth providers response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AuthProvidersResponse {
     /// Whether password authentication is enabled.
     pub password_enabled: bool,
@@ -51,6 +52,14 @@ pub struct AuthProvidersResponse {
 }
 
 /// List enabled auth providers (public endpoint for login page).
+#[utoipa::path(
+    get,
+    path = "/auth/providers",
+    responses(
+        (status = 200, description = "Auth providers", body = AuthProvidersResponse),
+    ),
+    tag = "auth",
+)]
 async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> ApiResult<Json<AuthProvidersResponse>> {
@@ -83,7 +92,7 @@ async fn list_auth_providers(
 }
 
 /// Login request body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     /// Username or email.
     pub username: String,
@@ -92,7 +101,7 @@ pub struct LoginRequest {
 }
 
 /// Login response body.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LoginResponse {
     /// JWT access token.
     pub token: String,
@@ -105,7 +114,7 @@ pub struct LoginResponse {
 }
 
 /// User response body (sanitized, no password hash).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserResponse {
     pub id: String,
     pub username: String,
@@ -128,6 +137,16 @@ impl From<&User> for UserResponse {
 }
 
 /// Login with username and password.
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful", body = LoginResponse),
+        (status = 401, description = "Invalid credentials"),
+    ),
+    tag = "auth",
+)]
 async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -205,6 +224,15 @@ async fn login(
 }
 
 /// Get current user information.
+#[utoipa::path(
+    get,
+    path = "/auth/me",
+    responses(
+        (status = 200, description = "Current user info", body = MeResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "auth",
+)]
 async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
     // Determine role based on permissions - if they have "*" they're an admin
     let role = if user.permissions.contains("*") {
@@ -229,7 +257,7 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
 }
 
 /// Current user response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MeResponse {
     pub id: String,
     pub email: String,
@@ -240,6 +268,14 @@ pub struct MeResponse {
 }
 
 /// Logout (client-side token invalidation).
+#[utoipa::path(
+    post,
+    path = "/auth/logout",
+    responses(
+        (status = 200, description = "Logged out", body = LogoutResponse),
+    ),
+    tag = "auth",
+)]
 async fn logout() -> ApiResult<Json<LogoutResponse>> {
     // JWT tokens are stateless, so logout is handled client-side.
     // In a production system, you might want to add the token to a blocklist.
@@ -249,19 +285,27 @@ async fn logout() -> ApiResult<Json<LogoutResponse>> {
 }
 
 /// Logout response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LogoutResponse {
     pub message: String,
 }
 
 /// Setup status response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SetupStatusResponse {
     /// Whether initial setup is required.
     pub setup_required: bool,
 }
 
 /// Check if initial setup is required.
+#[utoipa::path(
+    get,
+    path = "/auth/setup",
+    responses(
+        (status = 200, description = "Setup status", body = SetupStatusResponse),
+    ),
+    tag = "auth",
+)]
 async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<SetupStatusResponse>> {
     let user_repo = UserRepo::new(state.db());
     let has_users = user_repo.any_users_exist().await?;
@@ -272,7 +316,7 @@ async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<SetupStat
 }
 
 /// Initial setup request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SetupRequest {
     /// Admin username.
     pub username: String,
@@ -290,7 +334,7 @@ fn default_org_name() -> String {
 }
 
 /// Initial setup response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SetupResponse {
     pub message: String,
     pub token: String,
@@ -300,6 +344,17 @@ pub struct SetupResponse {
 }
 
 /// Perform initial system setup.
+#[utoipa::path(
+    post,
+    path = "/auth/setup",
+    request_body = SetupRequest,
+    responses(
+        (status = 200, description = "Setup completed", body = SetupResponse),
+        (status = 400, description = "Bad request"),
+        (status = 409, description = "Setup already completed"),
+    ),
+    tag = "auth",
+)]
 async fn setup(
     State(state): State<AppState>,
     Json(req): Json<SetupRequest>,
@@ -379,7 +434,7 @@ async fn setup(
 }
 
 /// Change password request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ChangePasswordRequest {
     /// Current password for verification.
     pub current_password: String,
@@ -388,12 +443,23 @@ pub struct ChangePasswordRequest {
 }
 
 /// Change password response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ChangePasswordResponse {
     pub message: String,
 }
 
 /// Change the current user's password.
+#[utoipa::path(
+    post,
+    path = "/auth/change-password",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Password changed", body = ChangePasswordResponse),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Current password incorrect"),
+    ),
+    tag = "auth",
+)]
 async fn change_password(
     State(state): State<AppState>,
     Auth(current_user): Auth,
@@ -432,19 +498,31 @@ async fn change_password(
 }
 
 /// Admin reset password request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AdminResetPasswordRequest {
     /// New password for the user.
     pub new_password: String,
 }
 
 /// Admin reset password response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminResetPasswordResponse {
     pub message: String,
 }
 
 /// Admin endpoint to reset a user's password.
+#[utoipa::path(
+    post,
+    path = "/admin/users/{id}/reset-password",
+    params(("id" = String, Path, description = "User ID")),
+    request_body = AdminResetPasswordRequest,
+    responses(
+        (status = 200, description = "Password reset", body = AdminResetPasswordResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Admin access required"),
+    ),
+    tag = "auth",
+)]
 async fn admin_reset_password(
     State(state): State<AppState>,
     Auth(admin): Auth,

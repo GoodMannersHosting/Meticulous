@@ -13,9 +13,10 @@ use axum::{
     routing::get,
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// Health check response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     /// Service status.
     pub status: &'static str,
@@ -24,7 +25,7 @@ pub struct HealthResponse {
 }
 
 /// Readiness check response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadyResponse {
     /// Overall readiness status.
     pub status: &'static str,
@@ -35,14 +36,14 @@ pub struct ReadyResponse {
 }
 
 /// Component readiness checks.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadyChecks {
     /// Database connectivity status.
     pub database: CheckStatus,
 }
 
 /// Status of an individual check.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CheckStatus {
     /// Whether the check passed.
     pub healthy: bool,
@@ -62,6 +63,14 @@ pub fn router() -> Router<AppState> {
 ///
 /// Returns 200 OK if the service is running.
 /// This endpoint is suitable for Kubernetes liveness probes.
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service is alive", body = HealthResponse),
+    ),
+    tag = "health",
+)]
 async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
@@ -74,6 +83,15 @@ async fn health_handler() -> Json<HealthResponse> {
 /// Returns 200 OK if all dependencies are healthy.
 /// Returns 503 Service Unavailable if any dependency is unhealthy.
 /// This endpoint is suitable for Kubernetes readiness probes.
+#[utoipa::path(
+    get,
+    path = "/ready",
+    responses(
+        (status = 200, description = "Service is ready", body = ReadyResponse),
+        (status = 503, description = "Service is not ready"),
+    ),
+    tag = "health",
+)]
 async fn ready_handler(State(state): State<AppState>) -> Result<Json<ReadyResponse>, ApiError> {
     let db_check = check_database(&state).await;
     let all_healthy = db_check.healthy;

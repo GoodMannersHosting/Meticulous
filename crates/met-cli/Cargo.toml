@@ -10,12 +10,21 @@ repository.workspace = true
 name = "met"
 path = "src/main.rs"
 
+[features]
+default = ["keyring"]
+
 [dependencies]
 met-core = { workspace = true }
 met-parser = { workspace = true }
 clap = { workspace = true }
 chrono = { workspace = true }
+comfy-table = "7"
+colored = "3"
+dialoguer = "0.11"
+directories = { workspace = true }
 futures = { workspace = true }
+indicatif = "0.17"
+open = "5"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -23,9 +32,11 @@ serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = "0.28"
+toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+keyring = { version = "3", optional = true }
 
 [lints]
 workspace = true

@@ -1,6 +1,11 @@
-//! CLI command implementations.
-
 pub mod agents;
+pub mod auth;
 pub mod config;
+pub mod debug;
+pub mod org;
 pub mod pipelines;
+pub mod project;
 pub mod runs;
+pub mod secret;
+pub mod variable;
+pub mod workflow;

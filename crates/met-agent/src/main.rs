@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create execution backend
-    let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(backend::default_backend());
+    let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(backend::default_backend().await);
     info!(backend = backend.name(), "using execution backend");
 
     // Create heartbeat state

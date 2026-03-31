@@ -12,6 +12,7 @@ use met_core::{
 use met_store::repos::ProjectRepo;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
@@ -31,12 +32,26 @@ pub fn router() -> Router<AppState> {
         .route("/projects/{id}/unarchive", post(unarchive_project))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectResponse {
     #[serde(flatten)]
+    #[schema(value_type = Object)]
     pub project: Project,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects",
+    params(
+        ("cursor" = Option<String>, Query, description = "Pagination cursor"),
+        ("limit" = Option<u32>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "List of projects", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "projects",
+)]
 #[instrument(skip(state))]
 async fn list_projects(
     State(state): State<AppState>,
@@ -61,13 +76,14 @@ async fn list_projects(
     Ok(Json(response))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateProjectRequest {
     pub name: String,
     pub slug: String,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default = "default_owner_type")]
+    #[schema(value_type = String)]
     pub owner_type: OwnerType,
     #[serde(default)]
     pub owner_id: Option<String>,
@@ -77,6 +93,17 @@ fn default_owner_type() -> OwnerType {
     OwnerType::User
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects",
+    request_body = CreateProjectRequest,
+    responses(
+        (status = 200, description = "Project created", body = ProjectResponse),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "projects",
+)]
 #[instrument(skip(state, req))]
 async fn create_project(
     State(state): State<AppState>,
@@ -120,6 +147,16 @@ async fn create_project(
     Ok(Json(ProjectResponse { project }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{id}",
+    params(("id" = String, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Project details", body = ProjectResponse),
+        (status = 404, description = "Project not found"),
+    ),
+    tag = "projects",
+)]
 #[instrument(skip(state))]
 async fn get_project(
     State(state): State<AppState>,
@@ -142,12 +179,24 @@ async fn get_project_by_slug(
     Ok(Json(ProjectResponse { project }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{id}",
+    params(("id" = String, Path, description = "Project ID")),
+    request_body = UpdateProjectRequest,
+    responses(
+        (status = 200, description = "Project updated", body = ProjectResponse),
+        (status = 400, description = "Bad request"),
+        (status = 404, description = "Project not found"),
+    ),
+    tag = "projects",
+)]
 #[instrument(skip(state, req))]
 async fn update_project(
     State(state): State<AppState>,
@@ -175,6 +224,16 @@ async fn update_project(
     Ok(Json(ProjectResponse { project }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{id}",
+    params(("id" = String, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Project deleted"),
+        (status = 404, description = "Project not found"),
+    ),
+    tag = "projects",
+)]
 #[instrument(skip(state))]
 async fn delete_project(
     State(state): State<AppState>,
