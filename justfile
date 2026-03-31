@@ -8,6 +8,346 @@ default:
     @just --list
 
 # ============================================================================
+# Build Host Setup
+# ============================================================================
+
+# Check if all build requirements are installed (works on macOS and Linux)
+check-requirements:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Checking build requirements..."
+    echo ""
+    
+    missing=()
+    
+    # Check Rust
+    if command -v rustc &> /dev/null; then
+        version=$(rustc --version)
+        echo "✓ Rust: $version"
+    else
+        echo "✗ Rust: not installed"
+        missing+=("rust")
+    fi
+    
+    # Check Cargo
+    if command -v cargo &> /dev/null; then
+        version=$(cargo --version)
+        echo "✓ Cargo: $version"
+    else
+        echo "✗ Cargo: not installed"
+        missing+=("cargo")
+    fi
+    
+    # Check rustfmt
+    if rustup component list 2>/dev/null | grep -q "rustfmt.*installed"; then
+        echo "✓ rustfmt: installed"
+    else
+        echo "✗ rustfmt: not installed"
+        missing+=("rustfmt")
+    fi
+    
+    # Check clippy
+    if rustup component list 2>/dev/null | grep -q "clippy.*installed"; then
+        echo "✓ clippy: installed"
+    else
+        echo "✗ clippy: not installed"
+        missing+=("clippy")
+    fi
+    
+    # Check just
+    if command -v just &> /dev/null; then
+        version=$(just --version)
+        echo "✓ just: $version"
+    else
+        echo "✗ just: not installed"
+        missing+=("just")
+    fi
+    
+    # Check protoc (optional but recommended)
+    if command -v protoc &> /dev/null; then
+        version=$(protoc --version)
+        echo "✓ protoc: $version"
+    else
+        echo "○ protoc: not installed (optional - prost-build bundles protoc)"
+    fi
+    
+    # Check buf (for proto linting)
+    if command -v buf &> /dev/null; then
+        version=$(buf --version 2>&1 || echo "unknown")
+        echo "✓ buf: $version"
+    else
+        echo "○ buf: not installed (needed for proto-lint, proto-breaking)"
+        missing+=("buf")
+    fi
+    
+    # Check sqlx-cli
+    if command -v sqlx &> /dev/null; then
+        version=$(sqlx --version)
+        echo "✓ sqlx-cli: $version"
+    else
+        echo "○ sqlx-cli: not installed (needed for db-migrate, sqlx-prepare)"
+        missing+=("sqlx-cli")
+    fi
+    
+    # Check cargo-watch (optional for dev)
+    if cargo install --list 2>/dev/null | grep -q "^cargo-watch"; then
+        echo "✓ cargo-watch: installed"
+    else
+        echo "○ cargo-watch: not installed (needed for dev, watch commands)"
+        missing+=("cargo-watch")
+    fi
+    
+    # Check cross (optional for cross-compilation)
+    if cargo install --list 2>/dev/null | grep -q "^cross"; then
+        echo "✓ cross: installed"
+    else
+        echo "○ cross: not installed (needed for cross-platform builds)"
+        missing+=("cross")
+    fi
+    
+    # Check Node.js (for frontend)
+    if command -v node &> /dev/null; then
+        version=$(node --version)
+        echo "✓ Node.js: $version"
+    else
+        echo "○ Node.js: not installed (needed for frontend development)"
+        missing+=("node")
+    fi
+    
+    # Check npm
+    if command -v npm &> /dev/null; then
+        version=$(npm --version)
+        echo "✓ npm: $version"
+    else
+        echo "○ npm: not installed (needed for frontend development)"
+        missing+=("npm")
+    fi
+    
+    # macOS-specific checks
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo ""
+        echo "macOS-specific requirements:"
+        
+        # Check Xcode Command Line Tools
+        if xcode-select -p &> /dev/null; then
+            echo "✓ Xcode Command Line Tools: installed"
+        else
+            echo "✗ Xcode Command Line Tools: not installed"
+            missing+=("xcode-cli")
+        fi
+        
+        # Check Homebrew
+        if command -v brew &> /dev/null; then
+            echo "✓ Homebrew: installed"
+        else
+            echo "○ Homebrew: not installed (recommended for installing dependencies)"
+            missing+=("homebrew")
+        fi
+        
+        # Check macOS targets
+        echo ""
+        echo "Rust targets for macOS builds:"
+        if rustup target list 2>/dev/null | grep -q "x86_64-apple-darwin (installed)"; then
+            echo "✓ x86_64-apple-darwin: installed"
+        else
+            echo "○ x86_64-apple-darwin: not installed"
+            missing+=("target-x86_64-apple-darwin")
+        fi
+        if rustup target list 2>/dev/null | grep -q "aarch64-apple-darwin (installed)"; then
+            echo "✓ aarch64-apple-darwin: installed"
+        else
+            echo "○ aarch64-apple-darwin: not installed"
+            missing+=("target-aarch64-apple-darwin")
+        fi
+    fi
+    
+    echo ""
+    if [ ${#missing[@]} -eq 0 ]; then
+        echo "All requirements satisfied!"
+    else
+        echo "Missing or optional components: ${missing[*]}"
+        echo "Run 'just setup-macos' on macOS or 'just setup-linux' on Linux to install."
+    fi
+
+# Install all build requirements on macOS
+setup-macos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    if [[ "$(uname)" != "Darwin" ]]; then
+        echo "Error: This recipe is for macOS only"
+        exit 1
+    fi
+    
+    echo "Setting up macOS build environment..."
+    echo ""
+    
+    # Install Xcode Command Line Tools if not present
+    if ! xcode-select -p &> /dev/null; then
+        echo "Installing Xcode Command Line Tools..."
+        xcode-select --install
+        echo "Please complete the Xcode CLI installation and re-run this command."
+        exit 0
+    fi
+    echo "✓ Xcode Command Line Tools"
+    
+    # Install Homebrew if not present
+    if ! command -v brew &> /dev/null; then
+        echo "Installing Homebrew..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        # Add to path for this session
+        eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
+    fi
+    echo "✓ Homebrew"
+    
+    # Install Rust via rustup if not present
+    if ! command -v rustup &> /dev/null; then
+        echo "Installing Rust via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
+    fi
+    echo "✓ Rust"
+    
+    # Ensure stable toolchain and components
+    echo "Configuring Rust toolchain..."
+    rustup default stable
+    rustup component add rustfmt clippy
+    echo "✓ rustfmt and clippy"
+    
+    # Add macOS targets for cross-compilation (both Intel and Apple Silicon)
+    echo "Adding macOS build targets..."
+    rustup target add x86_64-apple-darwin
+    rustup target add aarch64-apple-darwin
+    echo "✓ macOS targets (x86_64 and aarch64)"
+    
+    # Install just
+    if ! command -v just &> /dev/null; then
+        echo "Installing just..."
+        brew install just
+    fi
+    echo "✓ just"
+    
+    # Install protobuf (for proto tooling)
+    if ! command -v protoc &> /dev/null; then
+        echo "Installing protobuf..."
+        brew install protobuf
+    fi
+    echo "✓ protobuf"
+    
+    # Install buf (for proto linting)
+    if ! command -v buf &> /dev/null; then
+        echo "Installing buf..."
+        brew install bufbuild/buf/buf
+    fi
+    echo "✓ buf"
+    
+    # Install sqlx-cli
+    if ! command -v sqlx &> /dev/null; then
+        echo "Installing sqlx-cli..."
+        cargo install sqlx-cli --no-default-features --features rustls,postgres
+    fi
+    echo "✓ sqlx-cli"
+    
+    # Install cargo-watch
+    if ! cargo install --list 2>/dev/null | grep -q "^cargo-watch"; then
+        echo "Installing cargo-watch..."
+        cargo install cargo-watch
+    fi
+    echo "✓ cargo-watch"
+    
+    # Install Node.js (for frontend)
+    if ! command -v node &> /dev/null; then
+        echo "Installing Node.js..."
+        brew install node
+    fi
+    echo "✓ Node.js"
+    
+    echo ""
+    echo "macOS build environment setup complete!"
+    echo "Run 'just check-requirements' to verify installation."
+
+# Install all build requirements on Linux (Debian/Ubuntu)
+setup-linux:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    if [[ "$(uname)" != "Linux" ]]; then
+        echo "Error: This recipe is for Linux only"
+        exit 1
+    fi
+    
+    echo "Setting up Linux build environment..."
+    echo ""
+    
+    # Install system dependencies
+    echo "Installing system dependencies..."
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler
+    elif command -v dnf &> /dev/null; then
+        sudo dnf install -y gcc gcc-c++ make openssl-devel protobuf-compiler
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S --needed base-devel openssl protobuf
+    else
+        echo "Warning: Unknown package manager. Please install build-essential, pkg-config, libssl-dev, and protobuf manually."
+    fi
+    echo "✓ System dependencies"
+    
+    # Install Rust via rustup if not present
+    if ! command -v rustup &> /dev/null; then
+        echo "Installing Rust via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
+    fi
+    echo "✓ Rust"
+    
+    # Ensure stable toolchain and components
+    echo "Configuring Rust toolchain..."
+    rustup default stable
+    rustup component add rustfmt clippy
+    echo "✓ rustfmt and clippy"
+    
+    # Install just
+    if ! command -v just &> /dev/null; then
+        echo "Installing just..."
+        cargo install just
+    fi
+    echo "✓ just"
+    
+    # Install buf (for proto linting)
+    if ! command -v buf &> /dev/null; then
+        echo "Installing buf..."
+        BUF_VERSION="1.47.2"
+        curl -sSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-$(uname -s)-$(uname -m)" -o /tmp/buf
+        chmod +x /tmp/buf
+        sudo mv /tmp/buf /usr/local/bin/buf
+    fi
+    echo "✓ buf"
+    
+    # Install sqlx-cli
+    if ! command -v sqlx &> /dev/null; then
+        echo "Installing sqlx-cli..."
+        cargo install sqlx-cli --no-default-features --features rustls,postgres
+    fi
+    echo "✓ sqlx-cli"
+    
+    # Install cargo-watch
+    if ! cargo install --list 2>/dev/null | grep -q "^cargo-watch"; then
+        echo "Installing cargo-watch..."
+        cargo install cargo-watch
+    fi
+    echo "✓ cargo-watch"
+    
+    echo ""
+    echo "Linux build environment setup complete!"
+    echo "Run 'just check-requirements' to verify installation."
+    echo ""
+    echo "For frontend development, also install Node.js:"
+    echo "  curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -"
+    echo "  sudo apt-get install -y nodejs"
+
+# ============================================================================
 # Development Environment
 # ============================================================================
 
