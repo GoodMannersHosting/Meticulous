@@ -45,7 +45,7 @@
 			const projectId = $page.params.id!;
 			project = await apiMethods.projects.get(projectId);
 			const pipelinesResponse = await apiMethods.pipelines.list({ project_id: projectId });
-			pipelines = pipelinesResponse.items;
+			pipelines = pipelinesResponse.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load project';
 		} finally {

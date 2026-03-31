@@ -120,6 +120,30 @@ class AuthStore {
 		}
 	}
 
+	async handleOAuthToken(token: string): Promise<void> {
+		try {
+			this.#state = 'loading';
+			this.#error = null;
+
+			if (browser) {
+				localStorage.setItem('auth_token', token);
+			}
+
+			const user = await apiMethods.auth.me();
+			this.#user = user;
+			this.#state = 'authenticated';
+
+			goto('/dashboard');
+		} catch (err) {
+			if (browser) {
+				localStorage.removeItem('auth_token');
+			}
+			this.#state = 'unauthenticated';
+			this.#error = err instanceof Error ? err.message : 'Authentication failed';
+			throw err;
+		}
+	}
+
 	async logout(): Promise<void> {
 		try {
 			await apiMethods.auth.logout();

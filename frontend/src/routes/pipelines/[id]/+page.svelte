@@ -59,7 +59,7 @@
 		runsLoading = true;
 		try {
 			const response = await apiMethods.runs.list({ pipeline_id: pipeline.id });
-			runs = response.items;
+			runs = response.data;
 		} catch (e) {
 			console.error('Failed to load runs:', e);
 		} finally {

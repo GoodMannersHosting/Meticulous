@@ -44,7 +44,7 @@
 			const [statsRes, runsRes, agentsRes] = await Promise.all([
 				apiMethods.dashboard.stats().catch(() => null),
 				apiMethods.dashboard.recentRuns(10).catch(() => []),
-				apiMethods.agents.list({ per_page: 5 }).catch(() => ({ items: [] }))
+				apiMethods.agents.list({ per_page: 5 }).catch(() => ({ data: [], pagination: { has_more: false } }))
 			]);
 
 			stats = statsRes ?? {
@@ -58,7 +58,7 @@
 				projects_count: 0
 			};
 			recentRuns = runsRes ?? [];
-			agents = agentsRes.items ?? [];
+			agents = agentsRes.data ?? [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load dashboard';
 		} finally {

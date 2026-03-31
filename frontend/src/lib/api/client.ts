@@ -313,6 +313,25 @@ export const apiMethods = {
 				api.post<{ message: string; scheduled_deletion_at: string }>(`/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
 			cancelDeletion: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/cancel-deletion`),
 			forceDelete: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/force-delete`)
+		},
+		// Auth provider management
+		authProviders: {
+			list: () => api.get<import('./types').AuthProviderResponse[]>('/admin/auth-providers'),
+			get: (id: string) => api.get<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}`),
+			create: (data: { name: string; provider_type: string; client_id: string; client_secret: string; issuer_url?: string }) =>
+				api.post<import('./types').AuthProviderResponse>('/admin/auth-providers', data),
+			update: (id: string, data: { name?: string; client_id?: string; client_secret?: string; issuer_url?: string }) =>
+				api.patch<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}`, data),
+			enable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}/enable`),
+			disable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}/disable`),
+			delete: (id: string) => api.delete<{ message: string }>(`/admin/auth-providers/${id}`),
+			groupMappings: {
+				list: (providerId: string) => api.get<import('./types').GroupMappingResponse[]>(`/admin/auth-providers/${providerId}/group-mappings`),
+				create: (providerId: string, data: { oidc_group_claim: string; meticulous_group_id: string; role?: string }) =>
+					api.post<import('./types').GroupMappingResponse>(`/admin/auth-providers/${providerId}/group-mappings`, data),
+				delete: (providerId: string, mappingId: string) => 
+					api.delete<{ message: string }>(`/admin/auth-providers/${providerId}/group-mappings/${mappingId}`)
+			}
 		}
 	}
 };

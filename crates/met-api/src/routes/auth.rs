@@ -17,19 +17,69 @@ use axum::{
 };
 use met_core::ids::UserId;
 use met_core::models::{CreateOrganization, User};
-use met_store::repos::{OrganizationRepo, UserRepo};
+use met_store::repos::{AuthProviderRepo, OrganizationRepo, UserRepo};
 use serde::{Deserialize, Serialize};
 
 /// Build the auth router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/login", post(login))
+        .route("/auth/providers", get(list_auth_providers))
         .route("/auth/me", get(me))
         .route("/auth/logout", post(logout))
         .route("/auth/change-password", post(change_password))
         .route("/auth/setup", get(setup_status))
         .route("/auth/setup", post(setup))
         .route("/admin/users/{id}/reset-password", post(admin_reset_password))
+}
+
+/// Public auth provider info (for login page).
+#[derive(Debug, Serialize)]
+pub struct PublicAuthProvider {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+}
+
+/// Auth providers response.
+#[derive(Debug, Serialize)]
+pub struct AuthProvidersResponse {
+    /// Whether password authentication is enabled.
+    pub password_enabled: bool,
+    /// List of enabled SSO providers.
+    pub providers: Vec<PublicAuthProvider>,
+}
+
+/// List enabled auth providers (public endpoint for login page).
+async fn list_auth_providers(
+    State(state): State<AppState>,
+) -> ApiResult<Json<AuthProvidersResponse>> {
+    let org_repo = OrganizationRepo::new(state.db());
+    let provider_repo = AuthProviderRepo::new(state.db());
+
+    // Get the default organization
+    let orgs = org_repo.list(1, 0).await?;
+
+    let providers = if let Some(org) = orgs.first() {
+        // Get all enabled providers for this org
+        let all_providers = provider_repo.list(org.id).await?;
+        all_providers
+            .into_iter()
+            .filter(|p| p.enabled)
+            .map(|p| PublicAuthProvider {
+                id: p.id.to_string(),
+                name: p.name,
+                provider_type: p.provider_type,
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    Ok(Json(AuthProvidersResponse {
+        password_enabled: true, // TODO: Make this configurable
+        providers,
+    }))
 }
 
 /// Login request body.
@@ -156,12 +206,25 @@ async fn login(
 
 /// Get current user information.
 async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
+    // Determine role based on permissions - if they have "*" they're an admin
+    let role = if user.permissions.contains("*") {
+        "admin".to_string()
+    } else {
+        "user".to_string()
+    };
+
+    // Use display name, or derive from email if not set
+    let name = user.name.unwrap_or_else(|| {
+        user.email.split('@').next().unwrap_or(&user.email).to_string()
+    });
+
     Ok(Json(MeResponse {
         id: user.user_id.to_string(),
-        email: user.email,
-        name: user.name,
+        email: user.email.clone(),
+        name,
         org_id: user.org_id.to_string(),
-        permissions: user.permissions.into_iter().collect(),
+        role,
+        created_at: chrono::Utc::now().to_rfc3339(),
     }))
 }
 
@@ -170,10 +233,10 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
 pub struct MeResponse {
     pub id: String,
     pub email: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub name: String,
     pub org_id: String,
-    pub permissions: Vec<String>,
+    pub role: String,
+    pub created_at: String,
 }
 
 /// Logout (client-side token invalidation).

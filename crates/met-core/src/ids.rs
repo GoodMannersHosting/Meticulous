@@ -3,7 +3,7 @@
 //! Every entity in Meticulous has a unique ID type that wraps a UUIDv7.
 //! This prevents accidentally mixing IDs across entity types at compile time.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -12,10 +12,9 @@ use uuid::Uuid;
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident, $prefix:literal) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
         #[cfg_attr(feature = "sqlx", sqlx(transparent))]
-        #[serde(transparent)]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -90,6 +89,26 @@ macro_rules! define_id {
         impl From<$name> for Uuid {
             fn from(id: $name) -> Self {
                 id.0
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                // Serialize as prefixed string: "prefix_uuid"
+                serializer.serialize_str(&self.to_string())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                Self::from_str(&s).map_err(serde::de::Error::custom)
             }
         }
     };

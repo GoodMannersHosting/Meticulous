@@ -39,7 +39,7 @@
 		loading = true;
 		try {
 			const response = await apiMethods.projects.list();
-			projects = response.items;
+			projects = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load projects';
 		} finally {

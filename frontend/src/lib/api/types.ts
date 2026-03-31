@@ -16,12 +16,11 @@ export interface ApiResponse<T> {
 }
 
 export interface PaginatedResponse<T> {
-	items: T[];
-	total: number;
-	page: number;
-	per_page: number;
-	has_more: boolean;
-	next_cursor?: string;
+	data: T[];
+	pagination: {
+		has_more: boolean;
+		next_cursor?: string;
+	};
 }
 
 // Auth Types
@@ -339,4 +338,24 @@ export interface UserRoleAssignment {
 	role: string;
 	granted_by?: string;
 	granted_at: string;
+}
+
+export interface AuthProviderResponse {
+	id: string;
+	name: string;
+	provider_type: 'oidc' | 'github';
+	client_id: string;
+	issuer_url?: string;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface GroupMappingResponse {
+	id: string;
+	provider_id: string;
+	oidc_group_claim: string;
+	meticulous_group_id: string;
+	role: string;
+	created_at: string;
 }

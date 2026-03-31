@@ -38,7 +38,7 @@
 				status: statusFilter || undefined,
 				pool: poolFilter || undefined
 			});
-			agents = response.items;
+			agents = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load agents';
 			agents = [];

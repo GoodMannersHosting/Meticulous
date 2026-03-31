@@ -33,12 +33,12 @@
 		loading = true;
 		try {
 			const projectsResponse = await apiMethods.projects.list();
-			projects = projectsResponse.items;
+			projects = projectsResponse.data;
 			
 			if (projects.length > 0) {
 				selectedProjectId = projects[0].id;
 				const pipelinesResponse = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-				pipelines = pipelinesResponse.items;
+				pipelines = pipelinesResponse.data;
 				
 				if (pipelines.length > 0) {
 					selectedPipelineId = pipelines[0].id;
@@ -59,7 +59,7 @@
 		}
 		try {
 			const response = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-			pipelines = response.items;
+			pipelines = response.data;
 			if (pipelines.length > 0) {
 				selectedPipelineId = pipelines[0].id;
 				await loadRuns();
@@ -83,7 +83,7 @@
 				pipeline_id: selectedPipelineId,
 				status: statusFilter || undefined
 			});
-			runs = response.items;
+			runs = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load runs';
 		} finally {

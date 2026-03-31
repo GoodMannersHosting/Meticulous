@@ -11,11 +11,12 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use met_core::ids::{GroupId, ProjectId, UserId};
+use met_core::ids::{AuthProviderId, GroupId, OidcGroupMappingId, ProjectId, UserId};
 use met_core::models::{
-    CreateGroup, Group, GroupMembership, GroupRole, PermissionRole, User, UserRole,
+    AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership, GroupRole,
+    OidcGroupMapping, PermissionRole, UpdateAuthProvider, User, UserRole,
 };
-use met_store::repos::{GroupRepo, ProjectRepo, RoleRepo, UserRepo};
+use met_store::repos::{AuthProviderRepo, GroupRepo, ProjectRepo, RoleRepo, UserRepo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -50,6 +51,23 @@ pub fn router() -> Router<AppState> {
         .route("/admin/projects/{id}/schedule-deletion", post(schedule_project_deletion))
         .route("/admin/projects/{id}/cancel-deletion", post(cancel_project_deletion))
         .route("/admin/projects/{id}/force-delete", post(force_delete_project))
+        // Auth provider management
+        .route("/admin/auth-providers", get(list_auth_providers).post(create_auth_provider))
+        .route(
+            "/admin/auth-providers/{id}",
+            get(get_auth_provider).patch(update_auth_provider).delete(delete_auth_provider),
+        )
+        .route("/admin/auth-providers/{id}/enable", post(enable_auth_provider))
+        .route("/admin/auth-providers/{id}/disable", post(disable_auth_provider))
+        // OIDC group mapping management
+        .route(
+            "/admin/auth-providers/{id}/group-mappings",
+            get(list_group_mappings).post(create_group_mapping),
+        )
+        .route(
+            "/admin/auth-providers/{provider_id}/group-mappings/{mapping_id}",
+            delete(delete_group_mapping),
+        )
 }
 
 // ============================================================================
@@ -280,9 +298,38 @@ async fn delete_user(
         return Err(ApiError::bad_request("cannot delete your own account"));
     }
 
+    // Remove all privileges before soft-deleting (GDPR compliance)
+    // This ensures that if the user is ever restored, they start fresh
+    
+    // 1. Remove all role assignments
+    sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
+        .bind(user_id.as_uuid())
+        .execute(state.db())
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    // 2. Remove all group memberships
+    sqlx::query("DELETE FROM group_memberships WHERE user_id = $1")
+        .bind(user_id.as_uuid())
+        .execute(state.db())
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    // 3. Revoke all API tokens (set revoked_at instead of deleting for audit trail)
+    sqlx::query("UPDATE api_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
+        .bind(user_id.as_uuid())
+        .execute(state.db())
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    // 4. Soft-delete the user and remove admin privileges
     sqlx::query(
         r#"
-        UPDATE users SET deleted_at = NOW(), updated_at = NOW()
+        UPDATE users 
+        SET deleted_at = NOW(), 
+            updated_at = NOW(), 
+            is_admin = false,
+            is_active = false
         WHERE id = $1
         "#,
     )
@@ -291,7 +338,11 @@ async fn delete_user(
     .await
     .map_err(met_store::StoreError::from)?;
 
-    tracing::info!(admin_id = %admin.user_id, target_user_id = %user_id, "user deleted");
+    tracing::info!(
+        admin_id = %admin.user_id, 
+        target_user_id = %user_id, 
+        "user deleted with all privileges removed"
+    );
 
     Ok(Json(serde_json::json!({ "message": "user deleted" })))
 }
@@ -898,4 +949,390 @@ async fn force_delete_project(
     );
 
     Ok(Json(serde_json::json!({ "message": "project permanently deleted" })))
+}
+
+// ============================================================================
+// Auth Provider Management
+// ============================================================================
+
+/// List all auth providers for the organization.
+#[instrument(skip(state))]
+async fn list_auth_providers(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+) -> ApiResult<Json<Vec<AuthProviderResponse>>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let providers = repo.list(admin.org_id).await?;
+
+    Ok(Json(providers.into_iter().map(AuthProviderResponse::from).collect()))
+}
+
+/// Auth provider response (without secrets).
+#[derive(Debug, Serialize)]
+pub struct AuthProviderResponse {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub client_id: String,
+    pub issuer_url: Option<String>,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<AuthProvider> for AuthProviderResponse {
+    fn from(p: AuthProvider) -> Self {
+        Self {
+            id: p.id.to_string(),
+            name: p.name,
+            provider_type: p.provider_type,
+            client_id: p.client_id,
+            issuer_url: p.issuer_url,
+            enabled: p.enabled,
+            created_at: p.created_at.to_rfc3339(),
+            updated_at: p.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+/// Create auth provider request.
+#[derive(Debug, Deserialize)]
+pub struct CreateAuthProviderRequest {
+    pub name: String,
+    pub provider_type: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub issuer_url: Option<String>,
+}
+
+/// Create a new auth provider.
+#[instrument(skip(state, req))]
+async fn create_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Json(req): Json<CreateAuthProviderRequest>,
+) -> ApiResult<Json<AuthProviderResponse>> {
+    require_admin(&admin)?;
+
+    // Validate provider type
+    if req.provider_type != "oidc" && req.provider_type != "github" {
+        return Err(ApiError::bad_request("provider_type must be 'oidc' or 'github'"));
+    }
+
+    // OIDC requires issuer_url
+    if req.provider_type == "oidc" && req.issuer_url.is_none() {
+        return Err(ApiError::bad_request("issuer_url is required for OIDC providers"));
+    }
+
+    let repo = AuthProviderRepo::new(state.db());
+    let provider = repo
+        .create(
+            admin.org_id,
+            &CreateAuthProvider {
+                provider_type: req.provider_type.clone(),
+                name: req.name.clone(),
+                client_id: req.client_id.clone(),
+                client_secret: req.client_secret.clone(),
+                issuer_url: req.issuer_url.clone(),
+                config: serde_json::json!({}),
+            },
+            &req.client_secret, // In production, encrypt this
+        )
+        .await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider.id,
+        provider_name = %provider.name,
+        "auth provider created"
+    );
+
+    Ok(Json(AuthProviderResponse::from(provider)))
+}
+
+/// Get a single auth provider.
+#[instrument(skip(state))]
+async fn get_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+) -> ApiResult<Json<AuthProviderResponse>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let provider = repo.get(provider_id).await?;
+
+    if provider.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot access providers in other organizations"));
+    }
+
+    Ok(Json(AuthProviderResponse::from(provider)))
+}
+
+/// Update auth provider request.
+#[derive(Debug, Deserialize)]
+pub struct UpdateAuthProviderRequest {
+    pub name: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub issuer_url: Option<String>,
+}
+
+/// Update an auth provider.
+#[instrument(skip(state, req))]
+async fn update_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+    Json(req): Json<UpdateAuthProviderRequest>,
+) -> ApiResult<Json<AuthProviderResponse>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let existing = repo.get(provider_id).await?;
+
+    if existing.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+    }
+
+    let provider = repo
+        .update(
+            provider_id,
+            &UpdateAuthProvider {
+                name: req.name,
+                client_id: req.client_id,
+                client_secret: req.client_secret.clone(),
+                issuer_url: req.issuer_url,
+                config: None,
+            },
+            req.client_secret.as_deref(),
+        )
+        .await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        "auth provider updated"
+    );
+
+    Ok(Json(AuthProviderResponse::from(provider)))
+}
+
+/// Enable an auth provider.
+#[instrument(skip(state))]
+async fn enable_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+) -> ApiResult<Json<AuthProviderResponse>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let existing = repo.get(provider_id).await?;
+
+    if existing.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+    }
+
+    let provider = repo.enable(provider_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        "auth provider enabled"
+    );
+
+    Ok(Json(AuthProviderResponse::from(provider)))
+}
+
+/// Disable an auth provider.
+#[instrument(skip(state))]
+async fn disable_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+) -> ApiResult<Json<AuthProviderResponse>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let existing = repo.get(provider_id).await?;
+
+    if existing.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+    }
+
+    let provider = repo.disable(provider_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        "auth provider disabled"
+    );
+
+    Ok(Json(AuthProviderResponse::from(provider)))
+}
+
+/// Delete an auth provider.
+#[instrument(skip(state))]
+async fn delete_auth_provider(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let existing = repo.get(provider_id).await?;
+
+    if existing.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot delete providers in other organizations"));
+    }
+
+    repo.delete(provider_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        provider_name = %existing.name,
+        "auth provider deleted"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "auth provider deleted" })))
+}
+
+// ============================================================================
+// OIDC Group Mapping Handlers
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct GroupMappingResponse {
+    pub id: String,
+    pub provider_id: String,
+    pub oidc_group_claim: String,
+    pub meticulous_group_id: String,
+    pub role: String,
+    pub created_at: String,
+}
+
+impl From<OidcGroupMapping> for GroupMappingResponse {
+    fn from(m: OidcGroupMapping) -> Self {
+        Self {
+            id: m.id.to_string(),
+            provider_id: m.provider_id.to_string(),
+            oidc_group_claim: m.oidc_group_claim,
+            meticulous_group_id: m.meticulous_group_id.to_string(),
+            role: format!("{:?}", m.role).to_lowercase(),
+            created_at: m.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateGroupMappingRequest {
+    pub oidc_group_claim: String,
+    pub meticulous_group_id: GroupId,
+    #[serde(default)]
+    pub role: Option<GroupRole>,
+}
+
+/// List OIDC group mappings for a provider.
+#[instrument(skip(state))]
+async fn list_group_mappings(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+) -> ApiResult<Json<Vec<GroupMappingResponse>>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let provider = repo.get(provider_id).await?;
+
+    if provider.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot access providers in other organizations"));
+    }
+
+    let mappings = repo.list_group_mappings(provider_id).await?;
+    let responses: Vec<GroupMappingResponse> = mappings.into_iter().map(GroupMappingResponse::from).collect();
+
+    Ok(Json(responses))
+}
+
+/// Create an OIDC group mapping.
+#[instrument(skip(state))]
+async fn create_group_mapping(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(provider_id): Path<AuthProviderId>,
+    Json(req): Json<CreateGroupMappingRequest>,
+) -> ApiResult<Json<GroupMappingResponse>> {
+    require_admin(&admin)?;
+
+    let auth_repo = AuthProviderRepo::new(state.db());
+    let provider = auth_repo.get(provider_id).await?;
+
+    if provider.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+    }
+
+    // Verify the target group exists and belongs to the same org
+    let group_repo = GroupRepo::new(state.db());
+    let group = group_repo.get(req.meticulous_group_id).await?;
+
+    if group.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot map to groups in other organizations"));
+    }
+
+    let input = CreateOidcGroupMapping {
+        oidc_group_claim: req.oidc_group_claim.clone(),
+        meticulous_group_id: req.meticulous_group_id,
+        role: req.role.unwrap_or(GroupRole::Member),
+    };
+
+    let mapping = auth_repo.create_group_mapping(provider_id, &input).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        oidc_group = %req.oidc_group_claim,
+        meticulous_group = %req.meticulous_group_id,
+        "OIDC group mapping created"
+    );
+
+    Ok(Json(GroupMappingResponse::from(mapping)))
+}
+
+/// Delete an OIDC group mapping.
+#[instrument(skip(state))]
+async fn delete_group_mapping(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path((provider_id, mapping_id)): Path<(AuthProviderId, OidcGroupMappingId)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+
+    let repo = AuthProviderRepo::new(state.db());
+    let provider = repo.get(provider_id).await?;
+
+    if provider.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+    }
+
+    // Verify mapping exists and belongs to this provider
+    let mapping = repo.get_group_mapping(mapping_id).await?;
+    if mapping.provider_id != provider_id {
+        return Err(ApiError::not_found("group mapping not found"));
+    }
+
+    repo.delete_group_mapping(mapping_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        provider_id = %provider_id,
+        mapping_id = %mapping_id,
+        "OIDC group mapping deleted"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "group mapping deleted" })))
 }

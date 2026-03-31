@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { error, redirect } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ url }) => {
@@ -7,8 +7,6 @@ export const load: PageLoad = async ({ url }) => {
 		return {};
 	}
 
-	const code = url.searchParams.get('code');
-	const state = url.searchParams.get('state');
 	const errorParam = url.searchParams.get('error');
 	const errorDescription = url.searchParams.get('error_description');
 
@@ -18,15 +16,18 @@ export const load: PageLoad = async ({ url }) => {
 		});
 	}
 
-	if (!code || !state) {
+	// The backend sends back a JWT token directly (it already exchanged the OAuth code)
+	const token = url.searchParams.get('token');
+	const tokenType = url.searchParams.get('token_type');
+
+	if (!token) {
 		throw error(400, {
-			message: 'Missing authorization code or state parameter'
+			message: 'Missing authentication token'
 		});
 	}
 
 	return {
-		code,
-		state,
-		provider: 'github'
+		token,
+		tokenType: tokenType || 'Bearer'
 	};
 };

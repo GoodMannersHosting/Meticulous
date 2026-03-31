@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { Users, Plus, Search, MoreVertical, Shield, ShieldCheck, User, Lock, Unlock, Trash2, Key, X } from 'lucide-svelte';
+	import { goto } from '$app/navigation';
+	import { Users, Plus, Search, MoreVertical, Shield, ShieldCheck, Lock, Unlock, Trash2, Key, X, ExternalLink, AlertTriangle } from 'lucide-svelte';
 	import { apiMethods } from '$lib/api';
 	import type { AdminUser } from '$lib/api/types';
+	import { getGravatarUrl } from '$lib/utils/gravatar';
 
 	let searchQuery = $state('');
 	let users = $state<AdminUser[]>([]);
@@ -15,12 +17,51 @@
 	let resetPasswordLoading = $state(false);
 	let resetPasswordError = $state<string | null>(null);
 
+	// Confirmation modal state
+	let showConfirmModal = $state(false);
+	let confirmTitle = $state('');
+	let confirmMessage = $state('');
+	let confirmButtonText = $state('Confirm');
+	let confirmButtonClass = $state('bg-primary-600 hover:bg-primary-700');
+	let confirmAction = $state<(() => Promise<void>) | null>(null);
+	let confirmLoading = $state(false);
+
+	function openConfirmModal(options: {
+		title: string;
+		message: string;
+		buttonText?: string;
+		danger?: boolean;
+		onConfirm: () => Promise<void>;
+	}) {
+		confirmTitle = options.title;
+		confirmMessage = options.message;
+		confirmButtonText = options.buttonText || 'Confirm';
+		confirmButtonClass = options.danger 
+			? 'bg-red-600 hover:bg-red-700' 
+			: 'bg-primary-600 hover:bg-primary-700';
+		confirmAction = options.onConfirm;
+		showConfirmModal = true;
+	}
+
+	async function executeConfirm() {
+		if (!confirmAction) return;
+		confirmLoading = true;
+		try {
+			await confirmAction();
+			showConfirmModal = false;
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Action failed');
+		} finally {
+			confirmLoading = false;
+		}
+	}
+
 	async function loadUsers() {
 		loading = true;
 		error = null;
 		try {
 			const response = await apiMethods.admin.users.list({ limit: 100 });
-			users = response.items;
+			users = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load users';
 		} finally {
@@ -69,17 +110,21 @@
 		}
 	}
 
-	async function deleteUser(userId: string) {
+	function deleteUser(userId: string) {
 		closeActionMenu();
-		if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
-			return;
-		}
-		try {
-			await apiMethods.admin.users.delete(userId);
-			await loadUsers();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete user');
-		}
+		const user = users.find(u => u.id === userId);
+		const userName = user?.display_name || user?.username || 'this user';
+		
+		openConfirmModal({
+			title: 'Delete User',
+			message: `Are you sure you want to delete ${userName}? This action cannot be undone and will remove all their data.`,
+			buttonText: 'Delete User',
+			danger: true,
+			onConfirm: async () => {
+				await apiMethods.admin.users.delete(userId);
+				await loadUsers();
+			}
+		});
 	}
 
 	function openResetPasswordModal(userId: string, username: string) {
@@ -110,6 +155,31 @@
 		} finally {
 			resetPasswordLoading = false;
 		}
+	}
+
+	function toggleAdmin(userId: string, currentIsAdmin: boolean, e: Event) {
+		e.stopPropagation();
+		closeActionMenu();
+		
+		const user = users.find(u => u.id === userId);
+		const userName = user?.display_name || user?.username || 'this user';
+		
+		openConfirmModal({
+			title: currentIsAdmin ? 'Remove Admin Privileges' : 'Grant Admin Privileges',
+			message: currentIsAdmin 
+				? `Are you sure you want to remove admin privileges from ${userName}? They will no longer be able to access admin features.`
+				: `Are you sure you want to grant admin privileges to ${userName}? They will have full access to all admin features.`,
+			buttonText: currentIsAdmin ? 'Remove Admin' : 'Make Admin',
+			danger: currentIsAdmin,
+			onConfirm: async () => {
+				await apiMethods.admin.users.update(userId, { is_admin: !currentIsAdmin });
+				await loadUsers();
+			}
+		});
+	}
+
+	function goToUser(userId: string) {
+		goto(`/admin/users/${userId}`);
 	}
 </script>
 
@@ -158,7 +228,7 @@
 			</p>
 		</div>
 	{:else}
-		<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+		<div class="overflow-visible rounded-lg border border-[var(--border-primary)]">
 			<table class="min-w-full divide-y divide-[var(--border-primary)]">
 				<thead class="bg-[var(--bg-secondary)]">
 					<tr>
@@ -181,12 +251,14 @@
 				</thead>
 				<tbody class="divide-y divide-[var(--border-primary)] bg-[var(--bg-primary)]">
 					{#each filteredUsers as user (user.id)}
-						<tr class="hover:bg-[var(--bg-hover)]">
+						<tr class="cursor-pointer hover:bg-[var(--bg-hover)]" onclick={() => goToUser(user.id)}>
 							<td class="whitespace-nowrap px-4 py-3">
 								<div class="flex items-center gap-3">
-									<div class="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--bg-secondary)]">
-										<User class="h-4 w-4 text-[var(--text-secondary)]" />
-									</div>
+									<img
+										src={getGravatarUrl(user.email, { size: 32 })}
+										alt={user.display_name || user.username}
+										class="h-8 w-8 rounded-full"
+									/>
 									<div>
 										<div class="font-medium text-[var(--text-primary)]">
 											{user.display_name || user.username}
@@ -196,17 +268,22 @@
 								</div>
 							</td>
 							<td class="whitespace-nowrap px-4 py-3">
-								{#if user.is_admin}
-									<span class="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">
+								<button
+									type="button"
+									onclick={(e) => toggleAdmin(user.id, user.is_admin, e)}
+									class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors {user.is_admin 
+										? 'bg-primary-100 text-primary-700 hover:bg-primary-200 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50' 
+										: 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}"
+									title={user.is_admin ? 'Click to remove admin' : 'Click to make admin'}
+								>
+									{#if user.is_admin}
 										<ShieldCheck class="h-3 w-3" />
 										Admin
-									</span>
-								{:else}
-									<span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+									{:else}
 										<Shield class="h-3 w-3" />
 										User
-									</span>
-								{/if}
+									{/if}
+								</button>
 							</td>
 							<td class="whitespace-nowrap px-4 py-3">
 								{#if user.is_active}
@@ -225,19 +302,27 @@
 								{new Date(user.created_at).toLocaleDateString()}
 							</td>
 							<td class="whitespace-nowrap px-4 py-3 text-right">
-								<div class="relative inline-block">
+								<div class="relative inline-flex items-center gap-1">
+									<a
+										href="/admin/users/{user.id}"
+										onclick={(e) => e.stopPropagation()}
+										class="rounded p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+										title="View profile"
+									>
+										<ExternalLink class="h-4 w-4" />
+									</a>
 									<button
 										type="button"
-										onclick={() => toggleActionMenu(user.id)}
+										onclick={(e) => { e.stopPropagation(); toggleActionMenu(user.id); }}
 										class="rounded p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
 									>
 										<MoreVertical class="h-4 w-4" />
 									</button>
 									{#if actionMenuOpen === user.id}
-										<div class="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] py-1 shadow-lg">
+										<div class="absolute right-0 z-50 mt-1 w-48 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] py-1 shadow-lg" style="top: 100%;">
 											<button
 												type="button"
-												onclick={() => openResetPasswordModal(user.id, user.username)}
+												onclick={(e) => { e.stopPropagation(); openResetPasswordModal(user.id, user.username); }}
 												class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
 											>
 												<Key class="h-4 w-4" />
@@ -246,7 +331,7 @@
 											{#if user.is_active}
 												<button
 													type="button"
-													onclick={() => lockUser(user.id)}
+													onclick={(e) => { e.stopPropagation(); lockUser(user.id); }}
 													class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
 												>
 													<Lock class="h-4 w-4" />
@@ -255,7 +340,7 @@
 											{:else}
 												<button
 													type="button"
-													onclick={() => unlockUser(user.id)}
+													onclick={(e) => { e.stopPropagation(); unlockUser(user.id); }}
 													class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
 												>
 													<Unlock class="h-4 w-4" />
@@ -264,7 +349,7 @@
 											{/if}
 											<button
 												type="button"
-												onclick={() => deleteUser(user.id)}
+												onclick={(e) => { e.stopPropagation(); deleteUser(user.id); }}
 												class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-red-600 hover:bg-[var(--bg-hover)] dark:text-red-400"
 											>
 												<Trash2 class="h-4 w-4" />
@@ -329,6 +414,41 @@
 					class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
 				>
 					{resetPasswordLoading ? 'Resetting...' : 'Reset Password'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Confirmation Modal -->
+{#if showConfirmModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
+			<div class="flex items-start gap-4">
+				<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+					<AlertTriangle class="h-5 w-5 text-red-600 dark:text-red-400" />
+				</div>
+				<div class="flex-1">
+					<h3 class="text-lg font-semibold text-[var(--text-primary)]">{confirmTitle}</h3>
+					<p class="mt-2 text-sm text-[var(--text-secondary)]">{confirmMessage}</p>
+				</div>
+			</div>
+			<div class="mt-6 flex justify-end gap-3">
+				<button
+					type="button"
+					onclick={() => showConfirmModal = false}
+					disabled={confirmLoading}
+					class="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					onclick={executeConfirm}
+					disabled={confirmLoading}
+					class="rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 {confirmButtonClass}"
+				>
+					{confirmLoading ? 'Please wait...' : confirmButtonText}
 				</button>
 			</div>
 		</div>

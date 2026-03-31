@@ -9,9 +9,9 @@
 	let error = $state<string | null>(null);
 
 	onMount(async () => {
-		if (data.code && data.state) {
+		if (data.token) {
 			try {
-				await auth.handleCallback(data.provider ?? 'github', data.code, data.state);
+				await auth.handleOAuthToken(data.token);
 			} catch (e) {
 				error = e instanceof Error ? e.message : 'Authentication failed';
 			}

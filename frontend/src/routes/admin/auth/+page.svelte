@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { Key, Plus, Settings, Github, Globe, ToggleLeft, ToggleRight, CheckCircle, XCircle, X, Trash2 } from 'lucide-svelte';
+	import { Key, Plus, Settings, Github, Globe, ToggleLeft, ToggleRight, CheckCircle, XCircle, X, Trash2, Link2 } from 'lucide-svelte';
+	import { onMount } from 'svelte';
+	import { apiMethods } from '$api';
+	import type { AuthProviderResponse, GroupMappingResponse, AdminGroup } from '$api/types';
 
 	interface AuthProvider {
 		id: string;
@@ -14,6 +17,7 @@
 	let passwordAuthEnabled = $state(true);
 	let providers = $state<AuthProvider[]>([]);
 	let loading = $state(true);
+	let loadError = $state<string | null>(null);
 
 	// Add Provider modal state
 	let showAddProviderModal = $state(false);
@@ -34,8 +38,44 @@
 	let editClientSecret = $state('');
 	let editIssuerUrl = $state('');
 
-	$effect(() => {
-		loading = false;
+	// Group mappings state
+	let groupMappings = $state<(GroupMappingResponse & { group_name: string })[]>([]);
+	let mappingsLoading = $state(false);
+	let allGroups = $state<AdminGroup[]>([]);
+	let showAddMappingModal = $state(false);
+	let newMappingGroupId = $state<string | null>(null);
+	let newMappingOidcGroup = $state('');
+	let newMappingRole = $state<'member' | 'maintainer' | 'owner'>('member');
+	let addMappingLoading = $state(false);
+	let addMappingError = $state<string | null>(null);
+
+	function mapApiProvider(p: AuthProviderResponse): AuthProvider {
+		return {
+			id: p.id,
+			name: p.name,
+			type: p.provider_type as 'oidc' | 'github',
+			enabled: p.enabled,
+			issuerUrl: p.issuer_url,
+			clientId: p.client_id,
+			createdAt: p.created_at
+		};
+	}
+
+	async function loadProviders() {
+		loading = true;
+		loadError = null;
+		try {
+			const result = await apiMethods.admin.authProviders.list();
+			providers = result.map(mapApiProvider);
+		} catch (e) {
+			loadError = e instanceof Error ? e.message : 'Failed to load providers';
+		} finally {
+			loading = false;
+		}
+	}
+
+	onMount(() => {
+		loadProviders();
 	});
 
 	function getProviderIcon(type: string) {
@@ -80,22 +120,15 @@
 		addProviderLoading = true;
 		addProviderError = null;
 
-		// TODO: Call API to create provider once backend endpoint is wired
 		try {
-			// Simulate API call - replace with actual API call when ready
-			await new Promise(resolve => setTimeout(resolve, 500));
-			
-			// Add to local state for demo
-			const newProvider: AuthProvider = {
-				id: crypto.randomUUID(),
+			const result = await apiMethods.admin.authProviders.create({
 				name: providerName,
-				type: providerType,
-				enabled: false,
-				issuerUrl: providerType === 'oidc' ? issuerUrl : undefined,
-				clientId: clientId,
-				createdAt: new Date().toISOString()
-			};
-			providers = [...providers, newProvider];
+				provider_type: providerType,
+				client_id: clientId,
+				client_secret: clientSecret,
+				issuer_url: providerType === 'oidc' ? issuerUrl : undefined
+			});
+			providers = [...providers, mapApiProvider(result)];
 			showAddProviderModal = false;
 		} catch (e) {
 			addProviderError = e instanceof Error ? e.message : 'Failed to add provider';
@@ -110,7 +143,12 @@
 		editClientSecret = '';
 		editIssuerUrl = provider.issuerUrl || '';
 		settingsError = null;
+		groupMappings = [];
 		showSettingsModal = true;
+		
+		if (provider.type === 'oidc') {
+			loadGroupMappings();
+		}
 	}
 
 	async function toggleProvider() {
@@ -120,15 +158,13 @@
 		settingsError = null;
 
 		try {
-			// TODO: Call API to toggle provider
-			await new Promise(resolve => setTimeout(resolve, 300));
+			const result = selectedProvider.enabled
+				? await apiMethods.admin.authProviders.disable(selectedProvider.id)
+				: await apiMethods.admin.authProviders.enable(selectedProvider.id);
 			
-			providers = providers.map(p => 
-				p.id === selectedProvider!.id 
-					? { ...p, enabled: !p.enabled }
-					: p
-			);
-			selectedProvider = { ...selectedProvider, enabled: !selectedProvider.enabled };
+			const updated = mapApiProvider(result);
+			providers = providers.map(p => p.id === updated.id ? updated : p);
+			selectedProvider = updated;
 		} catch (e) {
 			settingsError = e instanceof Error ? e.message : 'Failed to update provider';
 		} finally {
@@ -152,18 +188,14 @@
 		settingsError = null;
 
 		try {
-			// TODO: Call API to update provider
-			await new Promise(resolve => setTimeout(resolve, 500));
+			const result = await apiMethods.admin.authProviders.update(selectedProvider.id, {
+				client_id: editClientId,
+				client_secret: editClientSecret || undefined,
+				issuer_url: selectedProvider.type === 'oidc' ? editIssuerUrl : undefined
+			});
 			
-			providers = providers.map(p => 
-				p.id === selectedProvider!.id 
-					? { 
-						...p, 
-						clientId: editClientId,
-						issuerUrl: selectedProvider!.type === 'oidc' ? editIssuerUrl : undefined
-					}
-					: p
-			);
+			const updated = mapApiProvider(result);
+			providers = providers.map(p => p.id === updated.id ? updated : p);
 			showSettingsModal = false;
 		} catch (e) {
 			settingsError = e instanceof Error ? e.message : 'Failed to save settings';
@@ -183,9 +215,7 @@
 		settingsError = null;
 
 		try {
-			// TODO: Call API to delete provider
-			await new Promise(resolve => setTimeout(resolve, 300));
-			
+			await apiMethods.admin.authProviders.delete(selectedProvider.id);
 			providers = providers.filter(p => p.id !== selectedProvider!.id);
 			showSettingsModal = false;
 		} catch (e) {
@@ -194,6 +224,80 @@
 			settingsLoading = false;
 		}
 	}
+
+	async function loadGroupMappings() {
+		if (!selectedProvider || selectedProvider.type !== 'oidc') return;
+		
+		mappingsLoading = true;
+		try {
+			const [mappings, groups] = await Promise.all([
+				apiMethods.admin.authProviders.groupMappings.list(selectedProvider.id),
+				apiMethods.admin.groups.list({ limit: 100 })
+			]);
+			
+			allGroups = groups.data;
+			
+			groupMappings = mappings.map(m => {
+				const group = allGroups.find(g => g.id === m.meticulous_group_id);
+				return {
+					...m,
+					group_name: group?.name || 'Unknown Group'
+				};
+			});
+		} catch (e) {
+			console.error('Failed to load group mappings:', e);
+		} finally {
+			mappingsLoading = false;
+		}
+	}
+
+	function openAddMappingModal() {
+		newMappingGroupId = null;
+		newMappingOidcGroup = '';
+		newMappingRole = 'member';
+		addMappingError = null;
+		showAddMappingModal = true;
+	}
+
+	async function createMapping() {
+		if (!selectedProvider || !newMappingGroupId || !newMappingOidcGroup.trim()) {
+			addMappingError = 'Please fill in all fields';
+			return;
+		}
+
+		addMappingLoading = true;
+		addMappingError = null;
+
+		try {
+			await apiMethods.admin.authProviders.groupMappings.create(selectedProvider.id, {
+				oidc_group_claim: newMappingOidcGroup.trim(),
+				meticulous_group_id: newMappingGroupId,
+				role: newMappingRole
+			});
+			showAddMappingModal = false;
+			await loadGroupMappings();
+		} catch (e) {
+			addMappingError = e instanceof Error ? e.message : 'Failed to create mapping';
+		} finally {
+			addMappingLoading = false;
+		}
+	}
+
+	async function deleteMapping(mappingId: string) {
+		if (!selectedProvider) return;
+		if (!confirm('Remove this group mapping?')) return;
+
+		try {
+			await apiMethods.admin.authProviders.groupMappings.delete(selectedProvider.id, mappingId);
+			groupMappings = groupMappings.filter(m => m.id !== mappingId);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete mapping');
+		}
+	}
+
+	const availableGroups = $derived(
+		allGroups.filter(g => !groupMappings.some(m => m.meticulous_group_id === g.id && m.oidc_group_claim === newMappingOidcGroup))
+	);
 </script>
 
 <div class="space-y-8">
@@ -543,6 +647,72 @@
 				</div>
 			</div>
 
+			<!-- OIDC Group Mappings -->
+			{#if selectedProvider.type === 'oidc'}
+				<div class="mt-6">
+					<div class="flex items-center justify-between">
+						<div>
+							<h4 class="font-medium text-[var(--text-primary)]">Group Mappings</h4>
+							<p class="text-xs text-[var(--text-tertiary)]">Map OIDC groups to Meticulous groups for auto-assignment</p>
+						</div>
+						<button
+							type="button"
+							onclick={openAddMappingModal}
+							class="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-primary-700"
+						>
+							<Plus class="h-3 w-3" />
+							Add
+						</button>
+					</div>
+					
+					<div class="mt-3 max-h-48 overflow-auto rounded-lg border border-[var(--border-primary)]">
+						{#if mappingsLoading}
+							<div class="flex items-center justify-center py-6">
+								<div class="h-5 w-5 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
+							</div>
+						{:else if groupMappings.length === 0}
+							<div class="py-6 text-center">
+								<Link2 class="mx-auto h-6 w-6 text-[var(--text-tertiary)]" />
+								<p class="mt-2 text-xs text-[var(--text-secondary)]">No group mappings configured</p>
+							</div>
+						{:else}
+							<table class="min-w-full divide-y divide-[var(--border-primary)]">
+								<thead class="bg-[var(--bg-secondary)]">
+									<tr>
+										<th class="px-3 py-2 text-left text-xs font-medium uppercase text-[var(--text-secondary)]">OIDC Group</th>
+										<th class="px-3 py-2 text-left text-xs font-medium uppercase text-[var(--text-secondary)]">Meticulous Group</th>
+										<th class="px-3 py-2 text-left text-xs font-medium uppercase text-[var(--text-secondary)]">Role</th>
+										<th class="px-3 py-2 w-10"></th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-primary)] bg-[var(--bg-primary)]">
+									{#each groupMappings as mapping (mapping.id)}
+										<tr>
+											<td class="px-3 py-2">
+												<code class="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-xs text-[var(--text-primary)]">
+													{mapping.oidc_group_claim}
+												</code>
+											</td>
+											<td class="px-3 py-2 text-xs text-[var(--text-primary)]">{mapping.group_name}</td>
+											<td class="px-3 py-2 text-xs capitalize text-[var(--text-secondary)]">{mapping.role}</td>
+											<td class="px-3 py-2">
+												<button
+													type="button"
+													onclick={() => deleteMapping(mapping.id)}
+													class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+												>
+													<Trash2 class="h-3 w-3" />
+												</button>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
 			<div class="mt-6 flex items-center justify-between">
 				<button
 					type="button"
@@ -570,6 +740,88 @@
 						{settingsLoading ? 'Saving...' : 'Save Changes'}
 					</button>
 				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Add Group Mapping Modal -->
+{#if showAddMappingModal && selectedProvider}
+	<div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50" onclick={() => showAddMappingModal = false}>
+		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+			<div class="flex items-center justify-between">
+				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Add Group Mapping</h3>
+				<button
+					type="button"
+					onclick={() => showAddMappingModal = false}
+					class="rounded p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+				>
+					<X class="h-5 w-5" />
+				</button>
+			</div>
+			<p class="mt-2 text-sm text-[var(--text-secondary)]">
+				When users log in via <strong>{selectedProvider.name}</strong> with this OIDC group, they'll be automatically added to the selected Meticulous group.
+			</p>
+			{#if addMappingError}
+				<div class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
+					{addMappingError}
+				</div>
+			{/if}
+			<div class="mt-4 space-y-4">
+				<div>
+					<label for="mapping-oidc-group" class="block text-sm font-medium text-[var(--text-primary)]">OIDC Group Name</label>
+					<input
+						type="text"
+						id="mapping-oidc-group"
+						bind:value={newMappingOidcGroup}
+						placeholder="e.g., /developers or admin-team"
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+					/>
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">The exact group name from your OIDC provider's groups claim</p>
+				</div>
+				<div>
+					<label for="mapping-group" class="block text-sm font-medium text-[var(--text-primary)]">Meticulous Group</label>
+					<select
+						id="mapping-group"
+						bind:value={newMappingGroupId}
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+					>
+						<option value={null}>Select a group...</option>
+						{#each allGroups as group (group.id)}
+							<option value={group.id}>{group.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="mapping-role" class="block text-sm font-medium text-[var(--text-primary)]">Role</label>
+					<select
+						id="mapping-role"
+						bind:value={newMappingRole}
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+					>
+						<option value="member">Member</option>
+						<option value="maintainer">Maintainer</option>
+						<option value="owner">Owner</option>
+					</select>
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">The role users will be assigned in the Meticulous group</p>
+				</div>
+			</div>
+			<div class="mt-6 flex justify-end gap-3">
+				<button
+					type="button"
+					onclick={() => showAddMappingModal = false}
+					class="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					onclick={createMapping}
+					disabled={addMappingLoading || !newMappingGroupId || !newMappingOidcGroup.trim()}
+					class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+				>
+					{addMappingLoading ? 'Creating...' : 'Create Mapping'}
+				</button>
 			</div>
 		</div>
 	</div>

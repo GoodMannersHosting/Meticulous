@@ -102,6 +102,47 @@ impl<'a> UserRepo<'a> {
         Ok(user)
     }
 
+    /// Get a user by email, including soft-deleted users.
+    pub async fn get_by_email_including_deleted(&self, org_id: OrganizationId, email: &str) -> Result<Option<User>> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            FROM users
+            WHERE org_id = $1 AND email = $2
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(email)
+        .fetch_optional(self.pool)
+        .await?;
+
+        Ok(user)
+    }
+
+    /// Restore a soft-deleted user by clearing their deleted_at timestamp.
+    /// 
+    /// IMPORTANT: This explicitly sets is_admin = false as a security measure.
+    /// Deleted users should lose all privileges and must be re-granted admin status
+    /// manually after restoration. This is required for GDPR compliance and security.
+    pub async fn restore(&self, id: UserId) -> Result<User> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET deleted_at = NULL, 
+                is_active = true, 
+                is_admin = false,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(user)
+    }
+
     /// List all active users in an organization.
     pub async fn list(&self, org_id: OrganizationId, limit: i64, offset: i64) -> Result<Vec<User>> {
         let users = sqlx::query_as::<_, User>(

@@ -12,6 +12,7 @@ use axum::{
     http::{header::AUTHORIZATION, request::Parts},
 };
 use met_core::{OrganizationId, UserId};
+use met_store::PgPool;
 use std::collections::HashSet;
 
 /// Authenticated user information extracted from the request.
@@ -89,6 +90,14 @@ where
             let user = validator
                 .validate(token)
                 .map_err(|e| ApiError::unauthorized(e.to_string()))?;
+            
+            // Verify user is still active in the database
+            // This ensures deleted or locked users can't continue using existing tokens
+            let is_valid = verify_user_session(app_state.db(), &user).await;
+            if !is_valid {
+                return Err(ApiError::unauthorized("session invalidated"));
+            }
+            
             return Ok(Auth(user));
         }
 
@@ -105,6 +114,33 @@ where
         Err(ApiError::unauthorized(
             "invalid authorization header format, expected 'Bearer <jwt>' or 'Token met_<token>'",
         ))
+    }
+}
+
+/// Verify that the user's session is still valid.
+/// 
+/// This checks:
+/// - User exists and is not deleted
+/// - User is active (not locked)
+/// 
+/// Returns false if the session should be invalidated.
+async fn verify_user_session(db: &sqlx::PgPool, user: &CurrentUser) -> bool {
+    let result: Option<(bool, bool)> = sqlx::query_as(
+        r#"
+        SELECT is_active, (deleted_at IS NULL) as not_deleted
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(user.user_id.as_uuid())
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+
+    match result {
+        Some((is_active, not_deleted)) => is_active && not_deleted,
+        None => false, // User not found
     }
 }
 

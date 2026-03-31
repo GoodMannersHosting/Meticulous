@@ -32,7 +32,7 @@
 		error = null;
 		try {
 			const response = await apiMethods.projects.list({ search: searchQuery || undefined });
-			projects = response.items;
+			projects = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load projects';
 			projects = [];

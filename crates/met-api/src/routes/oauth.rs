@@ -9,19 +9,20 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     response::Redirect,
     routing::get,
     Router,
 };
 use met_core::ids::AuthProviderId;
-use met_store::repos::{AuthProviderRepo, UserRepo};
+use met_store::repos::{AuthProviderRepo, GroupRepo, UserRepo};
 use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse as OAuth2TokenResponse,
     TokenUrl,
 };
 use openidconnect::{
-    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+    core::{CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata},
     IssuerUrl, Nonce, TokenResponse as OidcTokenResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,7 @@ use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
 };
+
 
 /// In-memory storage for OAuth state (CSRF tokens, PKCE verifiers, nonces).
 /// In production, this should be stored in Redis or the database with expiration.
@@ -54,7 +56,8 @@ pub fn router() -> Router<AppState> {
 
     Router::new()
         .route("/auth/oauth/{provider_id}/login", get(oauth_login))
-        .route("/auth/oauth/{provider_id}/callback", get(oauth_callback))
+        // Single callback endpoint - provider ID is stored in the state parameter
+        .route("/auth/oauth/callback", get(oauth_callback))
         .layer(axum::Extension(state_store))
 }
 
@@ -75,9 +78,10 @@ pub struct OAuthLoginResponse {
 }
 
 /// Initiate OAuth login flow by redirecting to the provider.
-#[instrument(skip(state, state_store))]
+#[instrument(skip(state, state_store, headers))]
 async fn oauth_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(provider_id): Path<AuthProviderId>,
     Query(query): Query<LoginQuery>,
     axum::Extension(state_store): axum::Extension<OAuthStateStore>,
@@ -89,15 +93,22 @@ async fn oauth_login(
         return Err(ApiError::bad_request("this auth provider is not enabled"));
     }
 
-    // Build the callback URL
+    // Build the callback URL using the backend's own URL from Host header
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost:8080");
+
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_else(|| if host.contains(":443") { "https" } else { "http" });
+
+    // Use a simple, predictable callback URL without provider ID in path
+    // Provider ID is stored in the state parameter for the callback to retrieve
     let callback_url = format!(
-        "{}/auth/oauth/{}/callback",
-        state
-            .config
-            .cors_origins
-            .first()
-            .unwrap_or(&"http://localhost:8080".to_string()),
-        provider_id
+        "{}://{}/auth/oauth/callback",
+        scheme, host
     );
 
     let (auth_url, csrf_state, pkce_verifier, nonce) = match provider.provider_type.as_str() {
@@ -160,16 +171,17 @@ async fn build_oidc_auth_url(
     // Generate PKCE challenge
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    // Build authorization URL
+    // Build authorization URL with standard OIDC scopes
+    // Note: "openid" is required and added automatically by AuthorizationCode flow
     let (auth_url, csrf_state, nonce) = client
         .authorize_url(
             CoreAuthenticationFlow::AuthorizationCode,
             CsrfToken::new_random,
             Nonce::new_random,
         )
-        .add_scope(openidconnect::Scope::new("openid".to_string()))
         .add_scope(openidconnect::Scope::new("email".to_string()))
         .add_scope(openidconnect::Scope::new("profile".to_string()))
+        .add_scope(openidconnect::Scope::new("groups".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .url();
 
@@ -226,51 +238,67 @@ pub struct OAuthUser {
 }
 
 /// Handle OAuth callback - exchange code for tokens and create/update user.
-#[instrument(skip(state, state_store))]
+#[instrument(skip(state, state_store, headers))]
 async fn oauth_callback(
     State(state): State<AppState>,
-    Path(provider_id): Path<AuthProviderId>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
     axum::Extension(state_store): axum::Extension<OAuthStateStore>,
 ) -> ApiResult<Redirect> {
-    // Verify CSRF state and get pending state
+    // Verify CSRF state and get pending state (which includes provider_id)
     let pending = {
         let mut store = state_store.write().await;
         store.remove(&query.state)
     }
     .ok_or_else(|| ApiError::bad_request("invalid or expired OAuth state"))?;
 
-    if pending.provider_id != provider_id {
-        return Err(ApiError::bad_request("provider mismatch"));
-    }
+    let provider_id = pending.provider_id;
 
     let repo = AuthProviderRepo::new(state.db());
     let provider = repo.get(provider_id).await?;
 
-    // Build callback URL for token exchange
+    // Build callback URL for token exchange (must match the one used in the login request)
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost:8080");
+
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_else(|| if host.contains(":443") { "https" } else { "http" });
+
+    // Use the same simple callback URL as in login
     let callback_url = format!(
-        "{}/auth/oauth/{}/callback",
-        state
-            .config
-            .cors_origins
-            .first()
-            .unwrap_or(&"http://localhost:8080".to_string()),
-        provider_id
+        "{}://{}/auth/oauth/callback",
+        scheme, host
     );
 
     // Exchange code for tokens and get user info
-    let (email, name, _external_id) = match provider.provider_type.as_str() {
+    let (email, name, _external_id, oidc_groups) = match provider.provider_type.as_str() {
         "oidc" => exchange_oidc_code(&provider, &query.code, &callback_url, &pending).await?,
-        "github" => exchange_github_code(&provider, &query.code, &callback_url).await?,
+        "github" => {
+            let (email, name, external_id) = exchange_github_code(&provider, &query.code, &callback_url).await?;
+            (email, name, external_id, Vec::new())
+        }
         _ => return Err(ApiError::bad_request("unsupported provider type")),
     };
 
     // Create or update user
     let user_repo = UserRepo::new(state.db());
 
-    // Try to find existing user by external_id or email
+    // Try to find existing user by email (including soft-deleted users)
     let user = if let Some(existing) = user_repo.get_by_email(provider.org_id, &email).await? {
+        // Active user found
         existing
+    } else if let Some(deleted_user) = user_repo.get_by_email_including_deleted(provider.org_id, &email).await? {
+        // User was soft-deleted, restore them
+        tracing::info!(
+            user_id = %deleted_user.id,
+            email = %email,
+            "Restoring soft-deleted user via OAuth login"
+        );
+        user_repo.restore(deleted_user.id).await?
     } else {
         // Create new user
         let username = email.split('@').next().unwrap_or(&email).to_string();
@@ -285,6 +313,39 @@ async fn oauth_callback(
             )
             .await?
     };
+
+    // Sync OIDC group memberships if any groups were returned
+    if !oidc_groups.is_empty() {
+        let auth_repo = AuthProviderRepo::new(state.db());
+        let group_repo = GroupRepo::new(state.db());
+        
+        // Find mappings for the user's OIDC groups
+        let mappings = auth_repo
+            .find_mappings_for_claims(provider_id, &oidc_groups)
+            .await?;
+        
+        // Add user to each mapped group
+        for mapping in mappings {
+            if let Err(e) = group_repo
+                .add_member(mapping.meticulous_group_id, user.id, mapping.role)
+                .await
+            {
+                tracing::warn!(
+                    user_id = %user.id,
+                    group_id = %mapping.meticulous_group_id,
+                    oidc_group = %mapping.oidc_group_claim,
+                    error = %e,
+                    "Failed to add user to group from OIDC mapping"
+                );
+            }
+        }
+        
+        tracing::info!(
+            user_id = %user.id,
+            oidc_groups = ?oidc_groups,
+            "Synced OIDC group memberships"
+        );
+    }
 
     // Generate JWT
     let permissions = if user.is_admin {
@@ -329,7 +390,7 @@ async fn exchange_oidc_code(
     code: &str,
     callback_url: &str,
     pending: &OAuthPendingState,
-) -> ApiResult<(String, Option<String>, String)> {
+) -> ApiResult<(String, Option<String>, String, Vec<String>)> {
     let issuer_url = provider
         .issuer_url
         .as_ref()
@@ -373,11 +434,15 @@ async fn exchange_oidc_code(
         .map_err(|e| ApiError::internal(format!("token exchange failed: {e}")))?;
 
     // Get ID token and extract claims
-    let id_token = token_response
+    let id_token: &CoreIdToken = token_response
         .id_token()
         .ok_or_else(|| ApiError::internal("no ID token in response"))?;
 
-    // Verify and extract claims
+    // Extract groups from the ID token by parsing the raw JWT payload
+    // This handles the "groups" claim which is not part of standard OIDC claims
+    let groups = extract_groups_from_id_token(id_token);
+
+    // Verify and extract standard claims
     let nonce_verifier = if let Some(ref n) = pending.nonce {
         Nonce::new(n.clone())
     } else {
@@ -401,7 +466,43 @@ async fn exchange_oidc_code(
 
     let subject = claims.subject().as_str().to_string();
 
-    Ok((email, name, subject))
+    Ok((email, name, subject, groups))
+}
+
+/// Extract groups claim from an ID token by parsing the JWT payload.
+fn extract_groups_from_id_token(id_token: &CoreIdToken) -> Vec<String> {
+    // The ID token is a JWT. We need to decode the payload to get custom claims.
+    // The token format is: header.payload.signature (base64url encoded)
+    // CoreIdToken can be serialized to get the JWT string
+    let token_str = match serde_json::to_string(id_token) {
+        Ok(s) => s.trim_matches('"').to_string(),
+        Err(_) => return Vec::new(),
+    };
+    
+    let parts: Vec<&str> = token_str.split('.').collect();
+    
+    if parts.len() != 3 {
+        return Vec::new();
+    }
+    
+    // Decode the payload (second part)
+    use base64::Engine;
+    let payload = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1]) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    
+    // Parse as JSON and extract groups
+    #[derive(Deserialize)]
+    struct TokenPayload {
+        #[serde(default)]
+        groups: Vec<String>,
+    }
+    
+    match serde_json::from_slice::<TokenPayload>(&payload) {
+        Ok(p) => p.groups,
+        Err(_) => Vec::new(),
+    }
 }
 
 async fn exchange_github_code(

@@ -30,15 +30,15 @@
 		error = null;
 		try {
 			const projectsResponse = await apiMethods.projects.list();
-			projects = projectsResponse.items;
+			projects = projectsResponse.data;
 
 			if (selectedProjectId) {
 				const pipelinesResponse = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-				pipelines = pipelinesResponse.items;
+				pipelines = pipelinesResponse.data;
 			} else if (projects.length > 0) {
 				selectedProjectId = projects[0].id;
 				const pipelinesResponse = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-				pipelines = pipelinesResponse.items;
+				pipelines = pipelinesResponse.data;
 			} else {
 				pipelines = [];
 			}
@@ -58,7 +58,7 @@
 		loading = true;
 		try {
 			const response = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-			pipelines = response.items;
+			pipelines = response.data;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load pipelines';
 		} finally {

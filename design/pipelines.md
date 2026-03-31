@@ -15,8 +15,8 @@
 ## Example Yaml
 
 ```yaml
-# .stable/workflow-1.yaml
-name: workflow demo
+# .stable/pipeline-1.yaml
+name: pipeline demo
 triggers:
   manual: {}
   release:
