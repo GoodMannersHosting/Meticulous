@@ -32,6 +32,8 @@ export interface User {
 	avatar?: string;
 	role: string;
 	created_at: string;
+	/** When true, the user must change password before using the app (from /auth/me). */
+	password_must_change?: boolean;
 }
 
 export interface AuthTokens {
@@ -304,6 +306,7 @@ export interface AdminUser {
 	display_name?: string;
 	is_active: boolean;
 	is_admin: boolean;
+	password_must_change: boolean;
 	created_at: string;
 	updated_at: string;
 }

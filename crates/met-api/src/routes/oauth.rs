@@ -310,6 +310,7 @@ async fn oauth_callback(
                 name.as_deref(),
                 None, // No password for OAuth users
                 false,
+                false,
             )
             .await?
     };

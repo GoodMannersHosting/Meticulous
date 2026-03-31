@@ -29,6 +29,7 @@ pub mod log_archive;
 pub mod health;
 pub mod jwt;
 pub mod nats;
+pub mod nats_jwt;
 pub mod registry;
 
 pub use config::ControllerConfig;

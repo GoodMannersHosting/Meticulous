@@ -120,6 +120,7 @@ impl<'a> ApiTokenValidator<'a> {
             permissions,
             is_api_token: true,
             project_ids,
+            password_must_change: user.password_must_change,
         })
     }
 }

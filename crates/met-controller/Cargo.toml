@@ -36,6 +36,8 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid = { workspace = true }
+nats-io-jwt = "0.1.1"
+nkeys = "0.4.5"
 
 [dev-dependencies]
 sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }

@@ -1,0 +1,91 @@
+# Dockerfile.met-api — Meticulous REST API (`met-api`)
+#
+# Requires Rust >= 1.85 (workspace edition 2024).
+#
+# Build:
+#   docker build -f Dockerfile.met-api --target prod -t meticulous/met-api:prod .
+#   docker build -f Dockerfile.met-api --target dev  -t meticulous/met-api:dev .
+#
+# Default final stage is `prod` (distroless). Run with env from MetConfig / CLI, e.g.:
+#   docker run -e MET_DATABASE_URL=postgres://... -p 8080:8080 meticulous/met-api:prod
+#
+# Prod runtime: gcr.io/distroless/cc-debian13:nonroot. Rust links libgcc_s (see `ldd`); cc-debian13
+# provides that. The API also links OpenSSL (libssl/libcrypto), which distroless does not ship — we
+# copy those .so files from debian:bookworm-slim (same generation as the Rust builder) into the image.
+
+# ==============================================================================
+# Stage: builder
+# ==============================================================================
+FROM docker.io/rust:1.85-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 builder
+
+WORKDIR /app
+
+COPY --chown=builder:builder Cargo.toml Cargo.lock ./
+COPY --chown=builder:builder crates ./crates
+COPY --chown=builder:builder proto ./proto
+
+USER builder
+RUN cargo build --release --bin met-api \
+    && strip /app/target/release/met-api
+
+# ==============================================================================
+# Stage: dev — Debian slim + debugging tools (non-root)
+# ==============================================================================
+FROM docker.io/debian:bookworm-slim AS dev
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsutils \
+    iproute2 \
+    procps \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r meticulous && useradd -r -g meticulous -d /home/meticulous -m meticulous
+
+COPY --from=builder /app/target/release/met-api /usr/local/bin/met-api
+
+USER meticulous
+WORKDIR /home/meticulous
+
+ENV RUST_LOG="info,met_api=debug"
+
+# Default HTTP listen in met-core is 0.0.0.0:8080; override with MET_HTTP_ADDR / config.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["met-api"]
+
+# ==============================================================================
+# Stage: ssl-libs — OpenSSL + zlib from Bookworm (matches builder glibc/OpenSSL ABI)
+# ==============================================================================
+FROM debian:bookworm-slim AS ssl-libs
+
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================================
+# Stage: prod — distroless cc-debian13 + copied SSL (default build target)
+# ==============================================================================
+FROM gcr.io/distroless/cc-debian13:nonroot AS prod
+
+COPY --from=ssl-libs /usr/lib/x86_64-linux-gnu/libssl.so.3 /usr/lib/x86_64-linux-gnu/
+COPY --from=ssl-libs /usr/lib/x86_64-linux-gnu/libcrypto.so.3 /usr/lib/x86_64-linux-gnu/
+COPY --from=ssl-libs /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/
+
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/met-api /met-api
+
+ENV RUST_LOG="info"
+
+USER nonroot
+ENTRYPOINT ["/met-api"]

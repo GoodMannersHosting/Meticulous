@@ -1,0 +1,79 @@
+# Dockerfile.met-controller — Meticulous agent controller (`met-controller`, gRPC)
+#
+# Requires Rust >= 1.85 (workspace edition 2024).
+#
+# Build:
+#   docker build -f Dockerfile.met-controller --target prod -t meticulous/met-controller:prod .
+#   docker build -f Dockerfile.met-controller --target dev  -t meticulous/met-controller:dev .
+#
+# Default final stage is `prod` (distroless). Example:
+#   docker run -e MET_DATABASE_URL=postgres://... \
+#              -e MET_CONTROLLER_JWT_SECRET=... \
+#              -e MET_NATS_URL=nats://... \
+#              -p 9090:9090 meticulous/met-controller:prod
+#
+# Prod runtime: gcr.io/distroless/cc-debian13:nonroot. `ldd` shows libgcc_s; cc-debian13 provides it
+# (same rationale as Dockerfile.operator’s cc-debian12).
+#
+# No Docker HEALTHCHECK on prod (gRPC only); use Kubernetes gRPC or TCP probes.
+
+# ==============================================================================
+# Stage: builder
+# ==============================================================================
+FROM docker.io/rust:1.85-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 builder
+
+WORKDIR /app
+
+COPY --chown=builder:builder Cargo.toml Cargo.lock ./
+COPY --chown=builder:builder crates ./crates
+COPY --chown=builder:builder proto ./proto
+
+USER builder
+RUN cargo build --release --bin met-controller \
+    && strip /app/target/release/met-controller
+
+# ==============================================================================
+# Stage: dev — Debian slim + debugging tools (non-root)
+# ==============================================================================
+FROM docker.io/debian:bookworm-slim AS dev
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsutils \
+    iproute2 \
+    procps \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r meticulous && useradd -r -g meticulous -d /home/meticulous -m meticulous
+
+COPY --from=builder /app/target/release/met-controller /usr/local/bin/met-controller
+
+USER meticulous
+WORKDIR /home/meticulous
+
+ENV RUST_LOG="info,met_controller=debug"
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["met-controller"]
+
+# ==============================================================================
+# Stage: prod — distroless (default build target)
+# ==============================================================================
+FROM gcr.io/distroless/cc-debian13:nonroot AS prod
+
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/met-controller /met-controller
+
+ENV RUST_LOG="info"
+
+USER nonroot
+ENTRYPOINT ["/met-controller"]

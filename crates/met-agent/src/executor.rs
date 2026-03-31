@@ -35,6 +35,8 @@ pub struct JobExecutor {
     backend: Arc<dyn ExecutionBackend>,
     heartbeat_state: Arc<RwLock<HeartbeatState>>,
     shutdown_rx: watch::Receiver<bool>,
+    /// When true, stop pulling new jobs from NATS (controller requested drain).
+    job_pause_rx: watch::Receiver<bool>,
 }
 
 impl JobExecutor {
@@ -46,6 +48,7 @@ impl JobExecutor {
         backend: Arc<dyn ExecutionBackend>,
         heartbeat_state: Arc<RwLock<HeartbeatState>>,
         shutdown_rx: watch::Receiver<bool>,
+        job_pause_rx: watch::Receiver<bool>,
     ) -> Self {
         Self {
             config,
@@ -54,6 +57,7 @@ impl JobExecutor {
             backend,
             heartbeat_state,
             shutdown_rx,
+            job_pause_rx,
         }
     }
 
@@ -105,6 +109,11 @@ impl JobExecutor {
             .await
             .map_err(|e| AgentError::Nats(e.into()))?;
 
+        if *self.job_pause_rx.borrow() {
+            info!("draining: not pulling new jobs from NATS");
+            return Ok(());
+        }
+
         loop {
             tokio::select! {
                 msg = messages.next() => {
@@ -142,6 +151,12 @@ impl JobExecutor {
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
                         info!("executor shutting down");
+                        break;
+                    }
+                }
+                _ = self.job_pause_rx.changed() => {
+                    if *self.job_pause_rx.borrow() {
+                        info!("draining: stopped pulling new jobs from NATS");
                         break;
                     }
                 }

@@ -18,6 +18,9 @@ use axum::{
 use met_core::ids::UserId;
 use met_core::models::{CreateOrganization, User};
 use met_store::repos::{AuthProviderRepo, OrganizationRepo, UserRepo};
+
+/// Matches the documented bootstrap account username for default-credential UI hints.
+pub(crate) const BOOTSTRAP_CREDENTIALS_USERNAME: &str = "admin";
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -47,6 +50,8 @@ pub struct PublicAuthProvider {
 pub struct AuthProvidersResponse {
     /// Whether password authentication is enabled.
     pub password_enabled: bool,
+    /// When true, the login UI may show that default bootstrap credentials apply (until changed).
+    pub show_bootstrap_credentials_hint: bool,
     /// List of enabled SSO providers.
     pub providers: Vec<PublicAuthProvider>,
 }
@@ -85,8 +90,15 @@ async fn list_auth_providers(
         vec![]
     };
 
+    let user_repo = UserRepo::new(state.db());
+    let show_bootstrap_credentials_hint = state.config.auth.password_enabled
+        && user_repo
+            .bootstrap_admin_pending_password_change(BOOTSTRAP_CREDENTIALS_USERNAME)
+            .await?;
+
     Ok(Json(AuthProvidersResponse {
         password_enabled: state.config.auth.password_enabled,
+        show_bootstrap_credentials_hint,
         providers,
     }))
 }
@@ -111,6 +123,8 @@ pub struct LoginResponse {
     pub expires_in: u64,
     /// User information.
     pub user: UserResponse,
+    /// When true, the client must complete a password change before using the rest of the API.
+    pub password_must_change: bool,
 }
 
 /// User response body (sanitized, no password hash).
@@ -122,6 +136,7 @@ pub struct UserResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     pub is_admin: bool,
+    pub password_must_change: bool,
 }
 
 impl From<&User> for UserResponse {
@@ -132,6 +147,7 @@ impl From<&User> for UserResponse {
             email: user.email.clone(),
             display_name: user.display_name.clone(),
             is_admin: user.is_admin,
+            password_must_change: user.password_must_change,
         }
     }
 }
@@ -226,6 +242,7 @@ async fn login(
         token_type: "Bearer".to_string(),
         expires_in,
         user: UserResponse::from(&user),
+        password_must_change: user.password_must_change,
     }))
 }
 
@@ -248,7 +265,7 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
     };
 
     // Use display name, or derive from email if not set
-    let name = user.name.unwrap_or_else(|| {
+    let name = user.name.clone().unwrap_or_else(|| {
         user.email.split('@').next().unwrap_or(&user.email).to_string()
     });
 
@@ -259,6 +276,7 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
         org_id: user.org_id.to_string(),
         role,
         created_at: chrono::Utc::now().to_rfc3339(),
+        password_must_change: user.password_must_change,
     }))
 }
 
@@ -271,6 +289,7 @@ pub struct MeResponse {
     pub org_id: String,
     pub role: String,
     pub created_at: String,
+    pub password_must_change: bool,
 }
 
 /// Logout (client-side token invalidation).
@@ -409,6 +428,7 @@ async fn setup(
             None,
             Some(&password_hash),
             true, // is_admin
+            false,
         )
         .await?;
 

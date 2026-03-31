@@ -12,8 +12,10 @@ use met_agent::backend;
 use met_agent::config::AgentConfig;
 use met_agent::executor::JobExecutor;
 use met_agent::heartbeat::{spawn_heartbeat_loop, HeartbeatState};
-use met_agent::registration::AgentRegistration;
+use met_agent::error::AgentError;
+use met_agent::registration::{AgentRegistration, RegistrationSource};
 use met_proto::agent::v1::HeartbeatAction;
+use nkeys::KeyPair;
 use tokio::signal;
 use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
@@ -63,6 +65,10 @@ struct Args {
     /// Log level
     #[arg(long, env = "MET_LOG_LEVEL", default_value = "info")]
     log_level: String,
+
+    /// Ignore cached identity and register again (requires a valid `MET_JOIN_TOKEN`).
+    #[arg(long, env = "MET_FORCE_REGISTER")]
+    force_register: bool,
 }
 
 #[tokio::main]
@@ -97,18 +103,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.tags.clone(),
     )?;
 
-    // Create shutdown channel
+    // Create shutdown channel (full process exit) and job-pause (drain: stop NATS pulls).
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (job_pause_tx, job_pause_rx) = watch::channel(false);
 
     // Register with controller
     let mut registration = AgentRegistration::new(config.clone()).await?;
-    let identity = registration.register_or_load().await?;
+    let force_register = args.force_register
+        || std::env::var("MET_FORCE_REGISTER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
-    info!(
-        agent_id = %identity.agent_id,
-        nats_subjects = ?identity.nats_subjects,
-        "agent registered"
-    );
+    let (identity, registration_source) = match registration.register_or_load(force_register).await {
+        Ok(pair) => pair,
+        Err(e) if registration_failure_should_exit(&e) => {
+            error!(error = %e, "registration failed; invalid join token or enrollment rejected");
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    match registration_source {
+        RegistrationSource::LoadedFromDisk => {
+            info!(
+                agent_id = %identity.agent_id,
+                nats_subjects = ?identity.nats_subjects,
+                "using persisted agent identity (skipped registration; set MET_FORCE_REGISTER=1 to re-enroll with a join token)"
+            );
+        }
+        RegistrationSource::RegisteredWithController => {
+            info!(
+                agent_id = %identity.agent_id,
+                nats_subjects = ?identity.nats_subjects,
+                "registered with controller and saved identity"
+            );
+        }
+    }
 
     // Create execution backend
     let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(backend::default_backend().await);
@@ -119,16 +149,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start heartbeat loop
     let client = registration.client().clone();
+    let identity_path = config.identity_path();
     let (heartbeat_handle, heartbeat_shutdown, mut action_rx) = spawn_heartbeat_loop(
         client.clone(),
         identity.clone(),
+        identity_path,
         Duration::from_secs(15),
         heartbeat_state.clone(),
+        job_pause_tx,
     );
 
     // Connect to NATS
+    let require_nats_jwt = std::env::var("MET_AGENT_REQUIRE_NATS_JWT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let nats_url = identity.nats_url.clone();
-    let nats_client = async_nats::connect(&nats_url).await?;
+    let nats_client = match connect_nats(&identity).await {
+        Ok(c) => c,
+        Err(e) if require_nats_jwt => {
+            error!(
+                error = %e,
+                url = %nats_url,
+                "NATS connection failed with MET_AGENT_REQUIRE_NATS_JWT enabled"
+            );
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e.into()),
+    };
     info!(url = %nats_url, "connected to NATS");
 
     // Create job executor
@@ -139,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend,
         heartbeat_state.clone(),
         shutdown_rx.clone(),
+        job_pause_rx,
     );
 
     // Start executor in background
@@ -148,20 +196,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Wait for shutdown signal or heartbeat action
-    tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("received SIGINT, shutting down");
-        }
-        action = action_rx.recv() => {
-            match action {
-                Some(HeartbeatAction::Drain) => {
-                    info!("received DRAIN command, finishing current jobs");
+    // Wait for shutdown; DRAIN only pauses NATS pulls (handled in heartbeat + executor), not process exit.
+    loop {
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                info!("received SIGINT, shutting down");
+                break;
+            }
+            action = action_rx.recv() => {
+                match action {
+                    Some(HeartbeatAction::Drain) => {
+                        info!("received DRAIN command, no longer accepting new jobs from NATS");
+                    }
+                    Some(HeartbeatAction::Terminate) => {
+                        warn!("received TERMINATE command, shutting down immediately");
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
                 }
-                Some(HeartbeatAction::Terminate) => {
-                    warn!("received TERMINATE command, shutting down immediately");
-                }
-                _ => {}
             }
         }
     }
@@ -184,4 +237,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("agent shutdown complete");
     Ok(())
+}
+
+fn registration_failure_should_exit(err: &AgentError) -> bool {
+    match err {
+        AgentError::Registration(_) => true,
+        AgentError::Config(msg) if msg.contains("join_token") => true,
+        _ => false,
+    }
+}
+
+async fn connect_nats(
+    identity: &met_agent::config::AgentIdentity,
+) -> Result<async_nats::Client, AgentError> {
+    let url = identity.nats_url.as_str();
+    match (&identity.nats_user_jwt, &identity.nats_user_seed) {
+        (Some(jwt), Some(seed))
+            if !jwt.trim().is_empty() && !seed.trim().is_empty() =>
+        {
+            let kp = std::sync::Arc::new(
+                KeyPair::from_seed(seed.trim())
+                    .map_err(|e| AgentError::Config(format!("invalid NATS user seed in identity: {e}")))?,
+            );
+            let jwt = jwt.clone();
+            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                let kp = kp.clone();
+                async move { kp.sign(&nonce).map_err(async_nats::AuthError::new) }
+            })
+            .connect(url)
+            .await
+            .map_err(|e| AgentError::Internal(format!("NATS connect: {e}")))
+        }
+        _ => async_nats::connect(url)
+            .await
+            .map_err(|e| AgentError::Internal(format!("NATS connect: {e}"))),
+    }
 }

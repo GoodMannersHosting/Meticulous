@@ -59,6 +59,8 @@ message RegisterResponse {
     NatsCredentials nats_credentials = 6;
     // Heartbeat interval in seconds.
     int32 heartbeat_interval_secs = 7;
+    // Organization (tenant) UUID the agent belongs to after registration.
+    string organization_id = 8;
 }
 
 // Heartbeat request.

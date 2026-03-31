@@ -147,7 +147,17 @@ impl From<MetError> for ApiError {
             MetError::Internal(msg) => Self::internal(msg),
             MetError::Database(e) => {
                 tracing::error!(error = %e, "database error");
-                Self::internal("database error")
+                // PostgreSQL 42703 = undefined_column (common when app is ahead of applied migrations).
+                let message = e
+                    .as_database_error()
+                    .and_then(|de| de.code())
+                    .filter(|c| c.as_ref() == "42703")
+                    .map(|_| {
+                        "database schema is out of date; apply pending migrations (e.g. just db-migrate)"
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "database error".to_string());
+                Self::internal(message)
             }
         }
     }

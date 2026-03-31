@@ -28,15 +28,16 @@ impl<'a> UserRepo<'a> {
         display_name: Option<&str>,
         password_hash: Option<&str>,
         is_admin: bool,
+        password_must_change: bool,
     ) -> Result<User> {
         let id = UserId::new();
         let now = Utc::now();
 
         let user = sqlx::query_as::<_, User>(
             r#"
-            INSERT INTO users (id, org_id, username, email, display_name, password_hash, is_active, is_admin, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $8)
-            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            INSERT INTO users (id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $9)
+            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             "#,
         )
         .bind(id.as_uuid())
@@ -46,6 +47,7 @@ impl<'a> UserRepo<'a> {
         .bind(display_name)
         .bind(password_hash)
         .bind(is_admin)
+        .bind(password_must_change)
         .bind(now)
         .fetch_one(self.pool)
         .await?;
@@ -57,7 +59,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get(&self, id: UserId) -> Result<User> {
         sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             FROM users
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -72,7 +74,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get_by_username(&self, org_id: OrganizationId, username: &str) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             FROM users
             WHERE org_id = $1 AND username = $2 AND deleted_at IS NULL
             "#,
@@ -89,7 +91,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get_by_email(&self, org_id: OrganizationId, email: &str) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             FROM users
             WHERE org_id = $1 AND email = $2 AND deleted_at IS NULL
             "#,
@@ -106,7 +108,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get_by_email_including_deleted(&self, org_id: OrganizationId, email: &str) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             FROM users
             WHERE org_id = $1 AND email = $2
             "#,
@@ -133,7 +135,7 @@ impl<'a> UserRepo<'a> {
                 is_admin = false,
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             "#,
         )
         .bind(id.as_uuid())
@@ -147,7 +149,7 @@ impl<'a> UserRepo<'a> {
     pub async fn list(&self, org_id: OrganizationId, limit: i64, offset: i64) -> Result<Vec<User>> {
         let users = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, external_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, deleted_at
             FROM users
             WHERE org_id = $1 AND deleted_at IS NULL
             ORDER BY created_at DESC
@@ -163,12 +165,12 @@ impl<'a> UserRepo<'a> {
         Ok(users)
     }
 
-    /// Update a user's password hash.
+    /// Update a user's password hash and clear the forced-change flag.
     pub async fn update_password(&self, id: UserId, password_hash: &str) -> Result<()> {
         let result = sqlx::query(
             r#"
             UPDATE users
-            SET password_hash = $2, updated_at = NOW()
+            SET password_hash = $2, password_must_change = false, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             "#,
         )
@@ -239,5 +241,29 @@ impl<'a> UserRepo<'a> {
         .await?;
 
         Ok(exists)
+    }
+
+    /// True when the bootstrap admin (`username`) still has a pending forced password change.
+    /// Used to decide whether the login UI may show default credential hints.
+    pub async fn bootstrap_admin_pending_password_change(
+        &self,
+        bootstrap_username: &str,
+    ) -> Result<bool> {
+        let (pending,): (bool,) = sqlx::query_as(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM users
+                WHERE deleted_at IS NULL
+                  AND is_admin = true
+                  AND password_must_change = true
+                  AND username = $1
+            )
+            "#,
+        )
+        .bind(bootstrap_username)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(pending)
     }
 }

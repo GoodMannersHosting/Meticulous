@@ -241,7 +241,7 @@ async fn drain_agent(
         }));
     }
 
-    repo.update_status(id, AgentStatus::Draining).await?;
+    repo.set_drain_requested(id).await?;
 
     Ok(Json(AgentActionResponse {
         agent_id: id,
@@ -287,7 +287,7 @@ async fn resume_agent(
         AgentStatus::Online
     };
 
-    repo.update_status(id, new_status).await?;
+    repo.update_status_clear_drain_counter(id, new_status).await?;
 
     Ok(Json(AgentActionResponse {
         agent_id: id,

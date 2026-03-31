@@ -13,6 +13,7 @@
 
 	interface AuthProvidersResponse {
 		password_enabled: boolean;
+		show_bootstrap_credentials_hint: boolean;
 		providers: AuthProvider[];
 	}
 
@@ -20,6 +21,7 @@
 	let error = $state<string | null>(null);
 	let providersLoading = $state(true);
 	let passwordEnabled = $state(true);
+	let showBootstrapCredentialsHint = $state(false);
 	let providers = $state<AuthProvider[]>([]);
 
 	let username = $state('');
@@ -27,23 +29,14 @@
 
 	onMount(async () => {
 		try {
-			// #region agent log
-			const requestUrl = `${PUBLIC_API_URL}/auth/providers`;
-			fetch('http://127.0.0.1:7674/ingest/caee3df0-42d1-43c3-b75f-d07590462804',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fdf207'},body:JSON.stringify({sessionId:'fdf207',runId:'post-fix',hypothesisId:'H2',location:'login/+page.svelte:onMount',message:'Fetching auth providers',data:{requestUrl,PUBLIC_API_URL},timestamp:Date.now()})}).catch(()=>{});
-			// #endregion
-			const response = await fetch(requestUrl);
-			// #region agent log
-			fetch('http://127.0.0.1:7674/ingest/caee3df0-42d1-43c3-b75f-d07590462804',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fdf207'},body:JSON.stringify({sessionId:'fdf207',runId:'post-fix',hypothesisId:'H2',location:'login/+page.svelte:onMount:response',message:'Auth providers response',data:{status:response.status,ok:response.ok,url:response.url},timestamp:Date.now()})}).catch(()=>{});
-			// #endregion
+			const response = await fetch(`${PUBLIC_API_URL}/auth/providers`);
 			if (response.ok) {
 				const data: AuthProvidersResponse = await response.json();
 				passwordEnabled = data.password_enabled;
+				showBootstrapCredentialsHint = data.show_bootstrap_credentials_hint ?? false;
 				providers = data.providers;
 			}
 		} catch (e) {
-			// #region agent log
-			fetch('http://127.0.0.1:7674/ingest/caee3df0-42d1-43c3-b75f-d07590462804',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fdf207'},body:JSON.stringify({sessionId:'fdf207',runId:'post-fix',hypothesisId:'H2',location:'login/+page.svelte:onMount:error',message:'Auth providers fetch error',data:{error:String(e)},timestamp:Date.now()})}).catch(()=>{});
-			// #endregion
 			console.error('Failed to load auth providers:', e);
 		} finally {
 			providersLoading = false;
@@ -66,9 +59,6 @@
 	function loginWithProvider(provider: AuthProvider) {
 		const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback');
 		const loginUrl = `${PUBLIC_API_URL}/auth/oauth/${provider.id}/login?redirect_uri=${redirectUri}`;
-		// #region agent log
-		fetch('http://127.0.0.1:7674/ingest/caee3df0-42d1-43c3-b75f-d07590462804',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fdf207'},body:JSON.stringify({sessionId:'fdf207',runId:'oauth-redirect',hypothesisId:'H3',location:'login/+page.svelte:loginWithProvider',message:'Redirecting to OAuth login',data:{providerId:provider.id,providerName:provider.name,redirectUri:decodeURIComponent(redirectUri),loginUrl,PUBLIC_API_URL,windowOrigin:window.location.origin},timestamp:Date.now()})}).catch(()=>{});
-		// #endregion
 		window.location.href = loginUrl;
 	}
 </script>
@@ -187,9 +177,11 @@
 						</Button>
 					</form>
 
-					<div class="mt-4 text-center text-xs text-[var(--text-tertiary)]">
-						Default credentials: <code class="rounded bg-[var(--bg-hover)] px-1 py-0.5">admin</code> / <code class="rounded bg-[var(--bg-hover)] px-1 py-0.5">adminadmin</code>
-					</div>
+					{#if showBootstrapCredentialsHint}
+						<div class="mt-4 text-center text-xs text-[var(--text-tertiary)]">
+							Default credentials: <code class="rounded bg-[var(--bg-hover)] px-1 py-0.5">admin</code> / <code class="rounded bg-[var(--bg-hover)] px-1 py-0.5">adminadmin</code>
+						</div>
+					{/if}
 				{:else if providers.length === 0}
 					<div class="py-8 text-center text-sm text-[var(--text-secondary)]">
 						No authentication methods configured. Contact your administrator.

@@ -1,5 +1,6 @@
 //! Agent controller process: gRPC (`AgentService`) for registration and heartbeats.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -41,6 +42,18 @@ struct Args {
     /// Log level filter (default: info)
     #[arg(long, env = "MET_LOG_LEVEL", default_value = "info")]
     log_level: String,
+
+    /// Path to NATS `.creds` for the controller when the server requires JWT auth.
+    #[arg(long, env = "MET_NATS_CREDS_PATH")]
+    nats_creds_path: Option<PathBuf>,
+
+    /// NATS account signing seed (`SU...`) for per-agent user JWTs (optional; omit for anonymous NATS dev).
+    #[arg(long, env = "MET_NATS_ACCOUNT_SIGNING_SEED")]
+    nats_account_signing_seed: Option<String>,
+
+    /// Account identity public key when using a delegated signing key (`MET_NATS_ACCOUNT_SIGNING_SEED`).
+    #[arg(long, env = "MET_NATS_ACCOUNT_ISSUER_PUBKEY")]
+    nats_account_issuer_pubkey: Option<String>,
 }
 
 #[tokio::main]
@@ -89,6 +102,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or(false);
 
+    ctrl.nats_creds_path = args
+        .nats_creds_path
+        .or_else(|| std::env::var("MET_NATS_CREDS_PATH").ok().map(PathBuf::from))
+        .filter(|p| !p.as_os_str().is_empty());
+    ctrl.nats_account_signing_seed = args
+        .nats_account_signing_seed
+        .or_else(|| std::env::var("MET_NATS_ACCOUNT_SIGNING_SEED").ok())
+        .filter(|s| !s.trim().is_empty());
+    ctrl.nats_account_issuer_pubkey = args
+        .nats_account_issuer_pubkey
+        .or_else(|| std::env::var("MET_NATS_ACCOUNT_ISSUER_PUBKEY").ok())
+        .filter(|s| !s.trim().is_empty());
+
     ctrl.validate()
         .map_err(|e| format!("invalid controller config: {e}"))?;
 
@@ -101,7 +127,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = Arc::new(create_pool(&pool_config).await?);
 
     info!(url = %ctrl.nats_url, "connecting to NATS");
-    let nats = NatsDispatcher::connect(&ctrl.nats_url).await?;
+    let nats = NatsDispatcher::connect(
+        &ctrl.nats_url,
+        ctrl.nats_creds_path.as_deref(),
+    )
+    .await?;
 
     let registry = AgentRegistry::new();
     let grpc = AgentServiceImpl::new(ctrl.clone(), pool, registry, nats, None);

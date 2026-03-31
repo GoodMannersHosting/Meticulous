@@ -4,6 +4,7 @@
 //! with compile-time checked SQL queries.
 
 mod agent_heartbeats;
+mod agent_join_registration;
 mod agents;
 mod api_tokens;
 mod auth_providers;
@@ -23,6 +24,7 @@ mod run_logs;
 mod log_cache;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
+pub use agent_join_registration::register_agent_with_join_token;
 pub use agents::AgentRepo;
 pub use api_tokens::ApiTokenRepo;
 pub use audit_log::{AuditLogRepo, AuditLogRow, AuditLogFilter, CreateAuditLog};

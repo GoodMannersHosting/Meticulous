@@ -33,7 +33,7 @@ fn test_controller_config() -> ControllerConfig {
 
 async fn connect_nats() -> Option<NatsDispatcher> {
     let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
-    NatsDispatcher::connect(&url).await.ok()
+    NatsDispatcher::connect(&url, None).await.ok()
 }
 
 fn sample_register_request(join_token: impl Into<String>) -> RegisterRequest {
@@ -133,7 +133,9 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
         token_hash,
         scope: JoinTokenScope::Tenant,
         scope_id: Some(org_id),
-        max_uses: None,
+        description: "test token".to_string(),
+        org_id: Some(met_core::ids::OrganizationId::from_uuid(org_id)),
+        max_uses: 1,
         current_uses: 0,
         labels: vec!["tok-label".to_string()],
         pool_tags: vec!["from-token".to_string()],
@@ -142,6 +144,8 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
         created_by: UserId::from_uuid(user_id),
         created_at: now,
         updated_at: now,
+        consumed_by_agent_id: None,
+        consumed_at: None,
     };
     JoinTokenRepo::new(&pool)
         .create(&token)

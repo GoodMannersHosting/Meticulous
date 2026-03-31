@@ -1,5 +1,6 @@
 //! Heartbeat loop for agent liveness.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,10 +12,11 @@ use met_proto::AgentStatus;
 use sysinfo::System;
 use tokio::sync::{mpsc, watch, RwLock};
 use tonic::transport::Channel;
-use tracing::{debug, error, info, warn};
+use tonic::Code;
+use tracing::{debug, error, info};
 
 use crate::config::AgentIdentity;
-use crate::error::{AgentError, Result};
+use crate::error::Result;
 
 /// Heartbeat state shared with the main loop.
 #[derive(Debug, Clone)]
@@ -38,9 +40,13 @@ impl Default for HeartbeatState {
 pub struct HeartbeatLoop {
     client: AgentServiceClient<Channel>,
     identity: AgentIdentity,
+    /// Path to persisted identity; removed if controller returns NotFound (stale id).
+    identity_path: PathBuf,
     interval: Duration,
     state: Arc<RwLock<HeartbeatState>>,
     shutdown_rx: watch::Receiver<bool>,
+    /// When set to true, the job executor stops pulling from NATS (drain).
+    job_pause_tx: watch::Sender<bool>,
     action_tx: mpsc::Sender<HeartbeatAction>,
 }
 
@@ -49,17 +55,21 @@ impl HeartbeatLoop {
     pub fn new(
         client: AgentServiceClient<Channel>,
         identity: AgentIdentity,
+        identity_path: PathBuf,
         interval: Duration,
         state: Arc<RwLock<HeartbeatState>>,
         shutdown_rx: watch::Receiver<bool>,
+        job_pause_tx: watch::Sender<bool>,
         action_tx: mpsc::Sender<HeartbeatAction>,
     ) -> Self {
         Self {
             client,
             identity,
+            identity_path,
             interval,
             state,
             shutdown_rx,
+            job_pause_tx,
             action_tx,
         }
     }
@@ -155,7 +165,37 @@ impl HeartbeatLoop {
 
         drop(state);
 
-        let response = self.client.heartbeat(request).await?.into_inner();
+        let response = match self.client.heartbeat(request).await {
+            Ok(r) => r.into_inner(),
+            Err(status) if status.code() == Code::NotFound => {
+                error!(
+                    agent_id = %self.identity.agent_id,
+                    identity_path = %self.identity_path.display(),
+                    "controller heartbeat: agent not found (no row for this id — DB reset, different controller, or deleted agent)"
+                );
+                if self.identity_path.exists() {
+                    match std::fs::remove_file(&self.identity_path) {
+                        Ok(()) => info!(
+                            path = %self.identity_path.display(),
+                            "removed stale agent identity file so the next start can re-register"
+                        ),
+                        Err(e) => error!(
+                            error = %e,
+                            path = %self.identity_path.display(),
+                            "could not remove stale identity file"
+                        ),
+                    }
+                }
+                eprintln!(
+                    "\nmeticulous-agent: this agent id is not registered with the controller.\n\
+                     If you intended to enroll with a join token, run again with MET_JOIN_TOKEN set and \
+                     MET_FORCE_REGISTER=1 (or delete the identity file at {}).\n",
+                    self.identity_path.display()
+                );
+                std::process::exit(1);
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // Handle JWT renewal if provided
         if let Some(new_jwt) = response.new_jwt_token {
@@ -166,6 +206,12 @@ impl HeartbeatLoop {
         let action = HeartbeatAction::try_from(response.action)
             .unwrap_or(HeartbeatAction::Continue);
 
+        if action == HeartbeatAction::Drain {
+            let mut s = self.state.write().await;
+            s.status = AgentStatus::Draining;
+            let _ = self.job_pause_tx.send(true);
+        }
+
         Ok(action)
     }
 }
@@ -174,8 +220,10 @@ impl HeartbeatLoop {
 pub fn spawn_heartbeat_loop(
     client: AgentServiceClient<Channel>,
     identity: AgentIdentity,
+    identity_path: PathBuf,
     interval: Duration,
     state: Arc<RwLock<HeartbeatState>>,
+    job_pause_tx: watch::Sender<bool>,
 ) -> (
     tokio::task::JoinHandle<Result<()>>,
     watch::Sender<bool>,
@@ -184,7 +232,16 @@ pub fn spawn_heartbeat_loop(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (action_tx, action_rx) = mpsc::channel(16);
 
-    let heartbeat = HeartbeatLoop::new(client, identity, interval, state, shutdown_rx, action_tx);
+    let heartbeat = HeartbeatLoop::new(
+        client,
+        identity,
+        identity_path,
+        interval,
+        state,
+        shutdown_rx,
+        job_pause_tx,
+        action_tx,
+    );
 
     let handle = tokio::spawn(async move { heartbeat.run().await });
 

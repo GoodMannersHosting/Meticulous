@@ -17,12 +17,16 @@ services:
 
   nats:
     image: docker.io/library/nats:2-alpine
-    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    entrypoint: ["/bin/sh", "/etc/nats/docker-entrypoint.sh"]
     ports:
       - "4222:4222"   # Client connections
       - "8222:8222"   # HTTP monitoring
     volumes:
       - natsdata:/data
+      - ./deploy/nats/docker-entrypoint.sh:/etc/nats/docker-entrypoint.sh:ro
+      - ./deploy/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - ./deploy/nats/nats-server-jwt.conf:/etc/nats/nats-server-jwt.conf:ro
+      - ./deploy/nats/keys:/etc/nats/keys
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
       interval: 5s

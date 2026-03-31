@@ -293,6 +293,12 @@ pub struct AgentIdentity {
     pub nats_subjects: Vec<String>,
     /// NATS URL.
     pub nats_url: String,
+    /// NATS user JWT (from controller registration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nats_user_jwt: Option<String>,
+    /// NATS user NKey seed (from controller registration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nats_user_seed: Option<String>,
 }
 
 impl AgentIdentity {

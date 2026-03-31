@@ -379,6 +379,20 @@ db-up:
 db-migrate:
     cargo sqlx migrate run --source crates/met-store/migrations
 
+# Fix "migration 12 was previously applied but has been modified" after removing the duplicate
+# `012_password_must_change.sql` (same version as `012_agents_join_token_...`). The DB still has the
+# old checksum for version 12; deleting that row lets sqlx re-apply the current file 012 (idempotent
+# FK change), then 013+, 014 as needed. Requires DATABASE_URL (e.g. from .env) and `psql` on PATH.
+db-migrate-repair-v12:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        echo "DATABASE_URL is not set; set it or add it to .env (just loads .env when dotenv-load is on)." >&2
+        exit 1
+    fi
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DELETE FROM _sqlx_migrations WHERE version = 12;"
+    cargo sqlx migrate run --source crates/met-store/migrations
+
 # Reset database (drop and recreate)
 db-reset:
     cargo sqlx database reset --source crates/met-store/migrations -y
@@ -561,11 +575,17 @@ agent-build-binary:
 agent-build-binary-amd64:
     cargo build --release --bin met-agent --target x86_64-unknown-linux-gnu
 
-# Run agent locally (for development)
+# Run agent locally (for development).
+# When NATS is JWT-only: set MET_AGENT_REQUIRE_NATS_JWT=1 and re-register so identity stores NATS creds.
+# Run build agent. Uses cached ~/.local/share/meticulous/agent-identity.json if present (MET_JOIN_TOKEN ignored).
+# Re-enroll: MET_FORCE_REGISTER=1 with a valid MET_JOIN_TOKEN, or delete the identity file.
 agent-run:
     cargo run --bin met-agent
 
-# Run agent controller gRPC server (needs Postgres, NATS, MET_CONTROLLER_JWT_SECRET)
+# Run agent controller gRPC server (needs Postgres, NATS, MET_CONTROLLER_JWT_SECRET).
+# Locked-down NATS: MET_NATS_CREDS_PATH to a `.creds` file; MET_NATS_ACCOUNT_SIGNING_SEED (`SU...`) to issue agent JWTs;
+# optional MET_NATS_ACCOUNT_ISSUER_PUBKEY (`A...`) if the seed is a delegated account signing key.
+# Bootstrap operator/account JWTs with `nsc` and place under deploy/nats/keys/ (see deploy/nats/nats-server-jwt.conf).
 controller-run:
     cargo run --bin met-controller
 

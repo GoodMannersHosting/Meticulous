@@ -144,6 +144,7 @@ mod tests {
             permissions: perms.iter().map(|s| s.to_string()).collect(),
             is_api_token: false,
             project_ids: None,
+            password_must_change: false,
         }
     }
 
@@ -183,6 +184,7 @@ mod tests {
             permissions: HashSet::new(),
             is_api_token: true,
             project_ids: Some(vec![project1]),
+            password_must_change: false,
         };
 
         assert!(authorize_project(&user, project1).is_ok());

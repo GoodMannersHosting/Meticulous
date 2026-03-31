@@ -9,7 +9,7 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{header::AUTHORIZATION, request::Parts},
+    http::{header::AUTHORIZATION, request::Parts, Method, StatusCode},
 };
 use met_core::ids::ProjectId;
 use met_core::{OrganizationId, UserId};
@@ -34,6 +34,8 @@ pub struct CurrentUser {
     /// Project IDs this token can access (None = all projects).
     /// Only set for API tokens with project scope restrictions.
     pub project_ids: Option<Vec<ProjectId>>,
+    /// When true (from DB), only auth self-service routes are allowed until the password is changed.
+    pub password_must_change: bool,
 }
 
 impl CurrentUser {
@@ -99,20 +101,17 @@ where
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ApiError::unauthorized("missing authorization header"))?;
 
+        let method = parts.method.clone();
+        let path = parts.uri.path().to_string();
+
         // Try Bearer token (JWT) first
         if let Some(token) = auth_header.strip_prefix("Bearer ") {
             let validator = JwtValidator::new(&app_state.config.jwt);
             let user = validator
                 .validate(token)
                 .map_err(|e| ApiError::unauthorized(e.to_string()))?;
-            
-            // Verify user is still active in the database
-            // This ensures deleted or locked users can't continue using existing tokens
-            let is_valid = verify_user_session(app_state.db(), &user).await;
-            if !is_valid {
-                return Err(ApiError::unauthorized("session invalidated"));
-            }
-            
+
+            let user = finalize_authenticated_user(app_state.db(), user, &method, &path).await?;
             return Ok(Auth(user));
         }
 
@@ -123,6 +122,7 @@ where
                 .validate(token)
                 .await
                 .map_err(|e| ApiError::unauthorized(e.to_string()))?;
+            let user = finalize_authenticated_user(app_state.db(), user, &method, &path).await?;
             return Ok(Auth(user));
         }
 
@@ -132,17 +132,16 @@ where
     }
 }
 
-/// Verify that the user's session is still valid.
-/// 
-/// This checks:
-/// - User exists and is not deleted
-/// - User is active (not locked)
-/// 
-/// Returns false if the session should be invalidated.
-async fn verify_user_session(db: &sqlx::PgPool, user: &CurrentUser) -> bool {
-    let result: Option<(bool, bool)> = sqlx::query_as(
+/// Load session state from the database and enforce the forced password-change gate.
+async fn finalize_authenticated_user(
+    db: &sqlx::PgPool,
+    mut user: CurrentUser,
+    method: &Method,
+    path: &str,
+) -> Result<CurrentUser, ApiError> {
+    let result: Option<(bool, bool, bool)> = sqlx::query_as(
         r#"
-        SELECT is_active, (deleted_at IS NULL) as not_deleted
+        SELECT is_active, (deleted_at IS NULL) AS not_deleted, password_must_change
         FROM users
         WHERE id = $1
         "#,
@@ -150,13 +149,37 @@ async fn verify_user_session(db: &sqlx::PgPool, user: &CurrentUser) -> bool {
     .bind(user.user_id.as_uuid())
     .fetch_optional(db)
     .await
-    .ok()
-    .flatten();
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match result {
-        Some((is_active, not_deleted)) => is_active && not_deleted,
-        None => false, // User not found
+    let Some((is_active, not_deleted, password_must_change)) = result else {
+        return Err(ApiError::unauthorized("session invalidated"));
+    };
+
+    if !is_active || !not_deleted {
+        return Err(ApiError::unauthorized("session invalidated"));
     }
+
+    user.password_must_change = password_must_change;
+
+    if user.password_must_change && !is_password_change_exempt(method, path) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "password_change_required",
+            "you must change your password before continuing",
+        ));
+    }
+
+    Ok(user)
+}
+
+/// Routes allowed while `password_must_change` is true (JWT and API token).
+fn is_password_change_exempt(method: &Method, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (&Method::GET, "/auth/me")
+            | (&Method::POST, "/auth/logout")
+            | (&Method::POST, "/auth/change-password")
+    )
 }
 
 /// Optional authentication extractor.
@@ -200,6 +223,7 @@ mod tests {
                 .collect(),
             is_api_token: false,
             project_ids: None,
+            password_must_change: false,
         };
 
         assert!(user.has_permission("pipelines:read"));
@@ -223,6 +247,7 @@ mod tests {
             permissions: ["*"].iter().map(|s| s.to_string()).collect(),
             is_api_token: false,
             project_ids: None,
+            password_must_change: false,
         };
 
         assert!(admin.has_permission("pipelines:read"));
@@ -244,6 +269,7 @@ mod tests {
             permissions: HashSet::new(),
             is_api_token: false,
             project_ids: None,
+            password_must_change: false,
         };
         assert!(unrestricted.can_access_project(project1));
         assert!(unrestricted.can_access_project(project2));
@@ -257,6 +283,7 @@ mod tests {
             permissions: HashSet::new(),
             is_api_token: true,
             project_ids: Some(vec![project1, project2]),
+            password_must_change: false,
         };
         assert!(restricted.can_access_project(project1));
         assert!(restricted.can_access_project(project2));

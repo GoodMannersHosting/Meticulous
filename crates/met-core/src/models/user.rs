@@ -28,6 +28,9 @@ pub struct User {
     /// Whether the user is an org admin.
     #[serde(default)]
     pub is_admin: bool,
+    /// When true, password login is allowed but API access is limited until the password is changed.
+    #[serde(default)]
+    pub password_must_change: bool,
     /// External identity provider ID (for SSO).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
@@ -58,6 +61,7 @@ impl User {
             password_hash: None,
             is_active: true,
             is_admin: false,
+            password_must_change: false,
             external_id: None,
             created_at: now,
             updated_at: now,

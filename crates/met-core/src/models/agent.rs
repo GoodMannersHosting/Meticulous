@@ -97,6 +97,10 @@ pub struct Agent {
     /// Whether the JWT can be renewed.
     #[serde(default = "default_true")]
     pub jwt_renewable: bool,
+    /// Heartbeats seen without agent-reported draining while DB status is draining.
+    #[serde(default)]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub drain_missed_heartbeats: i32,
     /// When the agent was deregistered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deregistered_at: Option<DateTime<Utc>>,
@@ -143,6 +147,7 @@ impl Agent {
             join_token_id: None,
             jwt_expires_at: None,
             jwt_renewable: true,
+            drain_missed_heartbeats: 0,
             deregistered_at: None,
         }
     }

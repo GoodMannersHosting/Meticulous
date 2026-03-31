@@ -195,6 +195,8 @@ mod tests {
             renewable: true,
             nats_subjects: vec!["met.jobs.*.test".to_string()],
             nats_url: "nats://localhost:4222".to_string(),
+            nats_user_jwt: None,
+            nats_user_seed: None,
         };
 
         assert!(identity.is_jwt_expired(), "JWT should be expired");
@@ -210,6 +212,8 @@ mod tests {
             renewable: true,
             nats_subjects: vec!["met.jobs.*.test".to_string()],
             nats_url: "nats://localhost:4222".to_string(),
+            nats_user_jwt: None,
+            nats_user_seed: None,
         };
 
         assert!(!identity.is_jwt_expired(), "JWT should not be expired");
@@ -226,6 +230,8 @@ mod tests {
             renewable: true,
             nats_subjects: vec![],
             nats_url: "nats://localhost:4222".to_string(),
+            nats_user_jwt: None,
+            nats_user_seed: None,
         };
 
         assert!(
@@ -244,6 +250,8 @@ mod tests {
             renewable: false, // Not renewable
             nats_subjects: vec![],
             nats_url: "nats://localhost:4222".to_string(),
+            nats_user_jwt: None,
+            nats_user_seed: None,
         };
 
         assert!(

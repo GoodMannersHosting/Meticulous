@@ -7,16 +7,16 @@
 //! - Project admin operations (schedule deletion, force delete)
 
 use axum::{
-    extract::{Path, State},
-    routing::{delete, get, patch, post},
+    extract::{Path, Query, State},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{Duration, Utc};
 use met_core::ids::{AuthProviderId, GroupId, JoinTokenId, OidcGroupMappingId, ProjectId, UserId};
 use met_core::models::{
     AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership, GroupRole,
-    JoinToken, JoinTokenScope, OidcGroupMapping, PermissionRole, UpdateAuthProvider, User, UserRole,
-    generate_join_token,
+    JoinToken, JoinTokenDescriptionHistory, JoinTokenScope, OidcGroupMapping, PermissionRole,
+    UpdateAuthProvider, User, UserRole, generate_join_token,
 };
 use met_store::repos::{AgentRepo, AuthProviderRepo, GroupRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo};
 use crate::auth::hash_token;
@@ -73,7 +73,13 @@ pub fn router() -> Router<AppState> {
         )
         // Join token management
         .route("/admin/join-tokens", get(list_join_tokens).post(create_join_token))
-        .route("/admin/join-tokens/{id}", get(get_join_token).delete(revoke_join_token))
+        .route("/admin/join-tokens/{id}/revoke", post(revoke_join_token))
+        .route(
+            "/admin/join-tokens/{id}",
+            get(get_join_token)
+                .patch(update_join_token)
+                .delete(delete_join_token),
+        )
 }
 
 // ============================================================================
@@ -100,6 +106,7 @@ pub struct UserResponse {
     pub display_name: Option<String>,
     pub is_active: bool,
     pub is_admin: bool,
+    pub password_must_change: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -113,6 +120,7 @@ impl From<&User> for UserResponse {
             display_name: u.display_name.clone(),
             is_active: u.is_active,
             is_admin: u.is_admin,
+            password_must_change: u.password_must_change,
             created_at: u.created_at.to_rfc3339(),
             updated_at: u.updated_at.to_rfc3339(),
         }
@@ -1351,11 +1359,11 @@ async fn delete_group_mapping(
 pub struct JoinTokenResponse {
     pub id: String,
     pub prefix: String,
+    pub description: String,
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_uses: Option<i32>,
+    pub max_uses: i32,
     pub current_uses: i32,
     pub labels: Vec<String>,
     pub pool_tags: Vec<String>,
@@ -1366,8 +1374,26 @@ pub struct JoinTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by_name: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumed_by_agent_id: Option<String>,
+    /// Present on single-token GET; omitted or empty on list to keep payloads small.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub description_history: Vec<JoinTokenDescriptionHistoryEntry>,
     #[serde(default)]
     pub agents: Vec<JoinTokenAgentInfo>,
+}
+
+/// One edit in the join token description timeline.
+#[derive(Debug, Serialize)]
+pub struct JoinTokenDescriptionHistoryEntry {
+    pub description: String,
+    pub changed_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_by_name: Option<String>,
 }
 
 /// Summary of an agent that registered using a join token.
@@ -1379,12 +1405,22 @@ pub struct JoinTokenAgentInfo {
     pub registered_at: String,
 }
 
+fn join_token_scope_str(scope: JoinTokenScope) -> &'static str {
+    match scope {
+        JoinTokenScope::Platform => "platform",
+        JoinTokenScope::Tenant => "tenant",
+        JoinTokenScope::Project => "project",
+        JoinTokenScope::Pipeline => "pipeline",
+    }
+}
+
 impl JoinTokenResponse {
     fn from_token(t: &JoinToken) -> Self {
         Self {
             id: t.id.to_string(),
             prefix: format!("met_join_{}...", &t.token_hash[..8.min(t.token_hash.len())]),
-            scope: format!("{:?}", t.scope).to_lowercase(),
+            description: t.description.clone(),
+            scope: join_token_scope_str(t.scope).to_string(),
             scope_id: t.scope_id.map(|id| id.to_string()),
             max_uses: t.max_uses,
             current_uses: t.current_uses,
@@ -1395,6 +1431,9 @@ impl JoinTokenResponse {
             created_by: t.created_by.to_string(),
             created_by_name: None,
             created_at: t.created_at.to_rfc3339(),
+            consumed_at: t.consumed_at.map(|dt| dt.to_rfc3339()),
+            consumed_by_agent_id: t.consumed_by_agent_id.map(|a| a.to_string()),
+            description_history: Vec::new(),
             agents: Vec::new(),
         }
     }
@@ -1407,14 +1446,23 @@ impl From<&JoinToken> for JoinTokenResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateJoinTokenRequest {
+    /// New description (required, non-empty when trimmed).
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateJoinTokenRequest {
+    /// Human-readable description (required, non-empty when trimmed).
+    #[serde(default)]
+    pub description: Option<String>,
     /// Token scope: platform, tenant, project, or pipeline
     #[serde(default)]
     pub scope: Option<String>,
     /// Scope ID for project/pipeline scope
     #[serde(default)]
     pub scope_id: Option<uuid::Uuid>,
-    /// Maximum number of uses (None = unlimited)
+    /// Ignored — tokens are always single-use (`max_uses = 1`).
     #[serde(default)]
     pub max_uses: Option<i32>,
     /// Labels to apply to agents using this token
@@ -1434,25 +1482,87 @@ pub struct CreateJoinTokenResponse {
     pub plain_token: String,
 }
 
-/// List all join tokens for the organization, enriched with creator info and associated agents.
-#[instrument(skip(state))]
+/// Query parameters for listing join tokens (page-based pagination + search).
+#[derive(Debug, Deserialize)]
+pub struct JoinTokenListQuery {
+    /// 1-based page index.
+    #[serde(default = "join_token_list_default_page")]
+    pub page: u32,
+    /// Page size: one of 20, 50, 100, 200 (other values are clamped to the nearest allowed size).
+    #[serde(default = "join_token_list_default_limit")]
+    pub limit: u32,
+    /// Case-insensitive search on description or stored token hash (matches visible prefix / hash fragments).
+    pub q: Option<String>,
+}
+
+fn join_token_list_default_page() -> u32 {
+    1
+}
+
+fn join_token_list_default_limit() -> u32 {
+    20
+}
+
+fn normalize_join_token_limit(n: u32) -> u32 {
+    match n {
+        20 | 50 | 100 | 200 => n,
+        0 => 20,
+        n if n <= 35 => 20,
+        n if n <= 75 => 50,
+        n if n <= 150 => 100,
+        _ => 200,
+    }
+}
+
+/// Paginated join token list (tenant-scoped for the admin org).
+#[derive(Debug, Serialize)]
+pub struct JoinTokenListResponse {
+    /// Join tokens for this page.
+    pub data: Vec<JoinTokenResponse>,
+    pub pagination: JoinTokenListPagination,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JoinTokenListPagination {
+    pub page: u32,
+    pub per_page: u32,
+    pub total: u64,
+    pub has_more: bool,
+}
+
+/// List join tokens for the organization with pagination and optional search.
+#[instrument(skip(state, query))]
 async fn list_join_tokens(
     State(state): State<AppState>,
     Auth(admin): Auth,
-    pagination: Pagination,
-) -> ApiResult<Json<PaginatedResponse<JoinTokenResponse>>> {
+    Query(query): Query<JoinTokenListQuery>,
+) -> ApiResult<Json<JoinTokenListResponse>> {
     require_admin(&admin)?;
 
+    let page = query.page.max(1);
+    let per_page = normalize_join_token_limit(query.limit);
+    let offset = i64::from((page - 1).saturating_mul(per_page));
+    let limit = i64::from(per_page);
+
+    let search = query.q.as_deref();
     let repo = JoinTokenRepo::new(state.db());
+    let total = repo.count_by_org_filtered(admin.org_id, search).await? as u64;
     let tokens = repo
-        .list_by_org(admin.org_id, pagination.sql_limit(), 0)
+        .list_by_org_filtered(admin.org_id, search, limit, offset)
         .await?;
 
     let items = enrich_join_tokens(&tokens, state.db()).await?;
+    let has_more = offset.saturating_add(items.len() as i64) < total as i64;
 
-    let response = PaginatedResponse::new(items, pagination.limit, |t| t.id.clone());
-
-    Ok(Json(response))
+    Ok(Json(JoinTokenListResponse {
+        data: items,
+        pagination: JoinTokenListPagination {
+            page,
+            per_page,
+            total,
+            has_more,
+        },
+    }))
 }
 
 /// Enriches join tokens with creator names and associated agents.
@@ -1552,8 +1662,15 @@ async fn get_join_token(
     }
 
     let mut items = enrich_join_tokens(&[token], state.db()).await?;
+    let mut resp = items.remove(0);
 
-    Ok(Json(items.remove(0)))
+    let hist = JoinTokenRepo::new(state.db())
+        .list_description_history(token_id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+    resp.description_history = join_token_history_to_api_entries(state.db(), hist).await?;
+
+    Ok(Json(resp))
 }
 
 /// Create a new join token.
@@ -1564,6 +1681,16 @@ async fn create_join_token(
     Json(req): Json<CreateJoinTokenRequest>,
 ) -> ApiResult<Json<CreateJoinTokenResponse>> {
     require_admin(&admin)?;
+
+    let description = req
+        .description
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if description.is_empty() {
+        return Err(ApiError::bad_request("description is required"));
+    }
 
     // Parse scope
     let scope = match req.scope.as_deref().unwrap_or("tenant") {
@@ -1591,13 +1718,20 @@ async fn create_join_token(
         }
     };
 
+    let org_id_col = match scope {
+        JoinTokenScope::Tenant => Some(admin.org_id),
+        _ => None,
+    };
+
     let now = Utc::now();
     let token = JoinToken {
         id: JoinTokenId::new(),
         token_hash,
         scope,
         scope_id,
-        max_uses: req.max_uses,
+        description,
+        org_id: org_id_col,
+        max_uses: 1,
         current_uses: 0,
         labels: req.labels,
         pool_tags: req.pool_tags,
@@ -1606,10 +1740,20 @@ async fn create_join_token(
         created_by: admin.user_id,
         created_at: now,
         updated_at: now,
+        consumed_by_agent_id: None,
+        consumed_at: None,
     };
 
     let repo = JoinTokenRepo::new(state.db());
     let created = repo.create(&token).await?;
+
+    repo.insert_description_history(
+        created.id,
+        &created.description,
+        created.created_by,
+        created.created_at,
+    )
+    .await?;
 
     tracing::info!(
         admin_id = %admin.user_id,
@@ -1622,6 +1766,102 @@ async fn create_join_token(
         token: JoinTokenResponse::from(&created),
         plain_token,
     }))
+}
+
+async fn join_token_history_to_api_entries(
+    db: &sqlx::PgPool,
+    rows: Vec<JoinTokenDescriptionHistory>,
+) -> ApiResult<Vec<JoinTokenDescriptionHistoryEntry>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let user_ids: Vec<uuid::Uuid> = rows.iter().filter_map(|r| r.changed_by).collect();
+    let mut name_map: std::collections::HashMap<uuid::Uuid, (String, Option<String>)> =
+        std::collections::HashMap::new();
+    if !user_ids.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct UserNameRow {
+            id: uuid::Uuid,
+            username: String,
+            display_name: Option<String>,
+        }
+        let users: Vec<UserNameRow> = sqlx::query_as(
+            "SELECT id, username, display_name FROM users WHERE id = ANY($1)",
+        )
+        .bind(&user_ids)
+        .fetch_all(db)
+        .await
+        .map_err(met_store::StoreError::from)?;
+        for u in users {
+            name_map.insert(u.id, (u.username, u.display_name));
+        }
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let changed_by_name = r.changed_by.and_then(|uid| {
+                name_map
+                    .get(&uid)
+                    .map(|(username, display)| display.clone().unwrap_or_else(|| username.clone()))
+            });
+            JoinTokenDescriptionHistoryEntry {
+                description: r.description,
+                changed_at: r.changed_at.to_rfc3339(),
+                changed_by: r.changed_by.map(|id| id.to_string()),
+                changed_by_name,
+            }
+        })
+        .collect())
+}
+
+/// Update join token description (append-only history).
+#[instrument(skip(state, req))]
+async fn update_join_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(token_id): Path<JoinTokenId>,
+    Json(req): Json<UpdateJoinTokenRequest>,
+) -> ApiResult<Json<JoinTokenResponse>> {
+    require_admin(&admin)?;
+
+    let description = req.description.trim().to_string();
+    if description.is_empty() {
+        return Err(ApiError::bad_request("description is required"));
+    }
+
+    let repo = JoinTokenRepo::new(state.db());
+    let existing = repo.get(token_id).await?;
+
+    if existing.scope == JoinTokenScope::Tenant {
+        if existing.scope_id != Some(admin.org_id.as_uuid()) {
+            return Err(ApiError::forbidden(
+                "cannot update tokens from other organizations",
+            ));
+        }
+    }
+
+    let updated = repo
+        .update_description(token_id, &description, admin.user_id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    let mut items = enrich_join_tokens(&[updated], state.db()).await?;
+    let mut resp = items.remove(0);
+    let hist = JoinTokenRepo::new(state.db())
+        .list_description_history(token_id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+    resp.description_history = join_token_history_to_api_entries(state.db(), hist).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        token_id = %token_id,
+        "join token description updated"
+    );
+
+    Ok(Json(resp))
 }
 
 /// Revoke a join token.
@@ -1652,4 +1892,35 @@ async fn revoke_join_token(
     );
 
     Ok(Json(serde_json::json!({ "message": "join token revoked" })))
+}
+
+/// Permanently delete a join token (removes DB row; agents lose join_token link).
+#[instrument(skip(state))]
+async fn delete_join_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(token_id): Path<JoinTokenId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+
+    let repo = JoinTokenRepo::new(state.db());
+    let token = repo.get(token_id).await?;
+
+    if token.scope == JoinTokenScope::Tenant {
+        if token.scope_id != Some(admin.org_id.as_uuid()) {
+            return Err(ApiError::forbidden(
+                "cannot delete tokens from other organizations",
+            ));
+        }
+    }
+
+    repo.delete_by_id(token_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        token_id = %token_id,
+        "join token deleted"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "join token deleted" })))
 }

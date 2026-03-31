@@ -1,0 +1,16 @@
+# Rust
+target/
+**/target/
+
+# VCS / editor
+.git/
+.cursor/
+
+# Frontend (not needed for Rust server/controller images)
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/
+
+# Local env files (never send as build context)
+.env
+.env.*

@@ -3,13 +3,21 @@
 use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient, AgentCapabilities, RegisterRequest, SecurityBundle,
 };
-use met_proto::AgentStatus;
 use tonic::transport::Channel;
 use tracing::{debug, info, warn};
 
 use crate::config::{AgentConfig, AgentIdentity};
 use crate::error::{AgentError, Result};
 use crate::security::SecurityBundleCollector;
+
+/// How the agent obtained its identity for this run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistrationSource {
+    /// Read from `agent-identity.json` (no `Register` RPC this run).
+    LoadedFromDisk,
+    /// Completed `Register` with the controller and persisted identity.
+    RegisteredWithController,
+}
 
 /// Handles agent registration with the controller.
 pub struct AgentRegistration {
@@ -26,17 +34,36 @@ impl AgentRegistration {
     }
 
     /// Register the agent or load existing identity.
-    pub async fn register_or_load(&mut self) -> Result<AgentIdentity> {
+    ///
+    /// Set `force_register` (CLI `--force-register` / `MET_FORCE_REGISTER=1`) to ignore any file
+    /// under [`AgentConfig::identity_path`] and call [`register`](Self::register).
+    pub async fn register_or_load(
+        &mut self,
+        force_register: bool,
+    ) -> Result<(AgentIdentity, RegistrationSource)> {
         let identity_path = self.config.identity_path();
+
+        if force_register {
+            info!(
+                "force register: removing cached identity if present and registering with controller"
+            );
+            if identity_path.exists() {
+                if let Err(e) = std::fs::remove_file(&identity_path) {
+                    warn!(error = %e, path = %identity_path.display(), "failed to remove cached identity");
+                }
+            }
+            let identity = self.register().await?;
+            return Ok((identity, RegistrationSource::RegisteredWithController));
+        }
 
         // Try to load existing identity
         if let Some(identity) = AgentIdentity::load(&identity_path)? {
             if !identity.is_jwt_expired() {
                 info!(
                     agent_id = identity.agent_id,
-                    "loaded existing agent identity"
+                    "loaded existing agent identity (join token was not used; use MET_FORCE_REGISTER=1 to enroll again)"
                 );
-                return Ok(identity);
+                return Ok((identity, RegistrationSource::LoadedFromDisk));
             }
 
             if identity.renewable {
@@ -45,7 +72,7 @@ impl AgentRegistration {
                     "JWT expired, will try to renew via heartbeat"
                 );
                 // Return the identity anyway - heartbeat will renew
-                return Ok(identity);
+                return Ok((identity, RegistrationSource::LoadedFromDisk));
             }
 
             warn!(
@@ -55,7 +82,8 @@ impl AgentRegistration {
         }
 
         // Need to register
-        self.register().await
+        let identity = self.register().await?;
+        Ok((identity, RegistrationSource::RegisteredWithController))
     }
 
     /// Register the agent with the controller.
@@ -102,7 +130,18 @@ impl AgentRegistration {
             capabilities: Some(capabilities),
         };
 
-        let response = self.client.register(request).await?.into_inner();
+        let response = self
+            .client
+            .register(request)
+            .await
+            .map_err(|e| {
+                if e.code() == tonic::Code::Unauthenticated {
+                    AgentError::Registration(e.message().to_string())
+                } else {
+                    AgentError::Grpc(e)
+                }
+            })?
+            .into_inner();
 
         info!(
             agent_id = response.agent_id,
@@ -110,10 +149,21 @@ impl AgentRegistration {
             "registration successful"
         );
 
+        let creds = response.nats_credentials.as_ref();
+        let (nats_user_jwt, nats_user_seed) = creds
+            .map(|c| {
+                let jwt = c.jwt.trim();
+                let seed = c.nkey_seed.trim();
+                let jwt_opt = (!jwt.is_empty()).then(|| c.jwt.clone());
+                let seed_opt = (!seed.is_empty()).then(|| c.nkey_seed.clone());
+                (jwt_opt, seed_opt)
+            })
+            .unwrap_or((None, None));
+
         // Build identity
         let identity = AgentIdentity {
             agent_id: response.agent_id,
-            org_id: String::new(), // Not returned in response, derived from token
+            org_id: response.organization_id,
             jwt_token: response.jwt_token,
             jwt_expires_at: response
                 .jwt_expires_at
@@ -121,10 +171,12 @@ impl AgentRegistration {
                 .unwrap_or(0),
             renewable: response.renewable,
             nats_subjects: response.nats_subjects,
-            nats_url: response
-                .nats_credentials
-                .map(|c| c.url)
+            nats_url: creds
+                .map(|c| c.url.clone())
+                .filter(|u| !u.trim().is_empty())
                 .unwrap_or_else(|| "nats://localhost:4222".to_string()),
+            nats_user_jwt,
+            nats_user_seed,
         };
 
         // Persist identity

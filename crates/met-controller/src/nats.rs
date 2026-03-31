@@ -1,5 +1,7 @@
 //! NATS client for job dispatch and agent communication.
 
+use std::path::Path;
+
 use async_nats::jetstream::{self, consumer::PullConsumer, stream::Stream};
 use async_nats::Client;
 use met_core::ids::OrganizationId;
@@ -55,11 +57,22 @@ pub struct NatsDispatcher {
 
 impl NatsDispatcher {
     /// Connect to NATS and create the dispatcher.
-    pub async fn connect(url: &str) -> Result<Self> {
+    ///
+    /// When `creds_path` is set, authenticates with a `.creds` file (JWT + NKey).
+    pub async fn connect(url: &str, creds_path: Option<&Path>) -> Result<Self> {
         info!(url, "connecting to NATS");
-        let client = async_nats::connect(url)
-            .await
-            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+        let client = if let Some(path) = creds_path {
+            let opts = async_nats::ConnectOptions::with_credentials_file(path)
+                .await
+                .map_err(|e| ControllerError::Nats(format!("load NATS creds {}: {e}", path.display())))?;
+            opts.connect(url)
+                .await
+                .map_err(|e| ControllerError::Nats(e.to_string()))?
+        } else {
+            async_nats::connect(url)
+                .await
+                .map_err(|e| ControllerError::Nats(e.to_string()))?
+        };
         let jetstream = jetstream::new(client.clone());
 
         let dispatcher = Self { client, jetstream };
@@ -239,6 +252,22 @@ impl NatsDispatcher {
     /// Get the JetStream context.
     pub fn jetstream(&self) -> &jetstream::Context {
         &self.jetstream
+    }
+
+    /// Delete the per-agent pull consumer on the JOBS stream (matches `met-agent` naming: `agent-{agent_id}`).
+    pub async fn delete_agent_pull_consumer(&self, agent_id: &str) -> Result<()> {
+        let stream = self
+            .jetstream
+            .get_stream(subjects::JOBS_STREAM)
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+        let name = format!("agent-{agent_id}");
+        stream
+            .delete_consumer(&name)
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+        info!(consumer = %name, stream = subjects::JOBS_STREAM, "deleted agent JetStream consumer");
+        Ok(())
     }
 
     /// Close the connection.

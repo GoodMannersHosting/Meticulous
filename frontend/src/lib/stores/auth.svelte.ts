@@ -77,17 +77,15 @@ class AuthStore {
 				localStorage.setItem('auth_token', response.token);
 			}
 
-			this.#user = {
-				id: response.user.id,
-				org_id: '', // Will be populated from /auth/me
-				name: response.user.display_name || response.user.username,
-				email: response.user.email,
-				role: response.user.is_admin ? 'admin' : 'user',
-				created_at: new Date().toISOString()
-			};
+			const user = await apiMethods.auth.me();
+			this.#user = user;
 			this.#state = 'authenticated';
 
-			goto('/dashboard');
+			if (user.password_must_change) {
+				goto('/auth/change-password');
+			} else {
+				goto('/dashboard');
+			}
 		} catch (err) {
 			this.#state = 'unauthenticated';
 			this.#error = err instanceof Error ? err.message : 'Login failed';
@@ -100,7 +98,7 @@ class AuthStore {
 			this.#state = 'loading';
 			this.#error = null;
 
-			const { user, tokens } = await apiMethods.auth.callback(provider, code, state);
+			const { tokens } = await apiMethods.auth.callback(provider, code, state);
 
 			if (browser) {
 				localStorage.setItem('auth_token', tokens.access_token);
@@ -109,10 +107,15 @@ class AuthStore {
 				}
 			}
 
-			this.#user = user;
+			const me = await apiMethods.auth.me();
+			this.#user = me;
 			this.#state = 'authenticated';
 
-			goto('/dashboard');
+			if (me.password_must_change) {
+				goto('/auth/change-password');
+			} else {
+				goto('/dashboard');
+			}
 		} catch (err) {
 			this.#state = 'unauthenticated';
 			this.#error = err instanceof Error ? err.message : 'Authentication failed';
@@ -133,7 +136,11 @@ class AuthStore {
 			this.#user = user;
 			this.#state = 'authenticated';
 
-			goto('/dashboard');
+			if (user.password_must_change) {
+				goto('/auth/change-password');
+			} else {
+				goto('/dashboard');
+			}
 		} catch (err) {
 			if (browser) {
 				localStorage.removeItem('auth_token');

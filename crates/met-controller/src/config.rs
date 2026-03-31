@@ -1,5 +1,6 @@
 //! Controller configuration.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration for the agent controller.
@@ -9,6 +10,14 @@ pub struct ControllerConfig {
     pub grpc_addr: String,
     /// NATS server URL.
     pub nats_url: String,
+    /// Path to a NATS `.creds` file for the controller (required when the server disables anonymous access).
+    pub nats_creds_path: Option<PathBuf>,
+    /// Account signing seed (`SU...`) used to sign per-agent NATS user JWTs. Loaded from env only; never committed.
+    pub nats_account_signing_seed: Option<String>,
+    /// Account identity public key (`A...`) when the signing seed is a delegated key; sets `issuer_account` on user JWTs.
+    pub nats_account_issuer_pubkey: Option<String>,
+    /// Lifetime for issued NATS user JWTs.
+    pub nats_agent_jwt_ttl: Duration,
     /// JWT secret for signing agent tokens.
     pub jwt_secret: String,
     /// JWT token validity duration.
@@ -34,6 +43,10 @@ impl Default for ControllerConfig {
         Self {
             grpc_addr: "0.0.0.0:9090".to_string(),
             nats_url: "nats://localhost:4222".to_string(),
+            nats_creds_path: None,
+            nats_account_signing_seed: None,
+            nats_account_issuer_pubkey: None,
+            nats_agent_jwt_ttl: Duration::from_secs(90 * 24 * 60 * 60),
             jwt_secret: "change-me-in-production".to_string(),
             jwt_validity: Duration::from_secs(24 * 60 * 60), // 24 hours
             jwt_renewable: true,

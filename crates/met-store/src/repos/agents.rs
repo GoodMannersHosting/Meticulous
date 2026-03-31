@@ -13,12 +13,12 @@ pub struct AgentRepo<'a> {
 }
 
 /// Columns selected / returned for [`Agent`] (`sqlx::FromRow` must match the row).
-const AGENT_ROW_SELECT: &str = r#"
+pub(crate) const AGENT_ROW_SELECT: &str = r#"
     id, org_id, name, status, pool, tags, capabilities, os, arch, version, ip_address,
     max_jobs, running_jobs, last_heartbeat_at, created_at,
     environment_type, kernel_version, public_ips, private_ips, ntp_synchronized,
     container_runtime, container_runtime_version, x509_public_key, join_token_id,
-    jwt_expires_at, jwt_renewable, deregistered_at
+    jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at
 "#;
 
 impl<'a> AgentRepo<'a> {
@@ -37,11 +37,11 @@ impl<'a> AgentRepo<'a> {
                 max_jobs, running_jobs, last_heartbeat_at, created_at,
                 environment_type, kernel_version, public_ips, private_ips, ntp_synchronized,
                 container_runtime, container_runtime_version, x509_public_key, join_token_id,
-                jwt_expires_at, jwt_renewable, deregistered_at
+                jwt_expires_at, jwt_renewable, drain_missed_heartbeats, deregistered_at
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
+                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -67,6 +67,7 @@ impl<'a> AgentRepo<'a> {
                 join_token_id = EXCLUDED.join_token_id,
                 jwt_expires_at = EXCLUDED.jwt_expires_at,
                 jwt_renewable = EXCLUDED.jwt_renewable,
+                drain_missed_heartbeats = EXCLUDED.drain_missed_heartbeats,
                 deregistered_at = EXCLUDED.deregistered_at
             RETURNING {AGENT_ROW_SELECT}
             "#,
@@ -99,6 +100,7 @@ impl<'a> AgentRepo<'a> {
         .bind(agent.join_token_id.map(|j| j.as_uuid()))
         .bind(agent.jwt_expires_at)
         .bind(agent.jwt_renewable)
+        .bind(agent.drain_missed_heartbeats)
         .bind(agent.deregistered_at)
         .fetch_one(self.pool)
         .await?;
@@ -196,20 +198,40 @@ impl<'a> AgentRepo<'a> {
         Ok(())
     }
 
-    /// Update agent heartbeat from the controller (live connection).
-    pub async fn heartbeat(&self, id: AgentId, status: AgentStatus, running_jobs: i32) -> Result<()> {
-        let now = Utc::now();
-
+    /// Set agent to draining (UI/API) and reset missed-heartbeat counter.
+    pub async fn set_drain_requested(&self, id: AgentId) -> Result<()> {
         let result = sqlx::query(
             r#"
             UPDATE agents
-            SET last_heartbeat_at = $2, running_jobs = $3, status = $4
+            SET status = 'draining', drain_missed_heartbeats = 0
             WHERE id = $1 AND deregistered_at IS NULL
             "#,
         )
         .bind(id.as_uuid())
-        .bind(now)
-        .bind(running_jobs)
+        .execute(self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::not_found("agent", id));
+        }
+
+        Ok(())
+    }
+
+    /// Update status after resume from drain; clears drain miss counter.
+    pub async fn update_status_clear_drain_counter(
+        &self,
+        id: AgentId,
+        status: AgentStatus,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE agents
+            SET status = $2, drain_missed_heartbeats = 0
+            WHERE id = $1 AND deregistered_at IS NULL
+            "#,
+        )
+        .bind(id.as_uuid())
         .bind(status)
         .execute(self.pool)
         .await?;
@@ -219,6 +241,48 @@ impl<'a> AgentRepo<'a> {
         }
 
         Ok(())
+    }
+
+    /// Controller heartbeat: keeps `draining` in DB until the agent reports draining; tracks misses.
+    pub async fn heartbeat_from_controller(
+        &self,
+        id: AgentId,
+        reported: AgentStatus,
+        running_jobs: i32,
+    ) -> Result<Agent> {
+        let row = sqlx::query_as::<_, Agent>(&format!(
+            r#"
+            UPDATE agents
+            SET
+                last_heartbeat_at = NOW(),
+                running_jobs = $2,
+                status = CASE
+                    WHEN agents.status = 'draining'::agent_status
+                        AND ($3::agent_status IS DISTINCT FROM 'draining'::agent_status)
+                        THEN agents.status
+                    ELSE $3::agent_status
+                END,
+                drain_missed_heartbeats = CASE
+                    WHEN agents.status = 'draining'::agent_status
+                        AND ($3::agent_status IS DISTINCT FROM 'draining'::agent_status)
+                        THEN LEAST(agents.drain_missed_heartbeats + 1, 10000)
+                    WHEN $3::agent_status = 'draining'::agent_status
+                        THEN 0
+                    ELSE agents.drain_missed_heartbeats
+                END
+            WHERE id = $1 AND deregistered_at IS NULL
+            RETURNING {AGENT_ROW_SELECT}
+            "#,
+            AGENT_ROW_SELECT = AGENT_ROW_SELECT
+        ))
+        .bind(id.as_uuid())
+        .bind(running_jobs)
+        .bind(reported)
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("agent", id))?;
+
+        Ok(row)
     }
 
     /// Mark stale agents as offline (no recent heartbeat from a live agent).

@@ -20,7 +20,8 @@ use met_proto::common::v1::RunStatus as ProtoRunStatus;
 use met_secrets::pki::encryption::HybridEncryption;
 use met_objstore::ObjectStore;
 use met_store::repos::{
-    AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, StepRunRepo,
+    register_agent_with_join_token, AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo,
+    LogCacheRepo, StepRunRepo,
 };
 use met_store::PgPool;
 use sha2::{Digest, Sha256};
@@ -33,7 +34,11 @@ use crate::log_archive::finalize_job_logs;
 use crate::error::ControllerError;
 use crate::jwt::JwtManager;
 use crate::nats::NatsDispatcher;
+use crate::nats_jwt::issue_agent_nats_credentials;
 use crate::registry::{agent_state_from_db_row, AgentRegistry, AgentState, ResourceSnapshot};
+
+/// After this many heartbeats without the agent reporting `draining` while drain is requested, delete its NATS consumer.
+const DRAIN_FORCE_EJECT_MISSED_HEARTBEATS: i32 = 3;
 
 /// gRPC implementation of the AgentService.
 pub struct AgentServiceImpl {
@@ -161,17 +166,10 @@ impl AgentService for AgentServiceImpl {
         let join_repo = JoinTokenRepo::new(&self.pool);
         let token_hash = hash_join_token(&req.join_token);
         let join_record = join_repo
-            .validate_and_consume(&token_hash)
+            .validate_token(&token_hash)
             .await
-            .map_err(|e| match e {
-                StoreError::NotFound { .. } => {
-                    Status::unauthenticated("invalid or unknown join token")
-                }
-                StoreError::Constraint(_) => Status::unauthenticated(
-                    "join token is expired, revoked, or has reached max uses",
-                ),
-                _ => Status::internal(e.to_string()),
-            })?;
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::unauthenticated("invalid or unknown join token"))?;
 
         let org_id = match join_record.scope {
             JoinTokenScope::Tenant => {
@@ -266,12 +264,35 @@ impl AgentService for AgentServiceImpl {
 
         agent.jwt_expires_at = Some(jwt_expires_at);
 
-        // Save to database
-        let repo = AgentRepo::new(&self.pool);
-        let agent = repo
-            .register(&agent)
+        let (nats_jwt, nats_seed) = if let Some(ref seed) = self.config.nats_account_signing_seed {
+            issue_agent_nats_credentials(
+                org_id,
+                &pool_tags,
+                agent_id,
+                seed,
+                self.config
+                    .nats_account_issuer_pubkey
+                    .as_deref()
+                    .filter(|s| !s.is_empty()),
+                self.config.nats_agent_jwt_ttl,
+            )
+            .map_err(|e| Status::internal(e.to_string()))?
+        } else {
+            (String::new(), String::new())
+        };
+
+        // Save to database and consume join token atomically
+        let (agent, _) = register_agent_with_join_token(&self.pool, &token_hash, &agent)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| match e {
+                StoreError::NotFound { .. } => {
+                    Status::unauthenticated("invalid or unknown join token")
+                }
+                StoreError::Constraint(_) => Status::unauthenticated(
+                    "join token is expired, revoked, or has reached max uses",
+                ),
+                _ => Status::internal(e.to_string()),
+            })?;
 
         // Add to registry
         let state = AgentState {
@@ -317,10 +338,11 @@ impl AgentService for AgentServiceImpl {
             nats_subjects,
             nats_credentials: Some(met_proto::agent::v1::NatsCredentials {
                 url: self.config.nats_url.clone(),
-                jwt: String::new(), // Would be populated with NATS-specific JWT
-                nkey_seed: String::new(),
+                jwt: nats_jwt,
+                nkey_seed: nats_seed,
             }),
             heartbeat_interval_secs: self.config.heartbeat_interval.as_secs() as i32,
+            organization_id: org_id.as_uuid().to_string(),
         }))
     }
 
@@ -363,13 +385,8 @@ impl AgentService for AgentServiceImpl {
             disk_percent: r.disk_percent,
         });
 
-        // Update registry (may be empty after controller restart — rehydrate from DB)
-        let mut updated = self
-            .registry
-            .heartbeat(agent_id, status, running_jobs, current_job, resources.clone())
-            .await;
-
-        if updated.is_none() {
+        // Rehydrate in-memory registry after controller restart (before DB merge).
+        if self.registry.get(agent_id).await.is_none() {
             let repo = AgentRepo::new(&self.pool);
             match repo.get(agent_id).await {
                 Ok(agent) => {
@@ -380,25 +397,53 @@ impl AgentService for AgentServiceImpl {
                             "rehydrated agent into registry after heartbeat miss (e.g. controller restarted)"
                         );
                     }
-                    updated = self
-                        .registry
-                        .heartbeat(agent_id, status, running_jobs, current_job, resources.clone())
-                        .await;
                 }
                 Err(_) => return Err(Status::not_found("agent not found")),
             }
         }
 
-        let updated = updated.ok_or_else(|| Status::not_found("agent not found"))?;
-
-        // Update database heartbeat
         let repo = AgentRepo::new(&self.pool);
-        repo.heartbeat(agent_id, status, running_jobs)
+        let mut db_row = repo
+            .heartbeat_from_controller(agent_id, status, running_jobs)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        let mut force_ejected = false;
+        if db_row.drain_missed_heartbeats >= DRAIN_FORCE_EJECT_MISSED_HEARTBEATS {
+            force_ejected = true;
+            if let Err(e) = self
+                .nats
+                .delete_agent_pull_consumer(&agent_id.to_string())
+                .await
+            {
+                warn!(
+                    error = %e,
+                    agent_id = %agent_id,
+                    "failed to delete agent NATS consumer after drain was not acknowledged"
+                );
+            }
+            repo.update_status(agent_id, AgentStatus::Offline)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            db_row = repo
+                .get(agent_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
+
+        self.registry
+            .heartbeat(
+                agent_id,
+                db_row.status,
+                db_row.running_jobs,
+                current_job,
+                resources.clone(),
+            )
+            .await
+            .ok_or_else(|| Status::not_found("agent not found"))?;
+
         // Record heartbeat for diagnostics
-        let heartbeat_record = AgentHeartbeat::new(agent_id, status);
+        let heartbeat_record = AgentHeartbeat::new(agent_id, db_row.status);
         let heartbeat_record = if let Some(r) = &resources {
             heartbeat_record.with_resources(r.cpu_percent, r.memory_percent, r.disk_percent)
         } else {
@@ -424,14 +469,20 @@ impl AgentService for AgentServiceImpl {
             new_jwt_expires_at: None,
         };
 
-        // Check if agent should be drained (e.g., if revoked)
-        if updated.status == AgentStatus::Revoked {
+        if force_ejected {
             response.action = HeartbeatAction::Terminate.into();
+        } else if db_row.status == AgentStatus::Revoked {
+            response.action = HeartbeatAction::Terminate.into();
+        } else if db_row.status == AgentStatus::Draining && status != AgentStatus::Draining {
+            // API requested drain; agent has not yet reported draining — tell it to stop accepting work.
+            response.action = HeartbeatAction::Drain.into();
         }
 
         debug!(
             agent_id = %agent_id,
-            status = ?status,
+            reported = ?status,
+            db_status = ?db_row.status,
+            drain_missed = db_row.drain_missed_heartbeats,
             running_jobs,
             "heartbeat processed"
         );

@@ -41,4 +41,4 @@ pub use process_watcher::{
     compute_file_sha256, merge_execution_metadata, ExecutedBinary, ExecutedBinaryRecord,
     JobExecutionMetadata, ProcessWatcher,
 };
-pub use registration::AgentRegistration;
+pub use registration::{AgentRegistration, RegistrationSource};

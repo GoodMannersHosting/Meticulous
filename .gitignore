@@ -40,6 +40,10 @@ coverage/
 # Generated files
 *.generated.*
 
+# Local NATS JWT material (`nsc` exports); keep `.gitkeep`
+deploy/nats/keys/*
+!deploy/nats/keys/.gitkeep
+
 # Secrets (never commit)
 *.pem
 *.key

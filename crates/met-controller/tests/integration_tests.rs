@@ -217,7 +217,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires NATS server"]
     async fn test_nats_dispatcher() {
-        let dispatcher = NatsDispatcher::connect("nats://localhost:4222")
+        let dispatcher = NatsDispatcher::connect("nats://localhost:4222", None)
             .await
             .unwrap();
 
@@ -574,7 +574,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires NATS server with JetStream"]
     async fn test_job_dispatch_and_consume() {
-        let dispatcher = NatsDispatcher::connect("nats://localhost:4222")
+        let dispatcher = NatsDispatcher::connect("nats://localhost:4222", None)
             .await
             .unwrap();
 
@@ -637,7 +637,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires NATS server"]
     async fn test_job_cancellation_broadcast() {
-        let dispatcher = NatsDispatcher::connect("nats://localhost:4222")
+        let dispatcher = NatsDispatcher::connect("nats://localhost:4222", None)
             .await
             .unwrap();
 
@@ -655,7 +655,7 @@ mod tests {
     #[ignore = "requires NATS server"]
     async fn test_nats_reconnection() {
         // First connection
-        let dispatcher = NatsDispatcher::connect("nats://localhost:4222")
+        let dispatcher = NatsDispatcher::connect("nats://localhost:4222", None)
             .await
             .unwrap();
 

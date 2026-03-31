@@ -190,7 +190,9 @@ export interface PasswordLoginResponse {
 		email: string;
 		display_name?: string;
 		is_admin: boolean;
+		password_must_change: boolean;
 	};
+	password_must_change: boolean;
 }
 
 // Type-safe API methods
@@ -204,6 +206,11 @@ export const apiMethods = {
 			api.post<{ user: import('./types').User; tokens: import('./types').AuthTokens }>(`/auth/${provider}/callback`, { code, state }),
 		logout: () => api.post<void>('/auth/logout'),
 		me: () => api.get<import('./types').User>('/auth/me'),
+		changePassword: (currentPassword: string, newPassword: string) =>
+			api.post<{ message: string }>('/auth/change-password', {
+				current_password: currentPassword,
+				new_password: newPassword
+			}),
 		setupStatus: () => api.get<{ setup_required: boolean }>('/auth/setup', { skipAuth: true }),
 		setup: (data: { username: string; email: string; password: string; org_name?: string }) =>
 			api.post<PasswordLoginResponse>('/auth/setup', data, { skipAuth: true })
