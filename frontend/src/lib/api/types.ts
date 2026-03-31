@@ -296,3 +296,47 @@ export interface ListAgentsParams {
 	page?: number;
 	per_page?: number;
 }
+
+// Admin Types
+export interface AdminUser {
+	id: string;
+	username: string;
+	email: string;
+	display_name?: string;
+	is_active: boolean;
+	is_admin: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AdminGroup {
+	id: string;
+	name: string;
+	description?: string;
+	member_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export type GroupRoleType = 'member' | 'maintainer' | 'owner';
+
+export interface GroupMember {
+	user_id: string;
+	username: string;
+	email: string;
+	display_name?: string;
+	role: GroupRoleType;
+	joined_at: string;
+}
+
+export interface RoleInfo {
+	name: string;
+	description: string;
+	permissions: string[];
+}
+
+export interface UserRoleAssignment {
+	role: string;
+	granted_by?: string;
+	granted_at: string;
+}

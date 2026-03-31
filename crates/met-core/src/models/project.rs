@@ -31,6 +31,12 @@ pub struct Project {
     /// Soft-delete timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// When the project was archived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
+    /// When the project is scheduled for permanent deletion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduled_deletion_at: Option<DateTime<Utc>>,
 }
 
 impl Project {
@@ -54,6 +60,8 @@ impl Project {
             created_at: now,
             updated_at: now,
             deleted_at: None,
+            archived_at: None,
+            scheduled_deletion_at: None,
         }
     }
 
@@ -77,14 +85,56 @@ impl Project {
             created_at: now,
             updated_at: now,
             deleted_at: None,
+            archived_at: None,
+            scheduled_deletion_at: None,
         }
     }
 
-    /// Check if the project is active (not deleted).
+    /// Check if the project is active (not deleted or archived).
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        self.deleted_at.is_none()
+        self.deleted_at.is_none() && self.archived_at.is_none()
     }
+
+    /// Check if the project is archived.
+    #[must_use]
+    pub const fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+
+    /// Check if the project is pending deletion.
+    #[must_use]
+    pub const fn is_pending_deletion(&self) -> bool {
+        self.scheduled_deletion_at.is_some()
+    }
+
+    /// Get the project lifecycle state.
+    #[must_use]
+    pub fn lifecycle_state(&self) -> ProjectLifecycleState {
+        if self.deleted_at.is_some() {
+            ProjectLifecycleState::Deleted
+        } else if self.scheduled_deletion_at.is_some() {
+            ProjectLifecycleState::PendingDeletion
+        } else if self.archived_at.is_some() {
+            ProjectLifecycleState::Archived
+        } else {
+            ProjectLifecycleState::Active
+        }
+    }
+}
+
+/// Project lifecycle states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectLifecycleState {
+    /// Project is active and usable.
+    Active,
+    /// Project is archived (read-only).
+    Archived,
+    /// Project is scheduled for permanent deletion.
+    PendingDeletion,
+    /// Project has been permanently deleted.
+    Deleted,
 }
 
 /// Type of entity that owns a project.

@@ -1,6 +1,6 @@
 //! Project repository.
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use met_core::ids::{OrganizationId, ProjectId};
 use met_core::models::{CreateProject, OwnerType, Project, UpdateProject};
 use sqlx::PgPool;
@@ -28,7 +28,7 @@ impl<'a> ProjectRepo<'a> {
             r#"
             INSERT INTO projects (id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -49,9 +49,24 @@ impl<'a> ProjectRepo<'a> {
     pub async fn get(&self, id: ProjectId) -> Result<Project> {
         sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE id = $1 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("project", id))
+    }
+
+    /// Get a project by ID, including deleted projects (for admin operations).
+    pub async fn get_including_deleted(&self, id: ProjectId) -> Result<Project> {
+        sqlx::query_as::<_, Project>(
+            r#"
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            FROM projects
+            WHERE id = $1
             "#,
         )
         .bind(id.as_uuid())
@@ -64,7 +79,7 @@ impl<'a> ProjectRepo<'a> {
     pub async fn get_by_slug(&self, org_id: OrganizationId, slug: &str) -> Result<Project> {
         sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL
             "#,
@@ -85,7 +100,7 @@ impl<'a> ProjectRepo<'a> {
     ) -> Result<Vec<Project>> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE org_id = $1 AND deleted_at IS NULL
             ORDER BY created_at DESC
@@ -95,6 +110,49 @@ impl<'a> ProjectRepo<'a> {
         .bind(org_id.as_uuid())
         .bind(limit)
         .bind(offset)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(projects)
+    }
+
+    /// List archived projects in an organization.
+    pub async fn list_archived(
+        &self,
+        org_id: OrganizationId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Project>> {
+        let projects = sqlx::query_as::<_, Project>(
+            r#"
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            FROM projects
+            WHERE org_id = $1 AND archived_at IS NOT NULL AND deleted_at IS NULL
+            ORDER BY archived_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(projects)
+    }
+
+    /// List projects pending deletion.
+    pub async fn list_pending_deletion(&self, limit: i64) -> Result<Vec<Project>> {
+        let projects = sqlx::query_as::<_, Project>(
+            r#"
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            FROM projects
+            WHERE scheduled_deletion_at IS NOT NULL AND scheduled_deletion_at <= NOW() AND deleted_at IS NULL
+            ORDER BY scheduled_deletion_at ASC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
         .fetch_all(self.pool)
         .await?;
 
@@ -113,7 +171,7 @@ impl<'a> ProjectRepo<'a> {
             UPDATE projects
             SET name = $2, description = $3, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -123,6 +181,100 @@ impl<'a> ProjectRepo<'a> {
         .await?;
 
         Ok(project)
+    }
+
+    /// Archive a project.
+    pub async fn archive(&self, id: ProjectId) -> Result<Project> {
+        let project = sqlx::query_as::<_, Project>(
+            r#"
+            UPDATE projects
+            SET archived_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("project", id))?;
+
+        Ok(project)
+    }
+
+    /// Unarchive a project.
+    pub async fn unarchive(&self, id: ProjectId) -> Result<Project> {
+        let project = sqlx::query_as::<_, Project>(
+            r#"
+            UPDATE projects
+            SET archived_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NOT NULL
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("project", id))?;
+
+        Ok(project)
+    }
+
+    /// Schedule a project for deletion after a retention period.
+    pub async fn schedule_deletion(&self, id: ProjectId, retention_days: i64) -> Result<Project> {
+        let deletion_time = Utc::now() + Duration::days(retention_days);
+        
+        let project = sqlx::query_as::<_, Project>(
+            r#"
+            UPDATE projects
+            SET scheduled_deletion_at = $2, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(deletion_time)
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("project", id))?;
+
+        Ok(project)
+    }
+
+    /// Cancel scheduled deletion.
+    pub async fn cancel_deletion(&self, id: ProjectId) -> Result<Project> {
+        let project = sqlx::query_as::<_, Project>(
+            r#"
+            UPDATE projects
+            SET scheduled_deletion_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL AND scheduled_deletion_at IS NOT NULL
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("project", id))?;
+
+        Ok(project)
+    }
+
+    /// Permanently delete a project and all associated data.
+    /// This operation cannot be undone.
+    pub async fn permanent_delete(&self, id: ProjectId) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM projects WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::not_found("project", id));
+        }
+
+        Ok(())
     }
 
     /// Soft-delete a project.

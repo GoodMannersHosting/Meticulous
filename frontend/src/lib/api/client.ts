@@ -264,5 +264,55 @@ export const apiMethods = {
 		get: (id: string) => api.get<import('./types').Agent>(`/api/v1/agents/${id}`),
 		drain: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/drain`),
 		resume: (id: string) => api.post<{ agent_id: string; status: string; message: string }>(`/api/v1/agents/${id}/resume`)
+	},
+
+	// Admin
+	admin: {
+		// User management
+		users: {
+			list: (params?: { limit?: number }) =>
+				api.get<import('./types').PaginatedResponse<import('./types').AdminUser>>('/admin/users', { params }),
+			get: (id: string) => api.get<import('./types').AdminUser>(`/admin/users/${id}`),
+			update: (id: string, data: { display_name?: string; is_admin?: boolean }) =>
+				api.patch<import('./types').AdminUser>(`/admin/users/${id}`, data),
+			lock: (id: string) => api.post<import('./types').AdminUser>(`/admin/users/${id}/lock`),
+			unlock: (id: string) => api.post<import('./types').AdminUser>(`/admin/users/${id}/unlock`),
+			delete: (id: string) => api.post<{ message: string }>(`/admin/users/${id}/delete`),
+			resetPassword: (id: string, newPassword: string) =>
+				api.post<{ message: string }>(`/admin/users/${id}/reset-password`, { new_password: newPassword })
+		},
+		// Group management
+		groups: {
+			list: (params?: { limit?: number }) =>
+				api.get<import('./types').PaginatedResponse<import('./types').AdminGroup>>('/admin/groups', { params }),
+			get: (id: string) => api.get<import('./types').AdminGroup>(`/admin/groups/${id}`),
+			create: (data: { name: string; description?: string }) =>
+				api.post<import('./types').AdminGroup>('/admin/groups', data),
+			update: (id: string, data: { name?: string; description?: string }) =>
+				api.patch<import('./types').AdminGroup>(`/admin/groups/${id}`, data),
+			delete: (id: string) => api.delete<{ message: string }>(`/admin/groups/${id}`),
+			listMembers: (groupId: string) =>
+				api.get<import('./types').GroupMember[]>(`/admin/groups/${groupId}/members`),
+			addMember: (groupId: string, userId: string, role?: string) =>
+				api.post<import('./types').GroupMember>(`/admin/groups/${groupId}/members`, { user_id: userId, role: role ?? 'member' }),
+			updateMember: (groupId: string, userId: string, role: string) =>
+				api.patch<import('./types').GroupMember>(`/admin/groups/${groupId}/members/${userId}`, { role }),
+			removeMember: (groupId: string, userId: string) =>
+				api.delete<{ message: string }>(`/admin/groups/${groupId}/members/${userId}`)
+		},
+		// Role management
+		roles: {
+			list: () => api.get<import('./types').RoleInfo[]>('/admin/roles'),
+			getUserRoles: (userId: string) => api.get<import('./types').UserRoleAssignment[]>(`/admin/users/${userId}/roles`),
+			assign: (userId: string, role: string) => api.post<import('./types').UserRoleAssignment>(`/admin/users/${userId}/roles`, { role }),
+			revoke: (userId: string, role: string) => api.delete<{ message: string }>(`/admin/users/${userId}/roles/${role}`)
+		},
+		// Project admin operations
+		projects: {
+			scheduleDeletion: (id: string, retentionDays?: number) =>
+				api.post<{ message: string; scheduled_deletion_at: string }>(`/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
+			cancelDeletion: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/cancel-deletion`),
+			forceDelete: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/force-delete`)
+		}
 	}
 };

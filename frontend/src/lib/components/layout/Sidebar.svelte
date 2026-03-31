@@ -49,7 +49,7 @@
 			title: 'Administration',
 			items: [
 				{ label: 'Settings', href: '/settings', icon: Settings },
-				{ label: 'Security', href: '/settings/security', icon: Shield }
+				{ label: 'Admin', href: '/admin', icon: Shield }
 			]
 		}
 	];

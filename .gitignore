@@ -18,6 +18,11 @@ Cargo.lock
 # Node
 node_modules/
 
+# SvelteKit
+.svelte-kit/
+build/
+.vercel/
+
 # macOS
 .DS_Store
 

@@ -2,6 +2,7 @@
 //!
 //! All API routes are mounted under `/api/v1`, with health checks at the root level.
 //! Auth routes are mounted at `/auth/*` for login, logout, and setup.
+//! Admin routes are mounted at `/admin/*` for user, group, and system management.
 
 use crate::middleware::{cors_layer, logging_layer, rate_limit_layer};
 use crate::state::AppState;
@@ -12,10 +13,13 @@ use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
 };
 
+pub mod admin;
 pub mod agents;
 pub mod auth;
 pub mod health;
+pub mod oauth;
 pub mod pipelines;
+pub mod projects;
 pub mod runs;
 pub mod webhooks;
 pub mod websocket;
@@ -38,6 +42,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // Build versioned API routes
     let api_v1 = Router::new()
+        .merge(projects::router())
         .merge(pipelines::router())
         .merge(runs::router())
         .merge(agents::router())
@@ -50,6 +55,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(health::router())
         // Auth routes at root level (login, logout, setup)
         .merge(auth::router())
+        // OAuth routes (OIDC, GitHub)
+        .merge(oauth::router())
+        // Admin routes at root level (user, group, system management)
+        .merge(admin::router())
         // API v1 routes
         .nest("/api/v1", api_v1)
         // Apply middleware stack

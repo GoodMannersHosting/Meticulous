@@ -12,9 +12,10 @@ use crate::extractors::Auth;
 use crate::state::AppState;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     routing::{get, post},
 };
+use met_core::ids::UserId;
 use met_core::models::{CreateOrganization, User};
 use met_store::repos::{OrganizationRepo, UserRepo};
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
         .route("/auth/logout", post(logout))
+        .route("/auth/change-password", post(change_password))
         .route("/auth/setup", get(setup_status))
         .route("/auth/setup", post(setup))
+        .route("/admin/users/{id}/reset-password", post(admin_reset_password))
 }
 
 /// Login request body.
@@ -309,5 +312,115 @@ async fn setup(
         token_type: "Bearer".to_string(),
         expires_in,
         user: UserResponse::from(&user),
+    }))
+}
+
+/// Change password request.
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    /// Current password for verification.
+    pub current_password: String,
+    /// New password.
+    pub new_password: String,
+}
+
+/// Change password response.
+#[derive(Debug, Serialize)]
+pub struct ChangePasswordResponse {
+    pub message: String,
+}
+
+/// Change the current user's password.
+async fn change_password(
+    State(state): State<AppState>,
+    Auth(current_user): Auth,
+    Json(req): Json<ChangePasswordRequest>,
+) -> ApiResult<Json<ChangePasswordResponse>> {
+    let user_repo = UserRepo::new(state.db());
+
+    // Validate new password
+    if req.new_password.len() < 8 {
+        return Err(ApiError::bad_request("new password must be at least 8 characters"));
+    }
+
+    // Get the user to verify current password
+    let user = user_repo.get(current_user.user_id).await?;
+
+    // Verify current password
+    let password_hash = user
+        .password_hash
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("password login not configured for this user"))?;
+
+    verify_password(&req.current_password, password_hash)
+        .map_err(|_| ApiError::unauthorized("current password is incorrect"))?;
+
+    // Hash and update new password
+    let new_hash = hash_password(&req.new_password)
+        .map_err(|e| ApiError::internal(format!("failed to hash password: {e}")))?;
+
+    user_repo.update_password(current_user.user_id, &new_hash).await?;
+
+    tracing::info!(user_id = %current_user.user_id, "user changed password");
+
+    Ok(Json(ChangePasswordResponse {
+        message: "password changed successfully".to_string(),
+    }))
+}
+
+/// Admin reset password request.
+#[derive(Debug, Deserialize)]
+pub struct AdminResetPasswordRequest {
+    /// New password for the user.
+    pub new_password: String,
+}
+
+/// Admin reset password response.
+#[derive(Debug, Serialize)]
+pub struct AdminResetPasswordResponse {
+    pub message: String,
+}
+
+/// Admin endpoint to reset a user's password.
+async fn admin_reset_password(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(user_id): Path<UserId>,
+    Json(req): Json<AdminResetPasswordRequest>,
+) -> ApiResult<Json<AdminResetPasswordResponse>> {
+    // Check admin permission
+    if !admin.has_permission("*") {
+        return Err(ApiError::forbidden("admin access required"));
+    }
+
+    let user_repo = UserRepo::new(state.db());
+
+    // Validate new password
+    if req.new_password.len() < 8 {
+        return Err(ApiError::bad_request("password must be at least 8 characters"));
+    }
+
+    // Verify the target user exists
+    let target_user = user_repo.get(user_id).await?;
+
+    // Ensure admin is in the same organization as the target user
+    if target_user.org_id != admin.org_id {
+        return Err(ApiError::forbidden("cannot reset password for users in other organizations"));
+    }
+
+    // Hash and update password
+    let new_hash = hash_password(&req.new_password)
+        .map_err(|e| ApiError::internal(format!("failed to hash password: {e}")))?;
+
+    user_repo.update_password(user_id, &new_hash).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        target_user_id = %user_id,
+        "admin reset user password"
+    );
+
+    Ok(Json(AdminResetPasswordResponse {
+        message: "password reset successfully".to_string(),
     }))
 }

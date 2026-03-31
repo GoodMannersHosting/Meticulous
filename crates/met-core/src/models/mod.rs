@@ -5,6 +5,7 @@
 //! - Run → JobRun → StepRun (execution records)
 //! - Agent, Secret, Variable, Trigger, Workflow (supporting entities)
 //! - JoinToken, AgentHeartbeat, JobAssignment (agent system)
+//! - RBAC: UserRole, ApiToken, AuthProvider (access control)
 
 mod agent;
 mod artifact;
@@ -14,6 +15,7 @@ mod join_token;
 mod organization;
 mod pipeline;
 mod project;
+mod rbac;
 mod run;
 mod secret;
 mod step;
@@ -30,6 +32,7 @@ pub use join_token::*;
 pub use organization::*;
 pub use pipeline::*;
 pub use project::*;
+pub use rbac::*;
 pub use run::*;
 pub use secret::*;
 pub use step::*;

@@ -246,6 +246,24 @@ define_id!(
     "ja"
 );
 
+define_id!(
+    /// Unique identifier for an API token.
+    ApiTokenId,
+    "apt"
+);
+
+define_id!(
+    /// Unique identifier for an auth provider.
+    AuthProviderId,
+    "auth"
+);
+
+define_id!(
+    /// Unique identifier for an OIDC group mapping.
+    OidcGroupMappingId,
+    "ogm"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
