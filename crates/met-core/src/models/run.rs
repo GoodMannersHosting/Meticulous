@@ -15,6 +15,9 @@ pub struct Run {
     pub id: RunId,
     /// The pipeline being executed.
     pub pipeline_id: PipelineId,
+    /// When this run was created with **Retry** from another run; `None` for a fresh trigger (Run Pipeline, webhook, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<RunId>,
     /// The trigger that initiated this run (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_id: Option<TriggerId>,
@@ -47,6 +50,7 @@ impl Run {
         Self {
             id: RunId::new(),
             pipeline_id,
+            parent_run_id: None,
             trigger_id: None,
             status: RunStatus::Pending,
             run_number,

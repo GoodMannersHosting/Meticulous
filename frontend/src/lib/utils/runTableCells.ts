@@ -2,8 +2,12 @@ import type { Run, RunStatus } from '$api/types';
 import { formatDurationMs, formatRelativeTime } from './format';
 import { escapeHtml } from './html';
 
-export function runNumberHtml(value: unknown): string {
-	return `<span class="font-mono text-sm">#${escapeHtml(String(value ?? ''))}</span>`;
+export function runNumberHtml(value: unknown, row?: Run): string {
+	const num = `<span class="font-mono text-sm">#${escapeHtml(String(value ?? ''))}</span>`;
+	if (row?.parent_run_id) {
+		return `<span class="inline-flex flex-wrap items-center gap-1.5">${num}<span class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">Retry</span></span>`;
+	}
+	return num;
 }
 
 /** Link to pipeline detail; stops row click from opening the run. */

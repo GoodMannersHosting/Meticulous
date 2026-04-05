@@ -509,7 +509,7 @@ async fn trigger_pipeline(
     .await?;
 
     let run_repo = RunRepo::new(state.db());
-    let run = run_repo.create(id, None, &user.email).await?;
+    let run = run_repo.create(id, None, &user.email, None).await?;
     let run_id = run.id;
 
     pipeline_execution::start_engine_for_existing_run_from_state(

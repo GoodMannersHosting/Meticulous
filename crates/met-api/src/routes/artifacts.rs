@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{ArtifactId, RunId};
+use met_store::repos::RunRepo;
 use serde::Serialize;
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -162,16 +163,18 @@ pub struct SbomResponse {
     ),
     tag = "artifacts",
 )]
-#[instrument(skip(_state))]
+#[instrument(skip(state))]
 async fn get_run_sbom(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Auth(_user): Auth,
     Path(run_id): Path<RunId>,
 ) -> ApiResult<Json<SbomResponse>> {
+    RunRepo::new(state.db()).get(run_id).await?;
+
     Ok(Json(SbomResponse {
         run_id,
         format: "spdx".to_string(),
-        status: "pending".to_string(),
+        status: "not_generated".to_string(),
         sbom: None,
     }))
 }

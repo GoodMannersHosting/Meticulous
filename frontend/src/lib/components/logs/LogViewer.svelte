@@ -1,9 +1,18 @@
 <script lang="ts" module>
+	export interface LogTimeFilter {
+		/** ISO-8601 inclusive lower bound (typically assignment started_at or accepted_at). */
+		startIso: string;
+		/** ISO-8601 inclusive upper bound; omit or null for open-ended (running attempt). */
+		endIso: string | null;
+	}
+
 	export interface LogViewerProps {
 		runId: string;
 		jobRunId: string;
 		/** When running/queued, logs are polled periodically (live WebSocket hub is not wired yet). */
 		jobStatus?: string;
+		/** When set, only log lines whose timestamps fall in [startIso, endIso] are shown (best-effort for multi-dispatch jobs). */
+		logTimeFilter?: LogTimeFilter | null;
 		class?: string;
 	}
 </script>
@@ -15,7 +24,13 @@
 	import { Button } from '$components/ui';
 	import { Download, Terminal, ArrowDown, Search, X, Maximize2, Minimize2 } from 'lucide-svelte';
 
-	let { runId, jobRunId, jobStatus = '', class: className = '' }: LogViewerProps = $props();
+	let {
+		runId,
+		jobRunId,
+		jobStatus = '',
+		logTimeFilter = null,
+		class: className = ''
+	}: LogViewerProps = $props();
 
 	let lines = $state<LogLinePayload[]>([]);
 	let loading = $state(true);
@@ -50,6 +65,18 @@
 			.map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
 			.join('.*');
 		return new RegExp(escaped, 'i');
+	}
+
+	function lineMatchesTimeWindow(line: LogLinePayload, filter: LogTimeFilter): boolean {
+		const t = Date.parse(line.timestamp);
+		if (Number.isNaN(t)) return true;
+		const start = Date.parse(filter.startIso);
+		if (!Number.isNaN(start) && t < start) return false;
+		if (filter.endIso != null && filter.endIso !== '') {
+			const end = Date.parse(filter.endIso);
+			if (!Number.isNaN(end) && t > end) return false;
+		}
+		return true;
 	}
 
 	function lineMatchesSearch(normalizedLine: string, q: string): boolean {
@@ -200,13 +227,18 @@
 		}))
 	);
 
-	const filteredLines = $derived(
-		searchQuery.trim()
-			? indexedLines.filter(({ line }) =>
-					lineMatchesSearch(normalizeLogDisplayText(line.line), searchQuery)
-				)
-			: indexedLines
-	);
+	const filteredLines = $derived.by(() => {
+		let rows = indexedLines;
+		if (logTimeFilter) {
+			rows = rows.filter(({ line }) => lineMatchesTimeWindow(line, logTimeFilter));
+		}
+		if (searchQuery.trim()) {
+			rows = rows.filter(({ line }) =>
+				lineMatchesSearch(normalizeLogDisplayText(line.line), searchQuery)
+			);
+		}
+		return rows;
+	});
 
 	function getLevelClass(level: string): string {
 		switch (level) {

@@ -1,5 +1,7 @@
 //! Pipeline run routes.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use axum::{
     Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -7,12 +9,16 @@ use axum::{
     routing::{get, post},
 };
 use met_core::{
-    ids::{JobRunId, PipelineId, ProjectId, RunId},
-    models::{Run, RunStatus},
+    ids::{JobId, JobRunId, PipelineId, ProjectId, RunId},
+    models::{JobRun, Run, RunStatus},
 };
 use met_store::{
     PgPool,
-    repos::{JobRunRepo, LogCacheRepo, PipelineRepo, ProjectRepo, RunRepo, StepRunRepo},
+    repos::{
+        JobAssignmentRepo, JobDagNode, JobRepo, JobRunRepo, LogCacheRepo, PipelineRepo, ProjectRepo,
+        RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunNetworkConnectionRepo,
+        RunRepo, StepRunRepo,
+    },
 };
 
 use crate::scheduling_hints;
@@ -52,8 +58,13 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}", get(get_run))
         .route("/runs/{id}/jobs", get(get_run_jobs))
         .route("/runs/{id}/jobs/{job_run_id}/steps", get(get_job_steps))
+        .route(
+            "/runs/{id}/jobs/{job_run_id}/assignments",
+            get(get_job_assignments),
+        )
         .route("/runs/{id}/jobs/{job_run_id}/logs", get(get_job_logs))
         .route("/runs/{id}/dag", get(get_run_dag))
+        .route("/runs/{id}/footprint", get(get_run_footprint))
         .route("/runs/{id}/cancel", post(cancel_run))
         .route("/runs/{id}/retry", post(retry_run))
         .route("/runs/{id}/events", get(run_events_websocket))
@@ -75,6 +86,9 @@ pub struct RunResponse {
     /// Present when listing runs by `project_id` (all pipelines in a project).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_name: Option<String>,
+    /// Run number of `parent_run_id` when set (for display without a second fetch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_number: Option<i64>,
 }
 
 impl From<Run> for RunResponse {
@@ -84,6 +98,7 @@ impl From<Run> for RunResponse {
             run,
             duration_ms,
             pipeline_name: None,
+            parent_run_number: None,
         }
     }
 }
@@ -229,7 +244,17 @@ async fn get_run(
 ) -> ApiResult<Json<RunResponse>> {
     let repo = RunRepo::new(state.db());
     let run = repo.get(id).await?;
-    Ok(Json(RunResponse::from(run)))
+    let parent_run_number = match run.parent_run_id {
+        Some(pid) => repo.get(pid).await.ok().map(|p| p.run_number),
+        None => None,
+    };
+    let duration_ms = run.duration().map(|d| d.num_milliseconds());
+    Ok(Json(RunResponse {
+        run,
+        duration_ms,
+        pipeline_name: None,
+        parent_run_number,
+    }))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -347,6 +372,7 @@ async fn retry_run(
             original_run.commit_sha.as_deref(),
             original_run.branch.as_deref(),
             None,
+            Some(id),
         )
         .await?;
 
@@ -528,6 +554,77 @@ async fn get_job_steps(
     Ok(Json(response))
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobAssignmentResponse {
+    #[schema(value_type = String)]
+    pub id: met_core::ids::JobAssignmentId,
+    #[schema(value_type = String)]
+    pub job_run_id: met_core::ids::JobRunId,
+    #[schema(value_type = String)]
+    pub agent_id: met_core::ids::AgentId,
+    pub status: String,
+    pub attempt: i32,
+    pub accepted_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/runs/{id}/jobs/{job_run_id}/assignments",
+    params(
+        ("id" = String, Path, description = "Run ID"),
+        ("job_run_id" = String, Path, description = "Job run ID"),
+    ),
+    responses(
+        (status = 200, description = "Agent dispatch attempts for this job run", body = Vec<JobAssignmentResponse>),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "runs",
+)]
+#[instrument(skip(state))]
+async fn get_job_assignments(
+    State(state): State<AppState>,
+    Auth(_user): Auth,
+    Path((run_id, job_run_id)): Path<(RunId, JobRunId)>,
+) -> ApiResult<Json<Vec<JobAssignmentResponse>>> {
+    let run = RunRepo::new(state.db()).get(run_id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
+
+    let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
+    if jr.run_id != run_id {
+        return Err(ApiError::not_found("job run not found for this pipeline run"));
+    }
+
+    let rows = JobAssignmentRepo::new(state.db())
+        .list_by_job_run(job_run_id)
+        .await?;
+
+    let out: Vec<JobAssignmentResponse> = rows
+        .into_iter()
+        .map(|a| JobAssignmentResponse {
+            id: a.id,
+            job_run_id: a.job_run_id,
+            agent_id: a.agent_id,
+            status: format!("{:?}", a.status).to_lowercase(),
+            attempt: a.attempt,
+            accepted_at: a.accepted_at,
+            started_at: a.started_at,
+            completed_at: a.completed_at,
+            exit_code: a.exit_code,
+            failure_reason: a.failure_reason,
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LogsQuery {
     pub offset: Option<u64>,
@@ -631,11 +728,20 @@ async fn get_job_logs(
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct ExecutedBinarySummary {
+    pub binary_path: String,
+    pub sha256: String,
+    pub execution_count: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DagNodeResponse {
     pub job_id: String,
     pub job_name: String,
     pub status: String,
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_binaries: Vec<ExecutedBinarySummary>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -663,20 +769,325 @@ async fn get_run_dag(
 ) -> ApiResult<Json<RunDagResponse>> {
     let run = RunRepo::new(state.db()).get(id).await?;
     reconcile_terminal_run_children(state.db(), &run).await?;
-    let job_repo = JobRunRepo::new(state.db());
-    let job_runs = job_repo.list_by_run(id).await?;
+    let pipeline = PipelineRepo::new(state.db()).get(run.pipeline_id).await?;
 
-    let nodes: Vec<DagNodeResponse> = job_runs
+    let job_runs = JobRunRepo::new(state.db()).list_by_run(id).await?;
+    let mut runs_by_job_id: HashMap<JobId, Vec<&JobRun>> = HashMap::new();
+    for jr in &job_runs {
+        runs_by_job_id.entry(jr.job_id).or_default().push(jr);
+    }
+
+    let binary_rows = RunBinaryExecutionRepo::new(state.db())
+        .list_aggregated_by_run(id)
+        .await?;
+    let mut binaries_by_job_run: HashMap<JobRunId, Vec<RunBinaryExecutionAgg>> = HashMap::new();
+    for row in binary_rows {
+        binaries_by_job_run
+            .entry(row.job_run_id)
+            .or_default()
+            .push(row);
+    }
+
+    let dag_jobs = JobRepo::new(state.db())
+        .list_dag_for_pipeline(run.pipeline_id)
+        .await?;
+
+    let nodes = if dag_jobs.is_empty() {
+        build_dag_nodes_from_definition(
+            &pipeline.definition,
+            &job_runs,
+            &binaries_by_job_run,
+        )
+    } else {
+        build_dag_nodes_from_db_jobs(dag_jobs, &runs_by_job_id, &binaries_by_job_run)
+    };
+
+    Ok(Json(RunDagResponse { run_id: id, nodes }))
+}
+
+fn job_defs_from_pipeline_definition(def: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    let Some(arr) = def.get("jobs").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    arr.iter()
+        .filter_map(|j| {
+            let name = j.get("name")?.as_str()?.to_string();
+            let deps: Vec<String> = j
+                .get("depends_on")
+                .and_then(|d| d.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(std::string::ToString::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((name, deps))
+        })
+        .collect()
+}
+
+fn merge_binaries_for_job_runs(
+    job_run_ids: &[JobRunId],
+    by_jrid: &HashMap<JobRunId, Vec<RunBinaryExecutionAgg>>,
+) -> Vec<ExecutedBinarySummary> {
+    let mut acc: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for jid in job_run_ids {
+        if let Some(rows) = by_jrid.get(jid) {
+            for r in rows {
+                *acc.entry((r.binary_path.clone(), r.binary_sha256.clone()))
+                    .or_default() += r.execution_count;
+            }
+        }
+    }
+    acc.into_iter()
+        .map(|((binary_path, sha256), execution_count)| ExecutedBinarySummary {
+            binary_path,
+            sha256,
+            execution_count,
+        })
+        .collect()
+}
+
+fn latest_job_run<'a>(jrs: &[&'a JobRun]) -> Option<&'a JobRun> {
+    jrs.iter().copied().max_by_key(|j| j.attempt)
+}
+
+fn build_dag_nodes_from_db_jobs(
+    dag_jobs: Vec<JobDagNode>,
+    runs_by_job_id: &HashMap<JobId, Vec<&JobRun>>,
+    binaries_by_job_run: &HashMap<JobRunId, Vec<RunBinaryExecutionAgg>>,
+) -> Vec<DagNodeResponse> {
+    dag_jobs
         .into_iter()
-        .map(|j| DagNodeResponse {
-            job_id: j.job_id.to_string(),
-            job_name: j.job_name,
-            status: format!("{:?}", j.status).to_lowercase(),
-            depends_on: Vec::new(),
+        .map(|j| {
+            let jrs = runs_by_job_id.get(&j.id).map(|v| v.as_slice()).unwrap_or(&[]);
+            let status = latest_job_run(jrs)
+                .map(|jr| format!("{:?}", jr.status).to_lowercase())
+                .unwrap_or_else(|| "pending".to_string());
+            let jr_ids: Vec<JobRunId> = jrs.iter().map(|jr| jr.id).collect();
+            let executed_binaries = merge_binaries_for_job_runs(&jr_ids, binaries_by_job_run);
+            DagNodeResponse {
+                job_id: j.id.to_string(),
+                job_name: j.name,
+                status,
+                depends_on: j.depends_on,
+                executed_binaries,
+            }
+        })
+        .collect()
+}
+
+fn build_dag_nodes_from_definition(
+    def: &serde_json::Value,
+    job_runs: &[JobRun],
+    binaries_by_job_run: &HashMap<JobRunId, Vec<RunBinaryExecutionAgg>>,
+) -> Vec<DagNodeResponse> {
+    job_defs_from_pipeline_definition(def)
+        .into_iter()
+        .map(|(name, deps)| {
+            let jrs_for_name: Vec<&JobRun> = job_runs.iter().filter(|jr| jr.job_name == name).collect();
+            let status = latest_job_run(&jrs_for_name)
+                .map(|jr| format!("{:?}", jr.status).to_lowercase())
+                .unwrap_or_else(|| "pending".to_string());
+            let jr_ids: Vec<JobRunId> = jrs_for_name.iter().map(|jr| jr.id).collect();
+            let executed_binaries = merge_binaries_for_job_runs(&jr_ids, binaries_by_job_run);
+            DagNodeResponse {
+                job_id: format!("def:{name}"),
+                job_name: name,
+                status,
+                depends_on: deps,
+                executed_binaries,
+            }
+        })
+        .collect()
+}
+
+const FOOTPRINT_MAX_DIRS: usize = 120;
+const FOOTPRINT_MAX_ENTRIES_PER_DIR: usize = 48;
+const FOOTPRINT_MAX_NETWORK: i64 = 500;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FootprintBinaryRow {
+    pub job_name: String,
+    pub binary_path: String,
+    pub sha256: String,
+    pub execution_count: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FootprintNetworkRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_name: Option<String>,
+    pub dst_ip: String,
+    pub dst_port: i32,
+    pub protocol: String,
+    pub direction: String,
+    pub connected_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FootprintDirectoryEntry {
+    pub binary_path: String,
+    pub sha256: String,
+    pub execution_count: i64,
+    pub job_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FootprintDirectoryGroup {
+    pub directory: String,
+    pub entries: Vec<FootprintDirectoryEntry>,
+    pub entries_truncated: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunFootprintResponse {
+    #[schema(value_type = String)]
+    pub run_id: RunId,
+    pub executed_binaries: Vec<FootprintBinaryRow>,
+    pub network_connections: Vec<FootprintNetworkRow>,
+    pub filesystem_by_directory: Vec<FootprintDirectoryGroup>,
+    pub filesystem_directories_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filesystem_more_directory_count: Option<u32>,
+}
+
+fn build_footprint_filesystem(
+    binaries: &[FootprintBinaryRow],
+) -> (
+    Vec<FootprintDirectoryGroup>,
+    bool,
+    Option<u32>,
+) {
+    let mut dir_map: BTreeMap<String, BTreeMap<(String, String), (i64, BTreeSet<String>)>> =
+        BTreeMap::new();
+
+    for b in binaries {
+        let parent = std::path::Path::new(&b.binary_path)
+            .parent()
+            .map(|p| {
+                let s = p.to_string_lossy();
+                if s.is_empty() {
+                    "/".to_string()
+                } else {
+                    s.into_owned()
+                }
+            })
+            .unwrap_or_else(|| "/".to_string());
+
+        dir_map
+            .entry(parent)
+            .or_default()
+            .entry((b.binary_path.clone(), b.sha256.clone()))
+            .and_modify(|(c, jobs)| {
+                *c += b.execution_count;
+                if !b.job_name.is_empty() {
+                    jobs.insert(b.job_name.clone());
+                }
+            })
+            .or_insert_with(|| {
+                let mut jobs = BTreeSet::new();
+                if !b.job_name.is_empty() {
+                    jobs.insert(b.job_name.clone());
+                }
+                (b.execution_count, jobs)
+            });
+    }
+
+    let total_dirs = dir_map.len();
+    let dirs_truncated = total_dirs > FOOTPRINT_MAX_DIRS;
+    let more = dirs_truncated.then(|| (total_dirs - FOOTPRINT_MAX_DIRS) as u32);
+
+    let mut groups: Vec<FootprintDirectoryGroup> = dir_map
+        .into_iter()
+        .take(FOOTPRINT_MAX_DIRS)
+        .map(|(directory, files)| {
+            let mut entries: Vec<FootprintDirectoryEntry> = files
+                .into_iter()
+                .map(|((binary_path, sha256), (execution_count, jobs))| FootprintDirectoryEntry {
+                    binary_path,
+                    sha256,
+                    execution_count,
+                    job_names: jobs.into_iter().collect(),
+                })
+                .collect();
+            entries.sort_by(|a, b| a.binary_path.cmp(&b.binary_path));
+            let etrunc = entries.len() > FOOTPRINT_MAX_ENTRIES_PER_DIR;
+            if etrunc {
+                entries.truncate(FOOTPRINT_MAX_ENTRIES_PER_DIR);
+            }
+            FootprintDirectoryGroup {
+                directory,
+                entries,
+                entries_truncated: etrunc,
+            }
+        })
+        .collect();
+    groups.sort_by(|a, b| a.directory.cmp(&b.directory));
+    (groups, dirs_truncated, more)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/runs/{id}/footprint",
+    params(("id" = String, Path, description = "Run ID")),
+    responses(
+        (status = 200, description = "Execution footprint (binaries, network, directories)", body = RunFootprintResponse),
+        (status = 404, description = "Run not found"),
+    ),
+    tag = "runs",
+)]
+#[instrument(skip(state))]
+async fn get_run_footprint(
+    State(state): State<AppState>,
+    Auth(_user): Auth,
+    Path(id): Path<RunId>,
+) -> ApiResult<Json<RunFootprintResponse>> {
+    let run = RunRepo::new(state.db()).get(id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
+
+    let bin_rows = RunBinaryExecutionRepo::new(state.db())
+        .list_footprint_by_run(id)
+        .await?;
+
+    let executed_binaries: Vec<FootprintBinaryRow> = bin_rows
+        .into_iter()
+        .map(|r| FootprintBinaryRow {
+            job_name: r.job_name,
+            binary_path: r.binary_path,
+            sha256: r.binary_sha256,
+            execution_count: r.execution_count,
         })
         .collect();
 
-    Ok(Json(RunDagResponse { run_id: id, nodes }))
+    let net_rows = RunNetworkConnectionRepo::new(state.db())
+        .list_for_run(id, FOOTPRINT_MAX_NETWORK)
+        .await?;
+
+    let network_connections: Vec<FootprintNetworkRow> = net_rows
+        .into_iter()
+        .map(|n| FootprintNetworkRow {
+            job_name: n.job_name,
+            dst_ip: n.dst_ip,
+            dst_port: n.dst_port,
+            protocol: n.protocol,
+            direction: n.direction,
+            connected_at: n.connected_at.to_rfc3339(),
+        })
+        .collect();
+
+    let (filesystem_by_directory, filesystem_directories_truncated, filesystem_more_directory_count) =
+        build_footprint_filesystem(&executed_binaries);
+
+    Ok(Json(RunFootprintResponse {
+        run_id: id,
+        executed_binaries,
+        network_connections,
+        filesystem_by_directory,
+        filesystem_directories_truncated,
+        filesystem_more_directory_count,
+    }))
 }
 
 async fn run_events_websocket(

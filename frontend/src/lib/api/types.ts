@@ -172,6 +172,10 @@ export type RunStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed
 export interface Run {
 	id: string;
 	pipeline_id: string;
+	/** Present when this run was created via **Retry** from another run (null for Run Pipeline / new triggers). */
+	parent_run_id?: string | null;
+	/** Populated on run detail API when `parent_run_id` is set (parent's `run_number`). */
+	parent_run_number?: number | null;
 	/** Set when listing runs by project (all pipelines). */
 	pipeline_name?: string;
 	trigger_id?: string;
@@ -184,6 +188,73 @@ export interface Run {
 	started_at?: string;
 	finished_at?: string;
 	duration_ms?: number;
+}
+
+/** GET /api/v1/runs/:id/dag — layout + exec telemetry per job. */
+export interface RunDagExecutedBinary {
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+}
+
+export interface RunDagNode {
+	job_id: string;
+	job_name: string;
+	status: string;
+	depends_on: string[];
+	executed_binaries?: RunDagExecutedBinary[];
+}
+
+export interface RunDagResponse {
+	run_id: string;
+	nodes: RunDagNode[];
+}
+
+/** GET /api/v1/runs/:run_id/sbom */
+export interface SbomApiResponse {
+	run_id: string;
+	format: string;
+	status: string;
+	sbom: Record<string, unknown> | null;
+}
+
+/** GET /api/v1/runs/:id/footprint — execution surface for Blast Radius tab */
+export interface FootprintBinaryRow {
+	job_name: string;
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+}
+
+export interface FootprintNetworkRow {
+	job_name?: string | null;
+	dst_ip: string;
+	dst_port: number;
+	protocol: string;
+	direction: string;
+	connected_at: string;
+}
+
+export interface FootprintDirectoryEntry {
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+	job_names: string[];
+}
+
+export interface FootprintDirectoryGroup {
+	directory: string;
+	entries: FootprintDirectoryEntry[];
+	entries_truncated: boolean;
+}
+
+export interface RunFootprintResponse {
+	run_id: string;
+	executed_binaries: FootprintBinaryRow[];
+	network_connections: FootprintNetworkRow[];
+	filesystem_by_directory: FootprintDirectoryGroup[];
+	filesystem_directories_truncated: boolean;
+	filesystem_more_directory_count?: number | null;
 }
 
 export interface TriggerRunInput {
@@ -232,6 +303,20 @@ export interface JobRun {
 	/** Best-effort explanation when status is pending or queued (from API). */
 	scheduling_note?: string;
 	created_at: string;
+}
+
+/** One agent dispatch attempt for a job run (retries create multiple rows). */
+export interface JobAssignment {
+	id: string;
+	job_run_id: string;
+	agent_id: string;
+	status: string;
+	attempt: number;
+	accepted_at: string;
+	started_at?: string;
+	completed_at?: string;
+	exit_code?: number;
+	failure_reason?: string;
 }
 
 export interface StepRun {

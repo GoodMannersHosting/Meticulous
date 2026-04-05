@@ -1,7 +1,9 @@
 //! Run repository.
 
 use chrono::{DateTime, Utc};
-use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId, TriggerId};
+use met_core::ids::{
+    AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId, TriggerId,
+};
 use met_core::models::{JobRun, JobStatus, Run, RunStatus, StepRun};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -19,6 +21,7 @@ pub struct RunWithPipelineName {
 struct RunProjectListRow {
     id: RunId,
     pipeline_id: PipelineId,
+    parent_run_id: Option<RunId>,
     trigger_id: Option<TriggerId>,
     status: RunStatus,
     run_number: i64,
@@ -38,6 +41,7 @@ impl From<RunProjectListRow> for RunWithPipelineName {
             run: Run {
                 id: row.id,
                 pipeline_id: row.pipeline_id,
+                parent_run_id: row.parent_run_id,
                 trigger_id: row.trigger_id,
                 status: row.status,
                 run_number: row.run_number,
@@ -75,6 +79,7 @@ impl<'a> RunRepo<'a> {
         commit_sha: Option<&str>,
         branch: Option<&str>,
         trigger_data: Option<serde_json::Value>,
+        parent_run_id: Option<RunId>,
     ) -> Result<Run> {
         let id = RunId::new();
         let now = Utc::now();
@@ -82,15 +87,16 @@ impl<'a> RunRepo<'a> {
 
         let run = sqlx::query_as::<_, Run>(
             r#"
-            INSERT INTO runs (id, pipeline_id, org_id, trigger_id, status, run_number, triggered_by, 
+            INSERT INTO runs (id, pipeline_id, parent_run_id, org_id, trigger_id, status, run_number, triggered_by, 
                               trace_id, commit_sha, branch, trigger_data, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
                       triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(pipeline_id.as_uuid())
+        .bind(parent_run_id.map(|p| p.as_uuid()))
         .bind(org_id.as_uuid())
         .bind(trigger_id.map(|t| t.as_uuid()))
         .bind(RunStatus::Pending)
@@ -113,6 +119,7 @@ impl<'a> RunRepo<'a> {
         pipeline_id: PipelineId,
         trigger_id: Option<TriggerId>,
         triggered_by: &str,
+        parent_run_id: Option<RunId>,
     ) -> Result<Run> {
         let id = RunId::new();
         let now = Utc::now();
@@ -122,13 +129,14 @@ impl<'a> RunRepo<'a> {
 
         let run = sqlx::query_as::<_, Run>(
             r#"
-            INSERT INTO runs (id, pipeline_id, trigger_id, status, run_number, triggered_by, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            INSERT INTO runs (id, pipeline_id, parent_run_id, trigger_id, status, run_number, triggered_by, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(pipeline_id.as_uuid())
+        .bind(parent_run_id.map(|p| p.as_uuid()))
         .bind(trigger_id.map(|t| t.as_uuid()))
         .bind(RunStatus::Pending)
         .bind(run_number)
@@ -144,7 +152,7 @@ impl<'a> RunRepo<'a> {
     pub async fn get(&self, id: RunId) -> Result<Run> {
         sqlx::query_as::<_, Run>(
             r#"
-            SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
             FROM runs
             WHERE id = $1
             "#,
@@ -166,7 +174,7 @@ impl<'a> RunRepo<'a> {
         let runs = if let Some(st) = status {
             sqlx::query_as::<_, Run>(
                 r#"
-                SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
                 FROM runs
                 WHERE pipeline_id = $1 AND status = $2
                 ORDER BY created_at DESC
@@ -182,7 +190,7 @@ impl<'a> RunRepo<'a> {
         } else {
             sqlx::query_as::<_, Run>(
                 r#"
-                SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
                 FROM runs
                 WHERE pipeline_id = $1
                 ORDER BY created_at DESC
@@ -210,7 +218,7 @@ impl<'a> RunRepo<'a> {
         let rows = if let Some(st) = status {
             sqlx::query_as::<_, RunProjectListRow>(
                 r#"
-                SELECT r.id, r.pipeline_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
                        r.triggered_by, r.created_at, r.started_at, r.finished_at,
                        p.name AS pipeline_name
                 FROM runs r
@@ -232,7 +240,7 @@ impl<'a> RunRepo<'a> {
         } else {
             sqlx::query_as::<_, RunProjectListRow>(
                 r#"
-                SELECT r.id, r.pipeline_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
                        r.triggered_by, r.created_at, r.started_at, r.finished_at,
                        p.name AS pipeline_name
                 FROM runs r
@@ -268,7 +276,7 @@ impl<'a> RunRepo<'a> {
                 started_at = CASE WHEN $2 = 'running' AND started_at IS NULL THEN $3 ELSE started_at END,
                 finished_at = CASE WHEN $2 IN ('succeeded', 'failed', 'cancelled', 'timed_out') THEN $3 ELSE finished_at END
             WHERE id = $1
-            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -358,7 +366,7 @@ impl<'a> RunRepo<'a> {
             UPDATE runs
             SET status = 'running', started_at = $2
             WHERE id = $1 AND status IN ('pending', 'queued')
-            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
                       triggered_by, created_at, started_at, finished_at
             "#,
         )
@@ -379,7 +387,7 @@ impl<'a> RunRepo<'a> {
             UPDATE runs
             SET status = $2, finished_at = $3, error_message = $4
             WHERE id = $1
-            RETURNING id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
                       triggered_by, created_at, started_at, finished_at
             "#,
         )
@@ -397,7 +405,7 @@ impl<'a> RunRepo<'a> {
     pub async fn list_active(&self, org_id: OrganizationId, limit: i64) -> Result<Vec<Run>> {
         let runs = sqlx::query_as::<_, Run>(
             r#"
-            SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, 
+            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
                    triggered_by, created_at, started_at, finished_at
             FROM runs
             WHERE org_id = $1 AND status IN ('pending', 'queued', 'running')

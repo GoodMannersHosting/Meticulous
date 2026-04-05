@@ -338,6 +338,11 @@ export const apiMethods = {
 			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {})
 	},
 
+	artifacts: {
+		sbom: (runId: string) =>
+			api.get<import('./types').SbomApiResponse>(`/api/v1/runs/${runId}/sbom`)
+	},
+
 	// Runs
 	runs: {
 		list: (params: import('./types').ListRunsParams) =>
@@ -346,6 +351,11 @@ export const apiMethods = {
 		cancel: (id: string) => api.post<{ run_id: string; status: string; message: string }>(`/api/v1/runs/${id}/cancel`),
 		retry: (id: string) => api.post<{ original_run_id: string; new_run_id: string; run_number: number }>(`/api/v1/runs/${id}/retry`),
 		jobs: (runId: string) => api.get<import('./types').JobRun[]>(`/api/v1/runs/${runId}/jobs`),
+		dag: (runId: string) => api.get<import('./types').RunDagResponse>(`/api/v1/runs/${runId}/dag`),
+		footprint: (runId: string) =>
+			api.get<import('./types').RunFootprintResponse>(`/api/v1/runs/${runId}/footprint`),
+		assignments: (runId: string, jobRunId: string) =>
+			api.get<import('./types').JobAssignment[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/assignments`),
 		logs: (runId: string, jobRunId: string) =>
 			api.get<{
 				content?: string;

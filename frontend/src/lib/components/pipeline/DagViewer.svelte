@@ -3,6 +3,11 @@
 		name: string;
 		depends_on?: string[];
 		status?: string;
+		executed_binaries?: {
+			binary_path: string;
+			sha256: string;
+			execution_count: number;
+		}[];
 	}
 
 	export interface DagViewerProps {
@@ -12,7 +17,7 @@
 </script>
 
 <script lang="ts">
-	import { StatusBadge } from '$components/ui';
+	import { StatusBadge, CopyButton } from '$components/ui';
 
 	let { jobs, class: className = '' }: DagViewerProps = $props();
 
@@ -114,6 +119,10 @@
 
 	const layout = $derived(computeLayout(jobs));
 
+	const jobsWithBinaries = $derived(
+		jobs.filter((j) => j.executed_binaries && j.executed_binaries.length > 0)
+	);
+
 	function getStatusColor(status?: string): string {
 		if (!status) return 'var(--color-secondary-300)';
 		switch (status.toLowerCase()) {
@@ -199,4 +208,46 @@
 			</g>
 		{/each}
 	</svg>
+
+	{#if jobsWithBinaries.length > 0}
+		<div class="mt-6 space-y-6 border-t border-[var(--border-primary)] pt-6">
+			<h3 class="text-sm font-semibold text-[var(--text-primary)]">Executed binaries (SHA-256)</h3>
+			<p class="text-xs text-[var(--text-secondary)]">
+				Unique executables observed for this run, aggregated per job. Count is exec events (same path and
+				digest).
+			</p>
+			{#each jobsWithBinaries as job (job.name)}
+				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4">
+					<h4 class="mb-3 text-sm font-medium text-[var(--text-primary)]">{job.name}</h4>
+					<div class="overflow-x-auto">
+						<table class="w-full min-w-[32rem] text-left text-xs">
+							<thead>
+								<tr class="border-b border-[var(--border-secondary)] text-[var(--text-tertiary)]">
+									<th class="pb-2 pr-3 font-medium">Path</th>
+									<th class="pb-2 pr-3 font-medium">SHA-256</th>
+									<th class="pb-2 font-medium text-right">Exec count</th>
+								</tr>
+							</thead>
+							<tbody class="text-[var(--text-primary)]">
+								{#each job.executed_binaries ?? [] as row (row.sha256 + row.binary_path)}
+									<tr class="border-b border-[var(--border-secondary)]/80 align-top">
+										<td class="py-2 pr-3 font-mono break-all">{row.binary_path}</td>
+										<td class="py-2 pr-3">
+											<div class="flex flex-wrap items-center gap-1">
+												<span class="font-mono break-all">{row.sha256}</span>
+												{#if row.sha256}
+													<CopyButton text={row.sha256} size="sm" />
+												{/if}
+											</div>
+										</td>
+										<td class="py-2 text-right tabular-nums">{row.execution_count}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
 </div>

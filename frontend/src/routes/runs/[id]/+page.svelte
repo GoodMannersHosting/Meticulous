@@ -2,10 +2,10 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton } from '$components/ui';
+	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton, Select } from '$components/ui';
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Run, JobRun, Pipeline, PipelineJob } from '$api/types';
+	import type { Run, JobRun, Pipeline, JobAssignment, RunDagResponse } from '$api/types';
 	import { formatRelativeTime, formatDurationMs, truncateId, formatDateTime } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -24,9 +24,8 @@
 	import { DagViewer } from '$components/pipeline';
 	import LogViewer from '$components/logs/LogViewer.svelte';
 	import { SbomViewer } from '$components/sbom';
-	import { BlastRadiusViewer } from '$components/blast-radius';
-	import type { SbomDiff } from '$components/sbom';
-	import type { BlastRadiusData } from '$components/blast-radius';
+	import { RunFootprintViewer } from '$components/blast-radius';
+	import type { RunFootprintResponse, SbomApiResponse } from '$api/types';
 
 	let run = $state<Run | null>(null);
 	let pipeline = $state<Pipeline | null>(null);
@@ -35,8 +34,21 @@
 	let error = $state<string | null>(null);
 	let activeTab = $state('jobs');
 	let selectedJobRunId = $state<string | null>(null);
+	let jobAssignments = $state<JobAssignment[]>([]);
+	let assignmentsLoading = $state(false);
+	/** 'all' or dispatch attempt number as string (matches `JobAssignment.attempt`). */
+	let dispatchFilter = $state<string>('all');
 	let cancelLoading = $state(false);
 	let retryLoading = $state(false);
+	let runDag = $state<RunDagResponse | null>(null);
+	let graphDagLoading = $state(false);
+	let graphDagError = $state<string | null>(null);
+	let sbomRes = $state<SbomApiResponse | null>(null);
+	let sbomLoading = $state(false);
+	let sbomError = $state<string | null>(null);
+	let footprint = $state<RunFootprintResponse | null>(null);
+	let footprintLoading = $state(false);
+	let footprintError = $state<string | null>(null);
 
 	const tabs = [
 		{ id: 'jobs', label: 'Jobs', icon: Terminal },
@@ -45,44 +57,36 @@
 		{ id: 'blast-radius', label: 'Blast Radius', icon: AlertTriangle }
 	];
 
-	const sampleSbomDiff: SbomDiff = {
-		added: [
-			{ name: 'serde_json', version: '1.0.120', ecosystem: 'cargo', direct: true },
-			{ name: 'tokio-util', version: '0.7.11', ecosystem: 'cargo', direct: false }
-		],
-		removed: [
-			{ name: 'serde_yaml', version: '0.9.0', ecosystem: 'cargo', direct: true }
-		],
-		updated: [
-			{ name: 'tokio', ecosystem: 'cargo', from_version: '1.37.0', to_version: '1.38.0' },
-			{ name: 'axum', ecosystem: 'cargo', from_version: '0.7.4', to_version: '0.7.5' }
-		]
-	};
-
-	const sampleBlastRadius: BlastRadiusData = {
-		changed_packages: ['met-core', 'met-store'],
-		impact_score: 45,
-		affected_nodes: [
-			{ id: 'met-core', name: 'met-core', type: 'package', impacted: false, direct: true },
-			{ id: 'met-store', name: 'met-store', type: 'package', impacted: false, direct: true },
-			{ id: 'met-api', name: 'met-api', type: 'package', impacted: true, direct: false },
-			{ id: 'met-agent', name: 'met-agent', type: 'package', impacted: true, direct: false },
-			{ id: 'api-binary', name: 'meticulous-api', type: 'binary', impacted: true, direct: false },
-			{ id: 'agent-binary', name: 'meticulous-agent', type: 'binary', impacted: true, direct: false }
-		],
-		edges: [
-			{ from: 'met-core', to: 'met-store', type: 'depends' },
-			{ from: 'met-core', to: 'met-api', type: 'depends' },
-			{ from: 'met-store', to: 'met-api', type: 'depends' },
-			{ from: 'met-core', to: 'met-agent', type: 'depends' },
-			{ from: 'met-api', to: 'api-binary', type: 'produces' },
-			{ from: 'met-agent', to: 'agent-binary', type: 'produces' }
-		]
-	};
-
 	$effect(() => {
 		loadRun();
 	});
+
+	async function loadAssignmentsForJob(jobRunId: string, opts?: { silent?: boolean }) {
+		if (!run) return;
+		if (!opts?.silent) assignmentsLoading = true;
+		const prev = dispatchFilter;
+		try {
+			jobAssignments = await apiMethods.runs.assignments(run.id, jobRunId);
+			if (jobAssignments.length > 1) {
+				const keepPrev =
+					opts?.silent &&
+					prev !== 'all' &&
+					jobAssignments.some((a) => String(a.attempt) === prev);
+				dispatchFilter = keepPrev
+					? prev
+					: String(Math.max(...jobAssignments.map((a) => a.attempt)));
+			} else {
+				dispatchFilter = 'all';
+			}
+		} catch {
+			if (!opts?.silent) {
+				jobAssignments = [];
+				dispatchFilter = 'all';
+			}
+		} finally {
+			assignmentsLoading = false;
+		}
+	}
 
 	async function refreshRunAndJobsQuietly(runId: string) {
 		try {
@@ -93,6 +97,9 @@
 				selectedJobRunId = jobRuns.length > 0 ? jobRuns[0].id : null;
 			} else if (jobRuns.length > 0 && !selectedJobRunId) {
 				selectedJobRunId = jobRuns[0].id;
+			}
+			if (selectedJobRunId) {
+				await loadAssignmentsForJob(selectedJobRunId, { silent: true });
 			}
 		} catch {
 			/* keep current data on transient poll failures */
@@ -107,8 +114,13 @@
 			run = await apiMethods.runs.get(runId);
 			pipeline = await apiMethods.pipelines.get(run.pipeline_id);
 			jobRuns = await apiMethods.runs.jobs(runId);
-			
-			if (jobRuns.length > 0 && !selectedJobRunId) {
+
+			if (jobRuns.length === 0) {
+				selectedJobRunId = null;
+			} else if (
+				!selectedJobRunId ||
+				!jobRuns.some((j) => j.id === selectedJobRunId)
+			) {
 				selectedJobRunId = jobRuns[0].id;
 			}
 		} catch (e) {
@@ -117,6 +129,13 @@
 			loading = false;
 		}
 	}
+
+	$effect(() => {
+		const jobId = selectedJobRunId;
+		const r = run;
+		if (!jobId || !r || loading) return;
+		void loadAssignmentsForJob(jobId);
+	});
 
 	async function cancelRun() {
 		if (!run) return;
@@ -160,27 +179,111 @@
 		return () => clearInterval(interval);
 	});
 
-	function jobsFromPipelineDef(def: Pipeline['definition'] | undefined): PipelineJob[] {
-		if (!def || typeof def !== 'object' || !('jobs' in def)) return [];
-		const j = (def as { jobs: unknown }).jobs;
-		return Array.isArray(j) ? (j as PipelineJob[]) : [];
-	}
-
-	const dagJobs = $derived(() => {
-		const jobs = jobsFromPipelineDef(pipeline?.definition);
-		return jobs.map((job: PipelineJob) => {
-			const jobRun = jobRuns.find((jr) => jr.job_name === job.name);
-			return {
-				name: job.name,
-				depends_on: job.depends_on ?? [],
-				status: jobRun?.status
-			};
-		});
-	});
-
 	const selectedJobRun = $derived(
 		jobRuns.find((jr) => jr.id === selectedJobRunId)
 	);
+
+	const dispatchSelectOptions = $derived.by(() => {
+		const base = [{ value: 'all', label: 'All dispatch attempts' }];
+		if (jobAssignments.length <= 1) return base;
+		const sorted = [...jobAssignments].sort((a, b) => a.attempt - b.attempt);
+		return [
+			...base,
+			...sorted.map((a) => ({
+				value: String(a.attempt),
+				label: `Dispatch ${a.attempt} (${a.status} · ${truncateId(a.agent_id)})`
+			}))
+		];
+	});
+
+	const logTimeFilterForViewer = $derived.by(() => {
+		if (dispatchFilter === 'all') return null;
+		const attempt = Number(dispatchFilter);
+		const a = jobAssignments.find((x) => x.attempt === attempt);
+		if (!a) return null;
+		return {
+			startIso: a.started_at ?? a.accepted_at,
+			endIso: a.completed_at ?? null
+		};
+	});
+
+	$effect(() => {
+		if (!browser || activeTab !== 'graph' || !run) return;
+		const runId = run.id;
+		void run.status;
+		let cancelled = false;
+		graphDagLoading = true;
+		graphDagError = null;
+		void apiMethods.runs.dag(runId).then(
+			(d) => {
+				if (!cancelled) {
+					runDag = d;
+					graphDagLoading = false;
+				}
+			},
+			(e) => {
+				if (!cancelled) {
+					graphDagError = e instanceof Error ? e.message : 'Failed to load run graph';
+					graphDagLoading = false;
+				}
+			}
+		);
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		if (!browser || activeTab !== 'sbom' || !run) return;
+		void run.id;
+		void run.status;
+		let cancelled = false;
+		sbomLoading = true;
+		sbomError = null;
+		void apiMethods.artifacts.sbom(run.id).then(
+			(d) => {
+				if (!cancelled) {
+					sbomRes = d;
+					sbomLoading = false;
+				}
+			},
+			(e) => {
+				if (!cancelled) {
+					sbomError = e instanceof Error ? e.message : 'Failed to load SBOM';
+					sbomLoading = false;
+				}
+			}
+		);
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		if (!browser || activeTab !== 'blast-radius' || !run) return;
+		void run.id;
+		void run.status;
+		let cancelled = false;
+		footprintLoading = true;
+		footprintError = null;
+		void apiMethods.runs.footprint(run.id).then(
+			(d) => {
+				if (!cancelled) {
+					footprint = d;
+					footprintLoading = false;
+				}
+			},
+			(e) => {
+				if (!cancelled) {
+					footprintError = e instanceof Error ? e.message : 'Failed to load footprint';
+					footprintLoading = false;
+				}
+			}
+		);
+		return () => {
+			cancelled = true;
+		};
+	});
 </script>
 
 <svelte:head>
@@ -206,6 +309,31 @@
 					</h1>
 					<StatusBadge status={run.status} />
 				</div>
+				{#if run.parent_run_id}
+					<div
+						class="mt-3 rounded-lg border border-amber-200/80 bg-amber-50/90 px-4 py-2.5 text-sm dark:border-amber-900/60 dark:bg-amber-950/40"
+					>
+						<span class="text-[var(--text-secondary)]">This run is a </span>
+						<span class="font-medium text-[var(--text-primary)]">retry</span>
+						<span class="text-[var(--text-secondary)]"> of </span>
+						{#if run.parent_run_number != null}
+							<a
+								href="/runs/{run.parent_run_id}"
+								class="font-mono font-medium text-primary-600 hover:underline dark:text-primary-400"
+							>
+								run #{run.parent_run_number}
+							</a>
+						{:else}
+							<a
+								href="/runs/{run.parent_run_id}"
+								class="font-medium text-primary-600 hover:underline dark:text-primary-400"
+							>
+								the previous run
+							</a>
+						{/if}
+						<span class="text-[var(--text-secondary)]">.</span>
+					</div>
+				{/if}
 				<div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-[var(--text-secondary)]">
 					<a href="/pipelines/{pipeline.id}" class="flex items-center gap-1 hover:text-primary-600">
 						<GitBranch class="h-4 w-4" />
@@ -326,8 +454,8 @@
 									<h3 class="font-medium text-[var(--text-primary)]">{selectedJobRun.job_name}</h3>
 									<div class="flex items-center gap-2 mt-1">
 										<StatusBadge status={selectedJobRun.status} size="sm" />
-										{#if selectedJobRun.attempt > 0}
-											<Badge variant="secondary" size="sm">Attempt {selectedJobRun.attempt + 1}</Badge>
+										{#if selectedJobRun.attempt > 1}
+											<Badge variant="secondary" size="sm">Retry cycle {selectedJobRun.attempt}</Badge>
 										{/if}
 									</div>
 									{#if selectedJobRun.scheduling_note}
@@ -350,8 +478,31 @@
 									{/if}
 								</div>
 							</div>
+							{#if jobAssignments.length > 1}
+								<div class="border-b border-[var(--border-primary)] px-4 py-3">
+									<label class="mb-1 block text-xs font-medium text-[var(--text-secondary)]" for="dispatch-filter"
+										>Agent dispatch attempt</label
+									>
+									<Select
+										id="dispatch-filter"
+										options={dispatchSelectOptions}
+										bind:value={dispatchFilter}
+										size="sm"
+										class="max-w-lg"
+										disabled={assignmentsLoading}
+									/>
+									<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+										Logs are filtered by time window per dispatch when a single attempt is selected.
+									</p>
+								</div>
+							{/if}
 							<div class="h-96">
-								<LogViewer runId={run.id} jobRunId={selectedJobRun.id} jobStatus={selectedJobRun.status} />
+								<LogViewer
+									runId={run.id}
+									jobRunId={selectedJobRun.id}
+									jobStatus={selectedJobRun.status}
+									logTimeFilter={logTimeFilterForViewer}
+								/>
 							</div>
 						</Card>
 					{:else}
@@ -365,8 +516,24 @@
 			</div>
 		{:else if activeTab === 'graph'}
 			<Card>
-				{#if dagJobs().length > 0}
-					<DagViewer jobs={dagJobs()} />
+				{#if graphDagLoading}
+					<div class="space-y-4 p-2">
+						<Skeleton class="h-48 w-full" />
+						<Skeleton class="h-24 w-full" />
+					</div>
+				{:else if graphDagError}
+					<Alert variant="error" title="Graph" dismissible ondismiss={() => (graphDagError = null)}>
+						{graphDagError}
+					</Alert>
+				{:else if runDag && runDag.nodes.length > 0}
+					<DagViewer
+						jobs={runDag.nodes.map((n) => ({
+							name: n.job_name,
+							depends_on: n.depends_on,
+							status: n.status,
+							executed_binaries: n.executed_binaries
+						}))}
+					/>
 				{:else}
 					<div class="flex items-center justify-center py-12 text-[var(--text-secondary)]">
 						No job graph available
@@ -374,9 +541,39 @@
 				{/if}
 			</Card>
 		{:else if activeTab === 'sbom'}
-			<SbomViewer diff={sampleSbomDiff} />
+			<Card>
+				{#if sbomLoading}
+					<div class="space-y-3 p-2">
+						<Skeleton class="h-10 w-full" />
+						<Skeleton class="h-40 w-full" />
+					</div>
+				{:else if sbomError}
+					<Alert variant="error" title="SBOM" dismissible ondismiss={() => (sbomError = null)}>
+						{sbomError}
+					</Alert>
+				{:else if sbomRes?.sbom}
+					<SbomViewer rawDocument={sbomRes.sbom} />
+				{:else}
+					<SbomViewer empty />
+				{/if}
+			</Card>
 		{:else if activeTab === 'blast-radius'}
-			<BlastRadiusViewer data={sampleBlastRadius} />
+			<Card>
+				{#if footprintLoading}
+					<div class="space-y-4 p-2">
+						<Skeleton class="h-24 w-full" />
+						<Skeleton class="h-48 w-full" />
+					</div>
+				{:else if footprintError}
+					<Alert variant="error" title="Blast radius" dismissible ondismiss={() => (footprintError = null)}>
+						{footprintError}
+					</Alert>
+				{:else if footprint}
+					<RunFootprintViewer data={footprint} />
+				{:else}
+					<div class="py-12 text-center text-sm text-[var(--text-secondary)]">No data</div>
+				{/if}
+			</Card>
 		{/if}
 	{/if}
 </div>

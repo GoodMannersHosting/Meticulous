@@ -12,6 +12,7 @@ mod cache_entries;
 mod groups;
 mod job_assignments;
 mod join_tokens;
+mod jobs;
 mod organizations;
 mod pipelines;
 mod projects;
@@ -22,6 +23,8 @@ mod workflows;
 mod audit_log;
 mod builtin_secrets;
 mod run_logs;
+mod run_binary_executions;
+mod run_network_connections;
 mod log_cache;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
@@ -36,6 +39,7 @@ pub use builtin_secrets::{BuiltinSecretCipherRow, BuiltinSecretMetaRow, BuiltinS
 pub use cache_entries::CacheEntryRepo;
 pub use groups::GroupRepo;
 pub use job_assignments::JobAssignmentRepo;
+pub use jobs::{JobDagNode, JobRepo};
 pub use join_tokens::JoinTokenRepo;
 pub use organizations::OrganizationRepo;
 pub use pipelines::PipelineRepo;
@@ -48,6 +52,10 @@ pub use runs::{
 pub use users::UserRepo;
 pub use workflows::{CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowScope};
 pub use run_logs::{LogEntry, RunLogRepo};
+pub use run_binary_executions::{
+    RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunBinaryFootprintRow,
+};
+pub use run_network_connections::{RunNetworkConnectionRepo, RunNetworkConnectionRow};
 pub use log_cache::{
     project_run_for_job_run, LazyCacheLine, LogArchiveRow, LogCacheEntry, LogCacheRepo,
 };

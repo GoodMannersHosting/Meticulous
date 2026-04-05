@@ -23,8 +23,10 @@ use crate::routes::{
     },
     projects::{CreateProjectRequest, ProjectResponse, UpdateProjectRequest},
     runs::{
-        CancelRunResponse, DagNodeResponse, JobRunResponse, LogsQuery, LogsResponse,
-        RetryRunResponse, RunDagResponse, RunResponse, StepRunResponse,
+        CancelRunResponse, DagNodeResponse, ExecutedBinarySummary, FootprintBinaryRow,
+        FootprintDirectoryEntry, FootprintDirectoryGroup, FootprintNetworkRow,
+        JobAssignmentResponse, JobRunResponse, LogsQuery, LogsResponse, RetryRunResponse, RunDagResponse,
+        RunFootprintResponse, RunResponse, StepRunResponse,
     },
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
     stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
@@ -105,8 +107,10 @@ use crate::routes::{
         crate::routes::runs::retry_run,
         crate::routes::runs::get_run_jobs,
         crate::routes::runs::get_job_steps,
+        crate::routes::runs::get_job_assignments,
         crate::routes::runs::get_job_logs,
         crate::routes::runs::get_run_dag,
+        crate::routes::runs::get_run_footprint,
         // Agents
         crate::routes::agents::list_agents,
         crate::routes::agents::get_agent,
@@ -184,9 +188,11 @@ use crate::routes::{
             ValidatePipelineRequest, ValidatePipelineResponse,
             // Runs
             RunResponse, CancelRunResponse, RetryRunResponse,
-            JobRunResponse, StepRunResponse,
+            JobRunResponse, JobAssignmentResponse, StepRunResponse,
+            RunFootprintResponse, FootprintBinaryRow, FootprintNetworkRow,
+            FootprintDirectoryGroup, FootprintDirectoryEntry,
             LogsQuery, LogsResponse,
-            DagNodeResponse, RunDagResponse,
+            DagNodeResponse, ExecutedBinarySummary, RunDagResponse,
             // Agents
             AgentResponse, AgentActionResponse,
             // Tokens

@@ -21,6 +21,10 @@
 	export interface SbomViewerProps {
 		packages?: SbomPackage[];
 		diff?: SbomDiff;
+		/** Raw SPDX/CycloneDX JSON when the API returns `sbom`. */
+		rawDocument?: Record<string, unknown> | null;
+		/** When true, show a neutral empty state (no mock data). */
+		empty?: boolean;
 		class?: string;
 	}
 </script>
@@ -30,7 +34,13 @@
 	import { Skeleton } from '$components/data';
 	import { Package, Plus, Minus, ArrowRight, Search, Filter } from 'lucide-svelte';
 
-	let { packages, diff, class: className = '' }: SbomViewerProps = $props();
+	let {
+		packages,
+		diff,
+		rawDocument,
+		empty = false,
+		class: className = ''
+	}: SbomViewerProps = $props();
 
 	let searchQuery = $state('');
 	let selectedEcosystem = $state<string>('all');
@@ -236,5 +246,22 @@
 		<p class="text-sm text-[var(--text-tertiary)]">
 			Showing {filteredPackages().length} of {packages.length} packages
 		</p>
+	{:else if rawDocument && Object.keys(rawDocument).length > 0}
+		<Card padding="sm">
+			<h3 class="mb-2 text-sm font-medium text-[var(--text-primary)]">SBOM document</h3>
+			<pre
+				class="max-h-[28rem] overflow-auto rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-xs text-[var(--text-primary)]"
+			>{JSON.stringify(rawDocument, null, 2)}</pre>
+		</Card>
+	{:else if empty}
+		<div
+			class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-6 py-12 text-center text-sm text-[var(--text-secondary)]"
+		>
+			<p class="font-medium text-[var(--text-primary)]">No SBOM for this run</p>
+			<p class="mt-2">
+				Nothing has been uploaded or generated yet. When your pipeline produces an SPDX or CycloneDX SBOM, it
+				will appear here.
+			</p>
+		</div>
 	{/if}
 </div>

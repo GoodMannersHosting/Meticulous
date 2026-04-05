@@ -206,7 +206,7 @@
 				label: 'Run',
 				width: '100px',
 				sortable: true,
-				render: (value) => runNumberHtml(value)
+				render: (value, row) => runNumberHtml(value, row)
 			},
 			...(viewingAllPipelinesInProject() ? [pipelineCol] : []),
 			{
