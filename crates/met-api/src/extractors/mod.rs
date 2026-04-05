@@ -10,5 +10,5 @@ pub mod pagination;
 pub mod request_id;
 
 pub use auth::{Auth, CurrentUser, OptionalAuth};
-pub use pagination::{Pagination, PaginatedResponse, PaginationMeta};
+pub use pagination::{PaginatedResponse, Pagination, PaginationMeta};
 pub use request_id::RequestId;

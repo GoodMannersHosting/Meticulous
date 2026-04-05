@@ -21,7 +21,9 @@ pub struct SanitizedMakeSpan {
 
 impl SanitizedMakeSpan {
     pub fn new() -> Self {
-        Self { level: Level::DEBUG }
+        Self {
+            level: Level::DEBUG,
+        }
     }
 
     pub fn level(mut self, level: Level) -> Self {
@@ -65,7 +67,7 @@ impl<B> MakeSpan<B> for SanitizedMakeSpan {
 /// Sanitize a URI by redacting sensitive query parameters.
 fn sanitize_uri(uri: &axum::http::Uri) -> String {
     let path = uri.path();
-    
+
     let Some(query) = uri.query() else {
         return path.to_string();
     };
@@ -94,7 +96,7 @@ fn sanitize_uri(uri: &axum::http::Uri) -> String {
 }
 
 /// Create a logging layer for request/response tracing.
-/// 
+///
 /// Uses custom span maker that redacts sensitive query parameters from URIs.
 pub fn logging_layer() -> TraceLayer<
     tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>,
@@ -129,7 +131,10 @@ mod tests {
     #[test]
     fn test_sanitize_uri_with_multiple_params() {
         let uri: axum::http::Uri = "/ws?follow=true&token=secret&from_line=0".parse().unwrap();
-        assert_eq!(sanitize_uri(&uri), "/ws?follow=true&token=[REDACTED]&from_line=0");
+        assert_eq!(
+            sanitize_uri(&uri),
+            "/ws?follow=true&token=[REDACTED]&from_line=0"
+        );
     }
 
     #[test]
@@ -141,12 +146,18 @@ mod tests {
     #[test]
     fn test_sanitize_uri_case_insensitive() {
         let uri: axum::http::Uri = "/api?TOKEN=secret&ApiKey=abc".parse().unwrap();
-        assert_eq!(sanitize_uri(&uri), "/api?TOKEN=[REDACTED]&ApiKey=[REDACTED]");
+        assert_eq!(
+            sanitize_uri(&uri),
+            "/api?TOKEN=[REDACTED]&ApiKey=[REDACTED]"
+        );
     }
 
     #[test]
     fn test_sanitize_uri_preserves_safe_params() {
         let uri: axum::http::Uri = "/runs?page=1&per_page=10&status=running".parse().unwrap();
-        assert_eq!(sanitize_uri(&uri), "/runs?page=1&per_page=10&status=running");
+        assert_eq!(
+            sanitize_uri(&uri),
+            "/runs?page=1&per_page=10&status=running"
+        );
     }
 }

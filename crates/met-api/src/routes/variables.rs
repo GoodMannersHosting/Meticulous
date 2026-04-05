@@ -1,9 +1,9 @@
 //! Variable CRUD routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, patch, post},
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{ProjectId, VariableId};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -60,11 +60,7 @@ pub struct VariableResponse {
 
 impl From<VariableRow> for VariableResponse {
     fn from(r: VariableRow) -> Self {
-        let value = if r.is_sensitive {
-            None
-        } else {
-            Some(r.value)
-        };
+        let value = if r.is_sensitive { None } else { Some(r.value) };
         Self {
             id: VariableId::from_uuid(r.id),
             project_id: ProjectId::from_uuid(r.project_id),
@@ -236,7 +232,9 @@ async fn update_variable(
     .ok_or_else(|| ApiError::not_found("variable not found"))?;
 
     if existing.org_id != user.org_id.as_uuid() {
-        return Err(ApiError::forbidden("cannot modify variables in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify variables in other organizations",
+        ));
     }
 
     let name = req.name.unwrap_or(existing.name);
@@ -295,7 +293,9 @@ async fn delete_variable(
     .ok_or_else(|| ApiError::not_found("variable not found"))?;
 
     if existing.org_id != user.org_id.as_uuid() {
-        return Err(ApiError::forbidden("cannot delete variables in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete variables in other organizations",
+        ));
     }
 
     sqlx::query("DELETE FROM variables WHERE id = $1")

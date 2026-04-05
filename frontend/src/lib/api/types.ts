@@ -201,12 +201,19 @@ export interface JobRun {
 	id: string;
 	run_id: string;
 	job_id: string;
+	job_name: string;
 	agent_id?: string;
 	status: JobStatus;
 	attempt: number;
+	exit_code?: number;
+	error_message?: string;
+	cache_hit?: boolean;
 	log_path?: string;
 	started_at?: string;
 	finished_at?: string;
+	duration_ms?: number;
+	/** Best-effort explanation when status is pending or queued (from API). */
+	scheduling_note?: string;
 	created_at: string;
 }
 

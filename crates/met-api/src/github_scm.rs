@@ -3,14 +3,17 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use flate2::read::GzDecoder;
 use met_core::ids::{OrganizationId, PipelineId, ProjectId};
-use met_parser::{CompositeWorkflowProvider, DatabaseWorkflowProvider, GitWorkflowProvider, PipelineIR, PipelineParser};
-use met_secrets::{installation_access_token, parse_github_app_credentials, BuiltinStoredCrypto};
-use met_store::repos::{BuiltinSecretsRepo, StoredSecretKind};
+use met_parser::{
+    CompositeWorkflowProvider, DatabaseWorkflowProvider, GitWorkflowProvider, PipelineIR,
+    PipelineParser,
+};
+use met_secrets::{BuiltinStoredCrypto, installation_access_token, parse_github_app_credentials};
 use met_store::PgPool;
-use base64::Engine;
 use met_store::repos::BuiltinSecretCipherRow;
+use met_store::repos::{BuiltinSecretsRepo, StoredSecretKind};
 use serde::Deserialize;
 use tracing::instrument;
 
@@ -96,7 +99,8 @@ pub async fn github_app_installation_token_for_project_secret(
             ))
         })?;
 
-    let kind = StoredSecretKind::parse(&row.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let kind =
+        StoredSecretKind::parse(&row.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
     if kind != StoredSecretKind::GithubApp {
         return Err(ApiError::bad_request(format!(
             "secret '{}' must be kind github_app",
@@ -168,8 +172,8 @@ pub async fn resolve_github_commit_sha(
         )));
     }
 
-    let parsed: CommitResp =
-        serde_json::from_str(&body).map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))?;
+    let parsed: CommitResp = serde_json::from_str(&body)
+        .map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))?;
     Ok(parsed.sha)
 }
 
@@ -222,8 +226,8 @@ pub async fn fetch_github_text_file(
         )));
     }
 
-    let parsed: ContentResp =
-        serde_json::from_str(&body).map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))?;
+    let parsed: ContentResp = serde_json::from_str(&body)
+        .map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))?;
 
     let encoding = parsed.encoding.as_deref().unwrap_or("");
     if encoding != "base64" {
@@ -324,8 +328,8 @@ pub fn github_api_base_hint_from_encrypted_row(
     let pt = crypto
         .decrypt(&row.encrypted_value, &nonce)
         .map_err(|e| ApiError::internal(format!("decrypt: {e}")))?;
-    let plaintext = String::from_utf8(pt.to_vec())
-        .map_err(|e| ApiError::internal(format!("utf8: {e}")))?;
+    let plaintext =
+        String::from_utf8(pt.to_vec()).map_err(|e| ApiError::internal(format!("utf8: {e}")))?;
     Ok(api_base_from_env_inline_json(&plaintext))
 }
 
@@ -404,19 +408,16 @@ pub async fn parse_pipeline_from_github_checkout(
         .with_database(db)
         .with_git(git);
     let mut parser = PipelineParser::new(&composite);
-    let ir = parser
-        .parse(&yaml_text)
-        .await
-        .map_err(|diags| {
-            ApiError::bad_request(format!(
-                "invalid pipeline definition: {}",
-                diags
-                    .iter()
-                    .map(|d| d.message.clone())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ))
-        })?;
+    let ir = parser.parse(&yaml_text).await.map_err(|diags| {
+        ApiError::bad_request(format!(
+            "invalid pipeline definition: {}",
+            diags
+                .iter()
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })?;
 
     Ok((ir, commit_sha, def))
 }
@@ -428,7 +429,9 @@ pub async fn parse_pipeline_from_github_checkout(
 pub fn read_pipeline_yaml_from_checkout(root: &Path, path: &str) -> ApiResult<String> {
     let rel = path.trim().trim_start_matches('/');
     if rel.is_empty() {
-        return Err(ApiError::bad_request("pipeline path (scm_path) is required"));
+        return Err(ApiError::bad_request(
+            "pipeline path (scm_path) is required",
+        ));
     }
     let mut candidates: Vec<PathBuf> = vec![root.join(rel)];
     if !rel.ends_with(".yaml") && !rel.ends_with(".yml") {

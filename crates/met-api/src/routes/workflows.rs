@@ -1,9 +1,9 @@
 //! Reusable workflow routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{get, post},
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::ProjectId;
@@ -14,7 +14,7 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 

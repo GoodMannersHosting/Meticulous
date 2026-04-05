@@ -322,6 +322,15 @@ impl AgentService for AgentServiceImpl {
         agent.id = agent_id;
         agent.status = AgentStatus::Online;
         agent.tags = labels.clone();
+        // Match `runs-on.tags` in pipelines: scheduler requires `key=value` strings on this column
+        // (see met-engine scheduler). Mirror reported OS/arch from capabilities or the security bundle.
+        let os_for_tags = caps.map(|c| c.os.as_str()).unwrap_or(bundle.os.as_str());
+        let arch_for_tags = caps.map(|c| c.arch.as_str()).unwrap_or(bundle.arch.as_str());
+        for tag in [format!("os={os_for_tags}"), format!("arch={arch_for_tags}")] {
+            if !agent.tags.contains(&tag) {
+                agent.tags.push(tag);
+            }
+        }
         agent.environment_type = self.convert_environment_type(
             met_proto::agent::v1::EnvironmentType::try_from(bundle.environment_type)
                 .unwrap_or(met_proto::agent::v1::EnvironmentType::Virtual),

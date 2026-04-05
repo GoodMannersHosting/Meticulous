@@ -1,9 +1,9 @@
 //! Organization CRUD routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, patch, post},
-    Json, Router,
 };
 use met_core::{
     ids::OrganizationId,
@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -108,7 +108,11 @@ async fn create_org(
         return Err(ApiError::bad_request("slug is required"));
     }
 
-    if !req.slug.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !req
+        .slug
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(ApiError::bad_request(
             "slug must contain only alphanumeric characters, hyphens, and underscores",
         ));
@@ -231,5 +235,7 @@ async fn delete_org(
 
     tracing::warn!(admin_id = %user.user_id, org_id = %id, "organization deleted");
 
-    Ok(Json(serde_json::json!({ "message": "organization deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "organization deleted" }),
+    ))
 }

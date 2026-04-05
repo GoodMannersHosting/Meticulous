@@ -1,9 +1,9 @@
 //! Artifact routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::get,
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{ArtifactId, RunId};

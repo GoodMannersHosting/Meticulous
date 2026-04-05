@@ -4,7 +4,7 @@ use async_nats::jetstream::Context as JetStreamContext;
 use indexmap::IndexMap;
 use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepRunId};
 use met_store::repos::AgentRepo;
-use met_parser::{JobIR, Shell, StepCommand};
+use met_parser::{JobIR, Shell, StepCommand, TagValue};
 use prost::Message;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -162,8 +162,12 @@ impl Scheduler {
         let required_tags: Vec<String> = job
             .pool_selector
             .required_tags
-            .keys()
-            .cloned()
+            .iter()
+            .map(|(key, value)| match value {
+                TagValue::String(s) => format!("{key}={s}"),
+                TagValue::Bool(b) => format!("{key}={b}"),
+                TagValue::Present => key.clone(),
+            })
             .collect();
 
         let repo = AgentRepo::new(&self.pool);

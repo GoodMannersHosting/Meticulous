@@ -3,13 +3,15 @@
 use std::collections::HashMap;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{OrganizationId, PipelineId, ProjectId};
-use met_store::repos::{BuiltinSecretMetaRow, BuiltinSecretsRepo, PipelineRepo, ProjectRepo, StoredSecretKind};
+use met_store::repos::{
+    BuiltinSecretMetaRow, BuiltinSecretsRepo, PipelineRepo, ProjectRepo, StoredSecretKind,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -192,7 +194,8 @@ async fn create_stored_secret(
         return Err(ApiError::bad_request("value is required"));
     }
 
-    let kind = StoredSecretKind::parse(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let kind =
+        StoredSecretKind::parse(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     let project = ProjectRepo::new(state.db())
         .get(project_id)
@@ -212,12 +215,7 @@ async fn create_stored_secret(
 
     let repo = BuiltinSecretsRepo::new(state.db());
     let version = repo
-        .next_version(
-            org_id,
-            Some(project_id),
-            req.pipeline_id,
-            &req.path,
-        )
+        .next_version(org_id, Some(project_id), req.pipeline_id, &req.path)
         .await
         .map_err(met_store::StoreError::from)?;
 
@@ -305,7 +303,8 @@ async fn rotate_stored_secret(
     }
 
     let org_id = OrganizationId::from_uuid(existing.org_id);
-    let kind = StoredSecretKind::parse(&existing.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let kind = StoredSecretKind::parse(&existing.kind)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     let version = repo
         .next_version(
@@ -370,7 +369,9 @@ async fn delete_stored_secret(
         .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
 
     let Some(project_id) = existing.project_id.map(ProjectId::from_uuid) else {
-        return Err(ApiError::bad_request("cannot delete org-wide secrets via this API"));
+        return Err(ApiError::bad_request(
+            "cannot delete org-wide secrets via this API",
+        ));
     };
 
     if !user.can_access_project(project_id) {
@@ -380,6 +381,10 @@ async fn delete_stored_secret(
         return Err(ApiError::forbidden("wrong organization"));
     }
 
-    repo.soft_delete(id).await.map_err(met_store::StoreError::from)?;
-    Ok(Json(serde_json::json!({ "message": "stored secret deleted" })))
+    repo.soft_delete(id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+    Ok(Json(
+        serde_json::json!({ "message": "stored secret deleted" }),
+    ))
 }

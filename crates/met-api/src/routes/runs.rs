@@ -1,23 +1,25 @@
 //! Pipeline run routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use met_core::{
     ids::{PipelineId, RunId},
     models::{Run, RunStatus},
 };
-use met_store::repos::{JobRunRepo, RunRepo, StepRunRepo};
+use met_store::repos::{JobRunRepo, PipelineRepo, RunRepo, StepRunRepo};
+
+use crate::scheduling_hints;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -79,9 +81,9 @@ async fn list_runs(
 ) -> ApiResult<Json<PaginatedResponse<RunResponse>>> {
     let repo = RunRepo::new(state.db());
 
-    let pipeline_id = query.pipeline_id.ok_or_else(|| {
-        ApiError::bad_request("pipeline_id query parameter is required")
-    })?;
+    let pipeline_id = query
+        .pipeline_id
+        .ok_or_else(|| ApiError::bad_request("pipeline_id query parameter is required"))?;
 
     let runs = repo
         .list_by_pipeline(pipeline_id, pagination.sql_limit(), 0)
@@ -200,7 +202,11 @@ async fn retry_run(
     }
 
     let new_run = repo
-        .create(original_run.pipeline_id, original_run.trigger_id, &user.email)
+        .create(
+            original_run.pipeline_id,
+            original_run.trigger_id,
+            &user.email,
+        )
         .await?;
 
     Ok(Json(RetryRunResponse {
@@ -236,6 +242,9 @@ pub struct JobRunResponse {
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
     pub duration_ms: Option<i64>,
+    /// Best-effort explanation when a job is pending or queued (omitted when not applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_note: Option<String>,
 }
 
 #[utoipa::path(
@@ -251,16 +260,31 @@ pub struct JobRunResponse {
 #[instrument(skip(state))]
 async fn get_run_jobs(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     Path(id): Path<RunId>,
 ) -> ApiResult<Json<Vec<JobRunResponse>>> {
+    let run = RunRepo::new(state.db()).get(id).await?;
+    let pipeline = PipelineRepo::new(state.db()).get(run.pipeline_id).await?;
+
     let job_repo = JobRunRepo::new(state.db());
     let job_runs = job_repo.list_by_run(id).await?;
+    let hint_jobs = job_runs.clone();
+
+    let ir = scheduling_hints::try_parse_pipeline_ir(
+        state.db(),
+        user.org_id,
+        pipeline.project_id,
+        &pipeline.definition,
+    )
+    .await;
 
     let response: Vec<JobRunResponse> = job_runs
         .into_iter()
         .map(|j| {
             let duration_ms = j.duration().map(|d| d.num_milliseconds());
+            let scheduling_note = ir
+                .as_ref()
+                .and_then(|ir| scheduling_hints::scheduling_hint(ir, &hint_jobs, &j));
             JobRunResponse {
                 id: j.id,
                 job_id: j.job_id,
@@ -274,6 +298,7 @@ async fn get_run_jobs(
                 started_at: j.started_at,
                 finished_at: j.finished_at,
                 duration_ms,
+                scheduling_note,
             }
         })
         .collect();
@@ -458,10 +483,7 @@ async fn get_run_dag(
         })
         .collect();
 
-    Ok(Json(RunDagResponse {
-        run_id: id,
-        nodes,
-    }))
+    Ok(Json(RunDagResponse { run_id: id, nodes }))
 }
 
 async fn run_events_websocket(
@@ -472,10 +494,7 @@ async fn run_events_websocket(
     ws.on_upgrade(move |socket| handle_run_events(socket, id))
 }
 
-async fn handle_run_events(
-    mut socket: axum::extract::ws::WebSocket,
-    run_id: RunId,
-) {
+async fn handle_run_events(mut socket: axum::extract::ws::WebSocket, run_id: RunId) {
     use axum::extract::ws::Message;
 
     let hello = serde_json::json!({
@@ -483,15 +502,23 @@ async fn handle_run_events(
         "run_id": run_id.to_string(),
     });
 
-    if socket.send(Message::Text(hello.to_string().into())).await.is_err() {
+    if socket
+        .send(Message::Text(hello.to_string().into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        
+
         let ping = serde_json::json!({ "type": "ping" });
-        if socket.send(Message::Text(ping.to_string().into())).await.is_err() {
+        if socket
+            .send(Message::Text(ping.to_string().into()))
+            .await
+            .is_err()
+        {
             break;
         }
     }

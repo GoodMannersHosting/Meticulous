@@ -27,15 +27,11 @@ use crate::routes::{
         RetryRunResponse, RunDagResponse, RunResponse, StepRunResponse,
     },
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
-    stored_secrets::{
-        CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse,
-    },
+    stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
     tokens::{CreateTokenRequest, CreateTokenResponseBody, TokenResponse},
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
     webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
-    workflows::{
-        CreateWorkflowRequest, WorkflowResponse, WorkflowVersionsResponse,
-    },
+    workflows::{CreateWorkflowRequest, WorkflowResponse, WorkflowVersionsResponse},
 };
 
 #[derive(OpenApi)]

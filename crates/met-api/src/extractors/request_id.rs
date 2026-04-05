@@ -4,10 +4,7 @@
 //! the request ID middleware. This allows handlers to include the request ID
 //! in logs and error responses.
 
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use uuid::Uuid;
 
 /// Header name for request IDs.

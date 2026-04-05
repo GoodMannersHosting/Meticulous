@@ -1,11 +1,11 @@
 //! Webhook ingestion routes for SCM events.
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{Path, State},
     http::HeaderMap,
     routing::post,
-    Json, Router,
 };
 use met_core::ids::{OrganizationId, ProjectId, TriggerId};
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,18 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/webhooks/{org_id}/{trigger_id}", post(handle_webhook))
-        .route("/webhooks/github/{org_id}/{trigger_id}", post(handle_github_webhook))
-        .route("/webhooks/gitlab/{org_id}/{trigger_id}", post(handle_gitlab_webhook))
-        .route("/webhooks/bitbucket/{org_id}/{trigger_id}", post(handle_bitbucket_webhook))
+        .route(
+            "/webhooks/github/{org_id}/{trigger_id}",
+            post(handle_github_webhook),
+        )
+        .route(
+            "/webhooks/gitlab/{org_id}/{trigger_id}",
+            post(handle_gitlab_webhook),
+        )
+        .route(
+            "/webhooks/bitbucket/{org_id}/{trigger_id}",
+            post(handle_bitbucket_webhook),
+        )
         .route("/projects/{project_id}/scm/setup", post(setup_scm_webhook))
 }
 
@@ -554,7 +563,9 @@ async fn setup_scm_webhook(
         )));
     }
 
-    let events = req.events.unwrap_or_else(|| vec!["push".to_string(), "pull_request".to_string()]);
+    let events = req
+        .events
+        .unwrap_or_else(|| vec!["push".to_string(), "pull_request".to_string()]);
 
     let secret = uuid::Uuid::new_v4().to_string();
     let secret_hash = format!("{:x}", Sha256::digest(secret.as_bytes()));

@@ -1,9 +1,9 @@
 //! Project CRUD routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, patch, post},
-    Json, Router,
 };
 use met_core::{
     ids::ProjectId,
@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -25,7 +25,9 @@ pub fn router() -> Router<AppState> {
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/{id}",
-            get(get_project).patch(update_project).delete(delete_project),
+            get(get_project)
+                .patch(update_project)
+                .delete(delete_project),
         )
         .route("/projects/by-slug/{slug}", get(get_project_by_slug))
         .route("/projects/{id}/archive", post(archive_project))
@@ -120,7 +122,11 @@ async fn create_project(
         return Err(ApiError::bad_request("slug is required"));
     }
 
-    if !req.slug.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !req
+        .slug
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(ApiError::bad_request(
             "slug must contain only alphanumeric characters, hyphens, and underscores",
         ));

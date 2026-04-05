@@ -15,6 +15,7 @@ name = "met-api"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
 met-core = { workspace = true }
 met-store = { workspace = true }
 met-secrets = { workspace = true }

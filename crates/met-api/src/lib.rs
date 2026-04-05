@@ -12,11 +12,12 @@
 pub mod auth;
 pub mod config;
 pub mod error;
-pub mod github_scm;
 pub mod extractors;
+pub mod github_scm;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;
+pub mod scheduling_hints;
 pub mod state;
 
 pub use config::ApiConfig;

@@ -42,7 +42,11 @@ pub struct ApiError {
 
 impl ApiError {
     /// Create a new API error.
-    pub fn new(status: StatusCode, code: impl Into<Cow<'static, str>>, message: impl Into<String>) -> Self {
+    pub fn new(
+        status: StatusCode,
+        code: impl Into<Cow<'static, str>>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             status,
             code: code.into(),
@@ -84,7 +88,11 @@ impl ApiError {
 
     /// Create a 422 Unprocessable Entity error.
     pub fn unprocessable(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", message)
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            message,
+        )
     }
 
     /// Create a 429 Too Many Requests error.
@@ -99,7 +107,11 @@ impl ApiError {
 
     /// Create a 503 Service Unavailable error.
     pub fn unavailable(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", message)
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service_unavailable",
+            message,
+        )
     }
 }
 
@@ -204,8 +216,7 @@ mod tests {
 
     #[test]
     fn test_with_request_id() {
-        let err = ApiError::internal("something went wrong")
-            .with_request_id("req_abc123");
+        let err = ApiError::internal("something went wrong").with_request_id("req_abc123");
         assert_eq!(err.request_id, Some("req_abc123".to_string()));
     }
 }

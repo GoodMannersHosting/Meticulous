@@ -1,9 +1,9 @@
 //! Pipeline CRUD routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use met_core::{
     ids::{PipelineId, ProjectId},
@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     github_scm,
     state::AppState,
 };
@@ -28,14 +28,22 @@ pub fn router() -> Router<AppState> {
         .route("/pipelines", get(list_pipelines).post(create_pipeline))
         .route(
             "/pipelines/{id}",
-            get(get_pipeline).put(update_pipeline).delete(delete_pipeline),
+            get(get_pipeline)
+                .put(update_pipeline)
+                .delete(delete_pipeline),
         )
-        .route("/pipelines/by-slug/{project_id}/{slug}", get(get_pipeline_by_slug))
+        .route(
+            "/pipelines/by-slug/{project_id}/{slug}",
+            get(get_pipeline_by_slug),
+        )
         .route(
             "/projects/{project_id}/pipelines/import-git",
             post(import_pipeline_git),
         )
-        .route("/pipelines/{id}/sync-from-git", post(sync_pipeline_from_git))
+        .route(
+            "/pipelines/{id}/sync-from-git",
+            post(sync_pipeline_from_git),
+        )
         .route("/pipelines/{id}/trigger", post(trigger_pipeline))
         .route("/pipelines/{id}/validate", post(validate_pipeline))
 }
@@ -75,16 +83,19 @@ async fn list_pipelines(
 ) -> ApiResult<Json<PaginatedResponse<PipelineResponse>>> {
     let repo = PipelineRepo::new(state.db());
 
-    let project_id = query.project_id.ok_or_else(|| {
-        ApiError::bad_request("project_id query parameter is required")
-    })?;
+    let project_id = query
+        .project_id
+        .ok_or_else(|| ApiError::bad_request("project_id query parameter is required"))?;
 
     let pipelines = repo
         .list_by_project(project_id, pagination.sql_limit(), 0)
         .await?;
 
     let response = PaginatedResponse::new(
-        pipelines.into_iter().map(|p| PipelineResponse { pipeline: p }).collect(),
+        pipelines
+            .into_iter()
+            .map(|p| PipelineResponse { pipeline: p })
+            .collect(),
         pagination.limit,
         |p| p.pipeline.id.to_string(),
     );
@@ -183,9 +194,7 @@ async fn import_pipeline_git(
     }
 
     let Some(crypto) = state.stored_secret_crypto.as_ref() else {
-        return Err(ApiError::unavailable(
-            STORED_SECRETS_UNAVAILABLE,
-        ));
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
     };
 
     let project = ProjectRepo::new(state.db()).get(project_id).await?;
@@ -259,9 +268,7 @@ async fn sync_pipeline_from_git(
     Json(req): Json<SyncPipelineGitRequest>,
 ) -> ApiResult<Json<PipelineResponse>> {
     let Some(crypto) = state.stored_secret_crypto.as_ref() else {
-        return Err(ApiError::unavailable(
-            STORED_SECRETS_UNAVAILABLE,
-        ));
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
     };
 
     let pipeline_repo = PipelineRepo::new(state.db());
@@ -513,20 +520,19 @@ async fn trigger_pipeline(
 
     let mut pipeline_ir = if pipeline.scm_provider.as_deref() == Some("github") {
         let Some(crypto) = state.stored_secret_crypto.as_ref() else {
-            return Err(ApiError::unavailable(
-                STORED_SECRETS_UNAVAILABLE,
-            ));
+            return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
         };
         let repository = pipeline
             .scm_repository
             .as_deref()
             .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_repository"))?;
-        let credentials_path = pipeline
-            .scm_credentials_secret_path
-            .as_deref()
-            .ok_or_else(|| {
-                ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
-            })?;
+        let credentials_path =
+            pipeline
+                .scm_credentials_secret_path
+                .as_deref()
+                .ok_or_else(|| {
+                    ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
+                })?;
         let scm_path = pipeline
             .scm_path
             .as_deref()
@@ -546,24 +552,23 @@ async fn trigger_pipeline(
         ir
     } else {
         let yaml = serde_yaml::to_string(&pipeline.definition).map_err(|e| {
-            ApiError::bad_request(format!("pipeline definition is not representable as YAML: {e}"))
+            ApiError::bad_request(format!(
+                "pipeline definition is not representable as YAML: {e}"
+            ))
         })?;
 
         let wf_provider = DatabaseWorkflowProvider::new(state.db().clone(), org_id.as_uuid());
         let mut parser = PipelineParser::new(&wf_provider);
-        parser
-            .parse(&yaml)
-            .await
-            .map_err(|diags| {
-                ApiError::bad_request(format!(
-                    "invalid pipeline definition: {}",
-                    diags
-                        .iter()
-                        .map(|d| d.message.clone())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ))
-            })?
+        parser.parse(&yaml).await.map_err(|diags| {
+            ApiError::bad_request(format!(
+                "invalid pipeline definition: {}",
+                diags
+                    .iter()
+                    .map(|d| d.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+        })?
     };
 
     pipeline_ir.id = pipeline.id;

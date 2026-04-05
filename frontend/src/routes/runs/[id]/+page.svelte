@@ -141,7 +141,7 @@
 	const dagJobs = $derived(() => {
 		const jobs = jobsFromPipelineDef(pipeline?.definition);
 		return jobs.map((job: PipelineJob) => {
-			const jobRun = jobRuns.find((jr) => jr.job_id === job.name);
+			const jobRun = jobRuns.find((jr) => jr.job_name === job.name);
 			return {
 				name: job.name,
 				depends_on: job.depends_on ?? [],
@@ -265,8 +265,13 @@
 										<StatusBadge status={jobRun.status} size="sm" showIcon={true} />
 										<div class="flex-1 min-w-0">
 											<p class="truncate font-medium text-[var(--text-primary)]">
-												{jobRun.job_id}
+												{jobRun.job_name}
 											</p>
+											{#if jobRun.scheduling_note}
+												<p class="mt-0.5 text-xs leading-snug text-[var(--text-secondary)] line-clamp-2">
+													{jobRun.scheduling_note}
+												</p>
+											{/if}
 											{#if jobRun.started_at}
 												<p class="text-xs text-[var(--text-tertiary)]">
 													{formatDurationMs(
@@ -290,13 +295,18 @@
 						<Card padding="none">
 							<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
 								<div>
-									<h3 class="font-medium text-[var(--text-primary)]">{selectedJobRun.job_id}</h3>
+									<h3 class="font-medium text-[var(--text-primary)]">{selectedJobRun.job_name}</h3>
 									<div class="flex items-center gap-2 mt-1">
 										<StatusBadge status={selectedJobRun.status} size="sm" />
 										{#if selectedJobRun.attempt > 0}
 											<Badge variant="secondary" size="sm">Attempt {selectedJobRun.attempt + 1}</Badge>
 										{/if}
 									</div>
+									{#if selectedJobRun.scheduling_note}
+										<p class="mt-2 text-sm text-[var(--text-secondary)]">
+											{selectedJobRun.scheduling_note}
+										</p>
+									{/if}
 								</div>
 								<div class="text-sm text-[var(--text-secondary)]">
 									{#if selectedJobRun.agent_id}

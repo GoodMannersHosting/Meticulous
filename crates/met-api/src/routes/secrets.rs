@@ -4,9 +4,9 @@
 //! (name, description, scope, provider) is returned.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, patch, post},
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{ProjectId, SecretId};
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -27,10 +27,7 @@ pub fn router() -> Router<AppState> {
             "/projects/{project_id}/secrets",
             get(list_secrets).post(create_secret),
         )
-        .route(
-            "/secrets/{id}",
-            patch(update_secret).delete(delete_secret),
-        )
+        .route("/secrets/{id}", patch(update_secret).delete(delete_secret))
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -248,7 +245,9 @@ async fn update_secret(
     .ok_or_else(|| ApiError::not_found("secret not found"))?;
 
     if existing.org_id != user.org_id.as_uuid() {
-        return Err(ApiError::forbidden("cannot modify secrets in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify secrets in other organizations",
+        ));
     }
 
     let name = req.name.unwrap_or(existing.name);
@@ -309,7 +308,9 @@ async fn delete_secret(
     .ok_or_else(|| ApiError::not_found("secret not found"))?;
 
     if existing.org_id != user.org_id.as_uuid() {
-        return Err(ApiError::forbidden("cannot delete secrets in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete secrets in other organizations",
+        ));
     }
 
     sqlx::query("DELETE FROM secrets WHERE id = $1")
