@@ -38,6 +38,13 @@
 	} from '$utils/runTableCells';
 	import { runStartedAtHover } from '$utils/runStartedAtHover';
 	import DagViewer from '$components/pipeline/DagViewer.svelte';
+	import { stringify } from 'yaml';
+	import {
+		collectPipelineSourceRows,
+		githubRepoTreeUrl,
+		pipelineGithubBlobRef,
+		upstreamLinkForRow
+	} from '$utils/pipelineSourceFiles';
 
 	let pipeline = $state<Pipeline | null>(null);
 	let runs = $state<Run[]>([]);
@@ -135,6 +142,25 @@
 		}
 		return [];
 	}
+
+	function definitionAsYaml(def: Pipeline['definition']): string {
+		try {
+			return stringify(def as object, { lineWidth: 100 });
+		} catch {
+			return '';
+		}
+	}
+
+	function shortRev(sha: string | null | undefined): string | null {
+		const s = sha?.trim();
+		if (!s) return null;
+		return s.length > 12 ? `${s.slice(0, 7)}…` : s;
+	}
+
+	const pipelineSourceRows = $derived(pipeline ? collectPipelineSourceRows(pipeline) : []);
+	const pipelineDefinitionYaml = $derived(pipeline ? definitionAsYaml(pipeline.definition) : '');
+	const pipelineGithubRef = $derived(pipeline ? pipelineGithubBlobRef(pipeline) : null);
+	const pipelineGithubTreeUrl = $derived(pipeline ? githubRepoTreeUrl(pipeline) : null);
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
@@ -966,16 +992,136 @@
 		{:else if activeTab === 'definition'}
 			<Card>
 				<div class="space-y-4">
-					<div class="flex items-center justify-between">
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 						<h3 class="font-medium text-[var(--text-primary)]">Pipeline Definition</h3>
 						{#if pipeline.definition_path}
 							<span class="text-sm text-[var(--text-secondary)]">
-								From: <code class="font-mono">{pipeline.definition_path}</code>
+								Imported path: <code class="font-mono">{pipeline.definition_path}</code>
 							</span>
 						{/if}
 					</div>
 
-					<pre class="overflow-x-auto rounded-lg bg-[var(--bg-tertiary)] p-4 text-sm"><code>{JSON.stringify(pipeline.definition, null, 2)}</code></pre>
+					{#if pipeline.scm_provider === 'github' && pipeline.scm_repository?.trim()}
+						<div
+							class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-secondary)]"
+						>
+							<p class="font-medium text-[var(--text-primary)]">Git source</p>
+							<p class="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
+								{pipeline.scm_repository.trim()}
+							</p>
+							<p class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+								{#if pipeline.scm_ref?.trim()}
+									<span>
+										Branch / tag:
+										<code class="font-mono text-[var(--text-primary)]">{pipeline.scm_ref.trim()}</code>
+									</span>
+								{/if}
+								{#if pipeline.scm_revision?.trim()}
+									<span>
+										Revision:
+										<code class="font-mono text-[var(--text-primary)]">{shortRev(pipeline.scm_revision)}</code>
+										<span class="sr-only">({pipeline.scm_revision.trim()})</span>
+									</span>
+								{/if}
+							</p>
+							{#if pipelineGithubTreeUrl}
+								<p class="mt-2">
+									<a
+										href={pipelineGithubTreeUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:underline dark:text-primary-400"
+									>
+										<ExternalLink class="h-3.5 w-3.5" />
+										Browse repository at this ref
+									</a>
+								</p>
+							{:else if !pipelineGithubRef}
+								<p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+									Upstream links need a stored Git revision or ref on this pipeline.
+								</p>
+							{/if}
+						</div>
+					{/if}
+
+					{#if pipelineSourceRows.length > 0}
+						<div>
+							<h4 class="mb-2 text-sm font-medium text-[var(--text-primary)]">Source files</h4>
+							<div class="overflow-x-auto rounded-lg border border-[var(--border-primary)]">
+								<table class="w-full min-w-[28rem] text-left text-sm">
+									<thead class="border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+										<tr>
+											<th class="px-3 py-2 font-medium">File</th>
+											<th class="px-3 py-2 font-medium">Path in repo</th>
+											<th class="px-3 py-2 font-medium text-right">Upstream</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-[var(--border-primary)]">
+										{#each pipelineSourceRows as row, i (row.kind + (row.repoPath ?? row.workflowRef ?? '') + row.label + String(i))}
+											{@const upstream = upstreamLinkForRow(pipeline, row)}
+											<tr class="bg-[var(--bg-primary)]">
+												<td class="px-3 py-2 text-[var(--text-primary)]">
+													<div class="max-w-[16rem] truncate font-medium sm:max-w-md" title={row.label}>
+														{row.label}
+													</div>
+													<div class="mt-0.5 text-xs text-[var(--text-tertiary)]">
+														{row.kind === 'pipeline'
+															? 'Root pipeline'
+															: row.kind === 'workflow_project'
+																? 'Reusable workflow (project scope)'
+																: 'Reusable workflow (global scope)'}
+													</div>
+												</td>
+												<td class="px-3 py-2 font-mono text-xs text-[var(--text-secondary)]">
+													{#if row.repoPath}
+														{row.repoPath}
+													{:else}
+														<span class="text-[var(--text-tertiary)]">—</span>
+													{/if}
+												</td>
+												<td class="px-3 py-2 text-right">
+													{#if upstream}
+														<a
+															href={upstream}
+															target="_blank"
+															rel="noopener noreferrer"
+															class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-secondary-300 px-3 text-sm font-medium text-secondary-700 hover:bg-secondary-100 dark:border-secondary-600 dark:text-secondary-300 dark:hover:bg-secondary-800"
+														>
+															<ExternalLink class="h-3.5 w-3.5 shrink-0" />
+															View upstream
+														</a>
+													{:else}
+														<Button
+															variant="outline"
+															size="sm"
+															disabled
+															title={row.kind === 'workflow_global'
+																? 'Global workflows are not stored as files in this repository.'
+																: pipeline.scm_provider !== 'github'
+																	? 'Upstream links are only built for GitHub-backed pipelines.'
+																	: 'No Git ref available to build an upstream URL.'}
+														>
+															View upstream
+														</Button>
+													{/if}
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					{/if}
+
+					<div>
+						<h4 class="mb-2 text-sm font-medium text-[var(--text-primary)]">Definition (YAML)</h4>
+						{#if pipelineDefinitionYaml}
+							<pre class="overflow-x-auto rounded-lg bg-[var(--bg-tertiary)] p-4 text-sm"><code
+								>{pipelineDefinitionYaml}</code></pre>
+						{:else}
+							<p class="text-sm text-[var(--text-secondary)]">Could not render definition as YAML.</p>
+						{/if}
+					</div>
 				</div>
 			</Card>
 

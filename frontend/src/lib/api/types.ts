@@ -259,6 +259,12 @@ export interface RunFootprintResponse {
 	filesystem_more_directory_count?: number | null;
 }
 
+/** GET /api/v1/runs/:run_id/jobs/:job_run_id/snapshots */
+export interface JobRunSnapshotsResponse {
+	pipeline_definition?: Record<string, unknown> | null;
+	workflow_definition?: Record<string, unknown> | null;
+}
+
 export interface TriggerRunInput {
 	branch?: string;
 	commit_sha?: string;
@@ -302,6 +308,12 @@ export interface JobRun {
 	started_at?: string;
 	finished_at?: string;
 	duration_ms?: number;
+	/** SHA-256 (hex) of pipeline definition JSON in `definition_snapshots`. */
+	pipeline_definition_sha256?: string;
+	/** SHA-256 (hex) of reusable workflow definition when this job used one. */
+	workflow_definition_sha256?: string;
+	/** Resolved reusable workflow: scope, name, version (or other JSON from API). */
+	source_workflow?: Record<string, unknown>;
 	/** Best-effort explanation when status is pending or queued (from API). */
 	scheduling_note?: string;
 	created_at: string;
@@ -438,6 +450,8 @@ export interface ListRunsParams {
 	limit?: number;
 	/** Offset into the pipeline's run list (API uses `cursor` query param). */
 	cursor?: string;
+	/** With `pipeline_id`, return the single run with this run number (e.g. previous = current − 1). */
+	run_number?: number;
 }
 
 export interface ListAgentsParams {

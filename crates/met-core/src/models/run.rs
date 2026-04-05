@@ -148,6 +148,15 @@ pub struct JobRun {
     /// Path to log storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
+    /// SHA-256 of the pipeline definition JSON snapshot (`definition_snapshots`) at job_run creation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_definition_sha256: Option<Vec<u8>>,
+    /// SHA-256 of the reusable workflow definition JSON when this job was expanded from one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_definition_sha256: Option<Vec<u8>>,
+    /// Resolved reusable workflow reference (`scope`, `name`, `version`) when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_workflow: Option<serde_json::Value>,
     /// When execution started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<DateTime<Utc>>,
@@ -174,6 +183,9 @@ impl JobRun {
             error_message: None,
             cache_hit: false,
             log_path: None,
+            pipeline_definition_sha256: None,
+            workflow_definition_sha256: None,
+            source_workflow: None,
             started_at: None,
             finished_at: None,
             created_at: Utc::now(),

@@ -163,6 +163,25 @@ impl<'a> RunRepo<'a> {
         .ok_or_else(|| StoreError::not_found("run", id))
     }
 
+    /// Look up a run by stable pipeline run number (for compare-to-previous and deep links).
+    pub async fn find_by_pipeline_and_run_number(
+        &self,
+        pipeline_id: PipelineId,
+        run_number: i64,
+    ) -> Result<Option<Run>> {
+        Ok(sqlx::query_as::<_, Run>(
+            r#"
+            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            FROM runs
+            WHERE pipeline_id = $1 AND run_number = $2
+            "#,
+        )
+        .bind(pipeline_id.as_uuid())
+        .bind(run_number)
+        .fetch_optional(self.pool)
+        .await?)
+    }
+
     /// List runs for a pipeline.
     pub async fn list_by_pipeline(
         &self,
@@ -344,7 +363,8 @@ impl<'a> RunRepo<'a> {
         let job_runs = sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -484,7 +504,8 @@ impl<'a> JobRunRepo<'a> {
             INSERT INTO job_runs (id, run_id, job_id, job_name, status, attempt, created_at)
             VALUES ($1, $2, $3, $4, 'pending', 1, $5)
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())
@@ -503,7 +524,8 @@ impl<'a> JobRunRepo<'a> {
         sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             FROM job_runs
             WHERE id = $1
             "#,
@@ -606,7 +628,8 @@ impl<'a> JobRunRepo<'a> {
         let job_runs = sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -895,7 +918,8 @@ WHERE jr.run_id = r.id
             SET status = 'running', agent_id = $2, started_at = $3
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())
@@ -925,7 +949,8 @@ WHERE jr.run_id = r.id
             SET status = $2, exit_code = $3, error_message = $4, outputs = COALESCE($5, outputs), finished_at = $6
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())
@@ -969,7 +994,8 @@ WHERE jr.run_id = r.id
             SET cache_hit = true, cache_key = $2
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())
@@ -989,7 +1015,8 @@ WHERE jr.run_id = r.id
                 started_at = NULL, finished_at = NULL, exit_code = NULL, error_message = NULL
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())
@@ -1043,7 +1070,8 @@ WHERE jr.run_id = r.id
                 finished_at = CASE WHEN $5 THEN $6 ELSE finished_at END
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
             "#,
         )
         .bind(id.as_uuid())

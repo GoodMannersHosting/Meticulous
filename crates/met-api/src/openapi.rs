@@ -25,8 +25,8 @@ use crate::routes::{
     runs::{
         CancelRunResponse, DagNodeResponse, ExecutedBinarySummary, FootprintBinaryRow,
         FootprintDirectoryEntry, FootprintDirectoryGroup, FootprintNetworkRow,
-        JobAssignmentResponse, JobRunResponse, LogsQuery, LogsResponse, RetryRunResponse, RunDagResponse,
-        RunFootprintResponse, RunResponse, StepRunResponse,
+        JobAssignmentResponse, JobRunResponse, JobRunSnapshotsResponse, LogsQuery, LogsResponse,
+        RetryRunResponse, RunDagResponse, RunFootprintResponse, RunResponse, StepRunResponse,
     },
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
     stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
@@ -106,6 +106,7 @@ use crate::routes::{
         crate::routes::runs::cancel_run,
         crate::routes::runs::retry_run,
         crate::routes::runs::get_run_jobs,
+        crate::routes::runs::get_job_run_snapshots,
         crate::routes::runs::get_job_steps,
         crate::routes::runs::get_job_assignments,
         crate::routes::runs::get_job_logs,
@@ -188,7 +189,7 @@ use crate::routes::{
             ValidatePipelineRequest, ValidatePipelineResponse,
             // Runs
             RunResponse, CancelRunResponse, RetryRunResponse,
-            JobRunResponse, JobAssignmentResponse, StepRunResponse,
+            JobRunResponse, JobRunSnapshotsResponse, JobAssignmentResponse, StepRunResponse,
             RunFootprintResponse, FootprintBinaryRow, FootprintNetworkRow,
             FootprintDirectoryGroup, FootprintDirectoryEntry,
             LogsQuery, LogsResponse,

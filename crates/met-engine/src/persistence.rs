@@ -12,6 +12,14 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{EngineError, Result};
 
+/// Content fingerprints and workflow reference recorded on each `job_run` (pipeline body is shared across jobs in the same run).
+#[derive(Debug, Clone)]
+pub struct JobRunSourceRefs {
+    pub pipeline_definition_sha256: [u8; 32],
+    pub workflow_definition_sha256: Option<[u8; 32]>,
+    pub source_workflow: Option<serde_json::Value>,
+}
+
 /// Trait for persisting run state to storage.
 #[async_trait]
 pub trait RunPersistence: Send + Sync {
@@ -51,6 +59,7 @@ pub trait RunPersistence: Send + Sync {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
     ) -> Result<()>;
 
     /// Update job run status.
@@ -250,13 +259,17 @@ impl RunPersistence for PostgresRunPersistence {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
-            INSERT INTO job_runs (id, run_id, job_id, job_name, status, attempt, created_at)
-            VALUES ($1, $2, $3, $4, 'pending', 1, $5)
+            INSERT INTO job_runs (
+                id, run_id, job_id, job_name, status, attempt, created_at,
+                pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+            )
+            VALUES ($1, $2, $3, $4, 'pending', 1, $5, $6, $7, $8)
             "#,
         )
         .bind(job_run_id.as_uuid())
@@ -264,6 +277,14 @@ impl RunPersistence for PostgresRunPersistence {
         .bind(job_id.as_uuid())
         .bind(job_name)
         .bind(now)
+        .bind(&source.pipeline_definition_sha256[..])
+        .bind(
+            source
+                .workflow_definition_sha256
+                .as_ref()
+                .map(|b| b.as_slice()),
+        )
+        .bind(source.source_workflow)
         .execute(&self.pool)
         .await
         .map_err(met_store::StoreError::from)?;
@@ -557,6 +578,9 @@ struct JobRunRecord {
     cache_key: Option<String>,
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
+    pipeline_definition_sha256: Option<[u8; 32]>,
+    workflow_definition_sha256: Option<[u8; 32]>,
+    source_workflow: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -662,6 +686,7 @@ impl RunPersistence for MemoryRunPersistence {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
     ) -> Result<()> {
         let mut jobs = self.job_runs.lock().unwrap();
         jobs.push(JobRunRecord {
@@ -678,6 +703,9 @@ impl RunPersistence for MemoryRunPersistence {
             cache_key: None,
             started_at: None,
             finished_at: None,
+            pipeline_definition_sha256: Some(source.pipeline_definition_sha256),
+            workflow_definition_sha256: source.workflow_definition_sha256,
+            source_workflow: source.source_workflow,
         });
         Ok(())
     }

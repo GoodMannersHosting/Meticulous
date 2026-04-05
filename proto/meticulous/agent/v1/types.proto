@@ -164,6 +164,8 @@ message JobStatusUpdate {
     optional JobExecutionMetadata execution_metadata = 6;
     // Agent reporting this update (used when marking job running).
     optional string agent_id = 7;
+    // CycloneDX JSON (UTF-8) written under the job workspace (e.g. `sbom.cdx.json`); optional on terminal updates.
+    optional string sbom_cyclonedx_json = 8;
 }
 
 // Step status update from agent.

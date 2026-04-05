@@ -471,7 +471,12 @@ impl<'a> PipelineParser<'a> {
 
                     // Validate run command
                     if let Some(run) = &step.run {
-                        crate::variable::validate_refs(run, &workflow_ctx, diagnostics, step_location.clone());
+                        crate::variable::validate_refs_in_run_script(
+                            run,
+                            &workflow_ctx,
+                            diagnostics,
+                            step_location.clone(),
+                        );
                     }
 
                     // Validate env values

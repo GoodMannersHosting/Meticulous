@@ -779,6 +779,23 @@ impl AgentService for AgentServiceImpl {
                         }
                     }
 
+                    if let Some(raw) = update.sbom_cyclonedx_json.as_deref().filter(|s| !s.is_empty()) {
+                        if let Err(e) = persist_job_sbom_cyclonedx(
+                            self.pool.as_ref(),
+                            job_row.run_id,
+                            job_run_id,
+                            raw,
+                        )
+                        .await
+                        {
+                            warn!(
+                                error = %e,
+                                job_run_id = %job_run_id,
+                                "failed to persist CycloneDX SBOM from job status"
+                            );
+                        }
+                    }
+
                     match job_run_repo.get_pipeline_context(job_run_id).await {
                         Ok(Some(ctx)) => {
                             let org_id = OrganizationId::from_uuid(ctx.org_id);
@@ -1213,6 +1230,54 @@ fn redact_exec_path_for_storage(path: &str) -> String {
         return "/home/<redacted>".to_string();
     }
     path.to_string()
+}
+
+/// Inline CycloneDX cap on the job status path (aligned with the agent read cap).
+const MAX_JOB_STATUS_SBOM_BYTES: usize = 6 * 1024 * 1024;
+
+async fn persist_job_sbom_cyclonedx(
+    pool: &PgPool,
+    run_id: RunId,
+    job_run_id: JobRunId,
+    raw: &str,
+) -> sqlx::Result<()> {
+    if raw.len() > MAX_JOB_STATUS_SBOM_BYTES {
+        warn!(
+            len = raw.len(),
+            max = MAX_JOB_STATUS_SBOM_BYTES,
+            "SBOM JSON on job status exceeds cap; not persisting"
+        );
+        return Ok(());
+    }
+    let doc: serde_json::Value = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(v) if v.is_object() => v,
+        _ => {
+            warn!("SBOM payload on job status is not a JSON object; skipping");
+            return Ok(());
+        }
+    };
+    let sha256 = hex::encode(Sha256::digest(raw.as_bytes()));
+    let size_bytes = raw.len() as i64;
+    let metadata = serde_json::json!({ "sbom_json": doc });
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO artifacts (id, run_id, job_run_id, name, content_type, size_bytes, storage_path, sha256, metadata)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind(id)
+    .bind(run_id.as_uuid())
+    .bind(job_run_id.as_uuid())
+    .bind("sbom.cdx.json")
+    .bind("application/vnd.cyclonedx+json")
+    .bind(size_bytes)
+    .bind("agent-job-status-inline")
+    .bind(&sha256)
+    .bind(metadata)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn persist_run_binaries_for_job(

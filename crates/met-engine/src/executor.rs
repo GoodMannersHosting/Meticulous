@@ -11,7 +11,10 @@ use chrono::Utc;
 use futures::StreamExt;
 use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
-use met_parser::{JobIR, PipelineIR};
+use met_parser::{JobIR, PipelineIR, WorkflowScope as IrWorkflowScope};
+use met_store::repos::{
+    DefinitionSnapshotRepo, PipelineRepo, WorkflowRepo, WorkflowScope as DbWorkflowScope,
+};
 use met_secrets::BuiltinStoredCrypto;
 use met_store::repos::JobRunRepo;
 use secrecy::SecretString;
@@ -26,7 +29,7 @@ use crate::context::ExecutionContext;
 use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
 use crate::parse_completion_message;
-use crate::persistence::RunPersistence;
+use crate::persistence::{JobRunSourceRefs, RunPersistence};
 use crate::scheduler::{JobCompletionNotification, Scheduler};
 use crate::state::{JobState, RunState};
 
@@ -287,10 +290,60 @@ impl<C: CacheBackend> Executor<C> {
     }
 
     async fn initialize_job_states(&self, ctx: &ExecutionContext, run_state: &RunState) -> Result<()> {
+        let pipeline_row = PipelineRepo::new(&self.pool).get(ctx.pipeline_id()).await?;
+        let pipeline_digest =
+            DefinitionSnapshotRepo::ensure_json(&self.pool, &pipeline_row.definition).await?;
+
+        let wf_repo = WorkflowRepo::new(&self.pool);
+
         for job in &ctx.pipeline().jobs {
+            let source_meta = job.source_workflow.as_ref().map(|wf| {
+                serde_json::json!({
+                    "scope": match wf.scope {
+                        IrWorkflowScope::Global => "global",
+                        IrWorkflowScope::Project => "project",
+                    },
+                    "name": wf.name,
+                    "version": wf.version,
+                })
+            });
+
+            let workflow_digest = if let Some(wf) = &job.source_workflow {
+                let scope = match wf.scope {
+                    IrWorkflowScope::Global => DbWorkflowScope::Global,
+                    IrWorkflowScope::Project => DbWorkflowScope::Project,
+                };
+                match wf_repo
+                    .get(ctx.org_id(), ctx.project_id(), scope, &wf.name, &wf.version)
+                    .await
+                {
+                    Ok(row) => Some(DefinitionSnapshotRepo::ensure_json(&self.pool, &row.definition).await?),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            job = %job.name,
+                            "could not load reusable workflow for definition snapshot; workflow digest omitted"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let job_run_id = JobRunId::new();
             self.persistence
-                .create_job_run(job_run_id, ctx.run_id(), job.id, &job.name)
+                .create_job_run(
+                    job_run_id,
+                    ctx.run_id(),
+                    job.id,
+                    &job.name,
+                    JobRunSourceRefs {
+                        pipeline_definition_sha256: pipeline_digest,
+                        workflow_definition_sha256: workflow_digest,
+                        source_workflow: source_meta,
+                    },
+                )
                 .await?;
             let job_state = JobState::new(job.id, job_run_id, &job.name);
             run_state.register_job(job_state).await;

@@ -70,7 +70,7 @@ pub use error::{EngineError, Result};
 pub use events::{subjects as event_subjects, EventBroadcaster};
 pub use executor::{topological_order, ExecutionResult, Executor, ExecutorConfig, RunStartKind};
 pub use log_streaming::{LogChunk, LogStreamRelay};
-pub use persistence::{MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
+pub use persistence::{JobRunSourceRefs, MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
 pub use retry::{RetryExecutor, RetryPolicy, RetryState};
 pub use scheduler::{JobCompletionNotification, JobDispatchMessage, Scheduler, SchedulerConfig, StepDispatch};
 pub use secrets::SecretEncryption;

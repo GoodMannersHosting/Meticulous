@@ -65,5 +65,7 @@ pub use schema::{
 };
 pub use semver::{parse_version_constraint, resolve_version, VersionConstraint};
 pub use span::{SpanTracker, SpannedYamlParser};
-pub use variable::{extract_vars, has_refs, interpolate, validate_refs, VariableContext};
+pub use variable::{
+    extract_vars, has_refs, interpolate, validate_refs, validate_refs_in_run_script, VariableContext,
+};
 pub use workflow::{MockWorkflowProvider, WorkflowFetchError, WorkflowProvider, WorkflowResolver};

@@ -354,6 +354,10 @@ export const apiMethods = {
 		dag: (runId: string) => api.get<import('./types').RunDagResponse>(`/api/v1/runs/${runId}/dag`),
 		footprint: (runId: string) =>
 			api.get<import('./types').RunFootprintResponse>(`/api/v1/runs/${runId}/footprint`),
+		jobRunSnapshots: (runId: string, jobRunId: string) =>
+			api.get<import('./types').JobRunSnapshotsResponse>(
+				`/api/v1/runs/${runId}/jobs/${jobRunId}/snapshots`
+			),
 		assignments: (runId: string, jobRunId: string) =>
 			api.get<import('./types').JobAssignment[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/assignments`),
 		logs: (runId: string, jobRunId: string) =>

@@ -15,9 +15,9 @@ use met_core::{
 use met_store::{
     PgPool,
     repos::{
-        JobAssignmentRepo, JobDagNode, JobRepo, JobRunRepo, LogCacheRepo, PipelineRepo, ProjectRepo,
-        RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunNetworkConnectionRepo,
-        RunRepo, StepRunRepo,
+        DefinitionSnapshotRepo, JobAssignmentRepo, JobDagNode, JobRepo, JobRunRepo, LogCacheRepo,
+        PipelineRepo, ProjectRepo, RunBinaryExecutionAgg, RunBinaryExecutionRepo,
+        RunNetworkConnectionRepo, RunRepo, StepRunRepo,
     },
 };
 
@@ -57,6 +57,10 @@ pub fn router() -> Router<AppState> {
         .route("/runs", get(list_runs))
         .route("/runs/{id}", get(get_run))
         .route("/runs/{id}/jobs", get(get_run_jobs))
+        .route(
+            "/runs/{id}/jobs/{job_run_id}/snapshots",
+            get(get_job_run_snapshots),
+        )
         .route("/runs/{id}/jobs/{job_run_id}/steps", get(get_job_steps))
         .route(
             "/runs/{id}/jobs/{job_run_id}/assignments",
@@ -75,6 +79,8 @@ pub struct ListRunsQuery {
     pipeline_id: Option<PipelineId>,
     project_id: Option<ProjectId>,
     status: Option<String>,
+    /// When set with `pipeline_id`, return at most one run with this `run_number` (for compare / lookup).
+    run_number: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -112,6 +118,7 @@ impl From<Run> for RunResponse {
         ("status" = Option<String>, Query, description = "Filter by run status"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor; for runs this is the row offset as a decimal string (e.g. next page after 20 rows is `cursor=20`)"),
         ("limit" = Option<u32>, Query, description = "Items per page (alias: `per_page`; default and max come from API `http.pagination_*` config)"),
+        ("run_number" = Option<i64>, Query, description = "When set with `pipeline_id`, return the single run with this run number (for compare-to-previous)"),
     ),
     responses(
         (status = 200, description = "List of runs", body = serde_json::Value),
@@ -132,6 +139,39 @@ async fn list_runs(
         return Err(ApiError::bad_request(
             "provide only one of `pipeline_id` or `project_id`",
         ));
+    }
+
+    if query.run_number.is_some() && query.project_id.is_some() {
+        return Err(ApiError::bad_request(
+            "`run_number` can only be used with `pipeline_id`",
+        ));
+    }
+
+    if let Some(run_number) = query.run_number {
+        let Some(pipeline_id) = query.pipeline_id else {
+            return Err(ApiError::bad_request(
+                "`run_number` requires `pipeline_id`",
+            ));
+        };
+        let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
+        if !user.can_access_project(pipeline.project_id) {
+            return Err(ApiError::forbidden("no access to this project"));
+        }
+        let items: Vec<RunResponse> = repo
+            .find_by_pipeline_and_run_number(pipeline_id, run_number)
+            .await?
+            .into_iter()
+            .map(RunResponse::from)
+            .collect();
+        let count = items.len();
+        return Ok(Json(PaginatedResponse {
+            data: items,
+            pagination: PaginationMeta {
+                next_cursor: None,
+                has_more: false,
+                count,
+            },
+        }));
     }
 
     let status_filter = parse_run_status_filter(query.status.as_deref())?;
@@ -224,6 +264,11 @@ fn parse_runs_list_offset(cursor: Option<&str>) -> i64 {
         .ok()
         .filter(|&o| o >= 0)
         .unwrap_or(0)
+}
+
+fn job_run_snapshot_key(bytes: &Option<Vec<u8>>) -> Option<[u8; 32]> {
+    let b = bytes.as_ref()?;
+    <[u8; 32]>::try_from(b.as_slice()).ok()
 }
 
 #[utoipa::path(
@@ -421,6 +466,15 @@ pub struct JobRunResponse {
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
     pub duration_ms: Option<i64>,
+    /// SHA-256 (hex) of the pipeline definition JSON snapshot used for this run (see `definition_snapshots`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_definition_sha256: Option<String>,
+    /// SHA-256 (hex) of the reusable workflow definition when this job came from one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_definition_sha256: Option<String>,
+    /// Resolved reusable workflow reference: `scope`, `name`, `version`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_workflow: Option<serde_json::Value>,
     /// Best-effort explanation when a job is pending or queued (omitted when not applicable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduling_note: Option<String>,
@@ -478,12 +532,80 @@ async fn get_run_jobs(
                 started_at: j.started_at,
                 finished_at: j.finished_at,
                 duration_ms,
+                pipeline_definition_sha256: j
+                    .pipeline_definition_sha256
+                    .as_ref()
+                    .filter(|b| b.len() == 32)
+                    .map(hex::encode),
+                workflow_definition_sha256: j
+                    .workflow_definition_sha256
+                    .as_ref()
+                    .filter(|b| b.len() == 32)
+                    .map(hex::encode),
+                source_workflow: j.source_workflow.clone(),
                 scheduling_note,
             }
         })
         .collect();
 
     Ok(Json(response))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobRunSnapshotsResponse {
+    /// Pipeline definition JSON for this job run (from `definition_snapshots`), if recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_definition: Option<serde_json::Value>,
+    /// Reusable workflow definition JSON for this job run, if recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_definition: Option<serde_json::Value>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/runs/{id}/jobs/{job_run_id}/snapshots",
+    params(
+        ("id" = String, Path, description = "Run ID"),
+        ("job_run_id" = String, Path, description = "Job run ID"),
+    ),
+    responses(
+        (status = 200, description = "Resolved snapshot bodies", body = JobRunSnapshotsResponse),
+        (status = 404, description = "Run or job run not found"),
+    ),
+    tag = "runs",
+)]
+#[instrument(skip(state))]
+async fn get_job_run_snapshots(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((run_id, job_run_id)): Path<(RunId, JobRunId)>,
+) -> ApiResult<Json<JobRunSnapshotsResponse>> {
+    let db = state.db();
+    let run = RunRepo::new(db).get(run_id).await?;
+    reconcile_terminal_run_children(db, &run).await?;
+    let pipeline = PipelineRepo::new(db).get(run.pipeline_id).await?;
+    if !user.can_access_project(pipeline.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let jr = JobRunRepo::new(db).get(job_run_id).await?;
+    if jr.run_id != run_id {
+        return Err(ApiError::not_found("job run not found for this pipeline run"));
+    }
+
+    let pipeline_definition = match job_run_snapshot_key(&jr.pipeline_definition_sha256) {
+        Some(k) => DefinitionSnapshotRepo::get_json(db, &k).await?,
+        None => None,
+    };
+    let workflow_definition = match job_run_snapshot_key(&jr.workflow_definition_sha256) {
+        Some(k) => DefinitionSnapshotRepo::get_json(db, &k).await?,
+        None => None,
+    };
+
+    Ok(Json(JobRunSnapshotsResponse {
+        pipeline_definition,
+        workflow_definition,
+    }))
 }
 
 #[derive(Debug, Serialize, ToSchema)]

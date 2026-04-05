@@ -51,6 +51,8 @@ pub struct JobExecutor {
     active_trace: Arc<RwLock<Option<ActiveJobTrace>>>,
     /// Step log `StreamLogs` flushes; must finish before workspace cleanup deletes spool files.
     pending_log_flushes: Vec<tokio::task::JoinHandle<()>>,
+    /// Footprint / blast-radius metadata from finished steps (for cancel and early-abort reporting).
+    footprint_accumulator: Arc<RwLock<Vec<(String, JobExecutionMetadata)>>>,
 }
 
 impl JobExecutor {
@@ -90,7 +92,27 @@ impl JobExecutor {
             job_pause_rx,
             active_trace: Arc::new(RwLock::new(None)),
             pending_log_flushes: Vec::new(),
+            footprint_accumulator: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    async fn clear_footprint_accumulator(&self) {
+        self.footprint_accumulator.write().await.clear();
+    }
+
+    async fn record_footprint_step(&self, step_id: String, meta: JobExecutionMetadata) {
+        self.footprint_accumulator
+            .write()
+            .await
+            .push((step_id, meta));
+    }
+
+    async fn merged_footprint_metadata(&self) -> Option<JobExecutionMetadata> {
+        let acc = self.footprint_accumulator.read().await;
+        if acc.is_empty() {
+            return None;
+        }
+        Some(merge_execution_metadata(acc.clone()))
     }
 
     async fn join_pending_log_flushes(&mut self) {
@@ -291,13 +313,21 @@ impl JobExecutor {
                 )
                 .await;
         }
+
+        self.join_pending_log_flushes().await;
+
+        let merged = self.merged_footprint_metadata().await;
+        let ws = self.config.workspace_dir.join(job_run_id);
+        let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
+
         let _ = self
             .report_job_status(
                 job_run_id,
                 RunStatus::Cancelled,
                 None,
                 Some(MSG.to_string()),
-                None,
+                merged,
+                sbom,
             )
             .await;
 
@@ -369,13 +399,17 @@ impl JobExecutor {
                     error = %msg,
                     "job aborted before completion; reporting failed to controller"
                 );
+                let merged = self.merged_footprint_metadata().await;
+                let ws = self.config.workspace_dir.join(&job_run_id);
+                let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
                 let _ = self
                     .report_job_status(
                         &job_run_id,
                         RunStatus::Failed,
                         Some(1),
                         Some(msg),
-                        None,
+                        merged,
+                        sbom,
                     )
                     .await;
                 Ok(())
@@ -392,8 +426,17 @@ impl JobExecutor {
             self.join_pending_log_flushes().await;
         }
 
+        self.clear_footprint_accumulator().await;
+
         // Report job accepted
-        self.report_job_status(&job.job_run_id, RunStatus::Running, None, None, None)
+        self.report_job_status(
+            &job.job_run_id,
+            RunStatus::Running,
+            None,
+            None,
+            None,
+            None,
+        )
             .await?;
 
         *self.active_trace.write().await = Some(ActiveJobTrace {
@@ -404,11 +447,32 @@ impl JobExecutor {
         // Create workspace
         let workspace = self.create_workspace(&job.job_run_id).await?;
 
+        let job_result = self.run_job_in_workspace(&job, &workspace).await;
+
+        self.join_pending_log_flushes().await;
+
+        if let Err(e) = self.cleanup_workspace(&workspace).await {
+            warn!(
+                error = %e,
+                job_run_id = %job.job_run_id,
+                "workspace cleanup failed (one-time job directory may remain on disk)"
+            );
+        }
+
+        job_result
+    }
+
+    /// Job lifecycle after the per-run workspace directory exists; workspace is removed by the caller.
+    async fn run_job_in_workspace(
+        &mut self,
+        job: &met_proto::controller::v1::JobDispatch,
+        workspace: &std::path::Path,
+    ) -> Result<()> {
         // Generate per-job PKI and exchange keys
-        let pki = JobPki::generate().map_err(|e| AgentError::Certificate(e))?;
+        let pki = JobPki::generate().map_err(AgentError::Certificate)?;
 
         let secrets = if job.requires_secret_exchange {
-            self.exchange_keys(&job, &pki, &workspace).await?
+            self.exchange_keys(job, &pki, workspace).await?
         } else {
             HashMap::new()
         };
@@ -420,16 +484,16 @@ impl JobExecutor {
         let mut job_success = true;
         let mut last_exit_code: Option<i32> = None;
         for step in &job.steps {
-            let step_result = self
-                .execute_step(&job.job_run_id, step, &workspace, &job.variables, &secrets)
-                .await;
-
-            match step_result {
+            match self
+                .execute_step(&job.job_run_id, step, workspace, &job.variables, &secrets)
+                .await
+            {
                 Ok((exit_code, metadata)) => {
                     last_exit_code = Some(exit_code);
-                    // Collect step metadata
                     if let Some(meta) = metadata {
-                        step_metadata.push((step.step_id.clone(), meta));
+                        step_metadata.push((step.step_id.clone(), meta.clone()));
+                        self.record_footprint_step(step.step_id.clone(), meta)
+                            .await;
                     }
 
                     if exit_code != 0 && !step.continue_on_error {
@@ -475,6 +539,8 @@ impl JobExecutor {
             }
         }
 
+        let sbom_json = maybe_read_workspace_sbom_cyclonedx(workspace).await;
+
         // Report job completion with execution metadata
         let final_status = if job_success {
             RunStatus::Succeeded
@@ -492,6 +558,7 @@ impl JobExecutor {
             job_exit,
             None,
             job_metadata,
+            sbom_json,
         )
         .await?;
 
@@ -503,11 +570,6 @@ impl JobExecutor {
                 warn!(error = %e, "failed to persist local job completion idempotency marker");
             }
         }
-
-        self.join_pending_log_flushes().await;
-
-        // Cleanup workspace
-        self.cleanup_workspace(&workspace).await?;
 
         info!(
             job_run_id = %job.job_run_id,
@@ -565,6 +627,18 @@ impl JobExecutor {
         let mut env = step.environment.clone();
         env.extend(variables.clone());
         env.extend(secrets.clone());
+        if !env.contains_key("METICULOUS_WORKSPACE") {
+            let ws = if self.backend.name() == "container" {
+                "/workspace".to_string()
+            } else {
+                tokio::fs::canonicalize(workspace)
+                    .await
+                    .unwrap_or_else(|_| workspace.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            env.insert("METICULOUS_WORKSPACE".into(), ws);
+        }
 
         // Convert to backend step spec
         let backend_step = crate::backend::StepSpec {
@@ -654,7 +728,11 @@ impl JobExecutor {
                 };
                 Ok((step_result.exit_code, Some(metadata)))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                let meta = watcher.aggregate_metadata(&step.step_id).await;
+                error!(step = %step.name, error = %e, "step backend error; still shipping footprint metadata");
+                Ok((1, Some(meta)))
+            }
         }
     }
 
@@ -797,6 +875,7 @@ impl JobExecutor {
         exit_code: Option<i32>,
         error_message: Option<String>,
         execution_metadata: Option<JobExecutionMetadata>,
+        sbom_cyclonedx_json: Option<String>,
     ) -> Result<()> {
         // Convert execution metadata to protobuf format
         let proto_metadata = execution_metadata.map(|meta| {
@@ -838,6 +917,7 @@ impl JobExecutor {
             }),
             execution_metadata: proto_metadata,
             agent_id: Some(self.identity.agent_id.clone()),
+            sbom_cyclonedx_json,
         };
 
         self.client
@@ -874,4 +954,40 @@ impl JobExecutor {
 
         Ok(())
     }
+}
+
+/// CycloneDX JSON at the job workspace root (written by workflows such as `git-clone-snippet`).
+const WORKSPACE_SBOM_CYCLONEDX_FILENAME: &str = "sbom.cdx.json";
+const MAX_SBOM_INLINE_BYTES: u64 = 6 * 1024 * 1024;
+
+async fn maybe_read_workspace_sbom_cyclonedx(workspace: &Path) -> Option<String> {
+    let path = workspace.join(WORKSPACE_SBOM_CYCLONEDX_FILENAME);
+    let meta = tokio::fs::metadata(&path).await.ok()?;
+    if !meta.is_file() || meta.len() > MAX_SBOM_INLINE_BYTES {
+        if meta.is_file() && meta.len() > MAX_SBOM_INLINE_BYTES {
+            warn!(
+                path = %path.display(),
+                len = meta.len(),
+                max = MAX_SBOM_INLINE_BYTES,
+                "sbom file too large to inline on job status; skipping controller ingest"
+            );
+        }
+        return None;
+    }
+    let raw = tokio::fs::read_to_string(&path).await.ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .filter(|v| v.is_object())
+        .is_none()
+    {
+        warn!(
+            path = %path.display(),
+            "sbom file is not valid JSON object; skipping controller ingest"
+        );
+        return None;
+    }
+    Some(raw)
 }

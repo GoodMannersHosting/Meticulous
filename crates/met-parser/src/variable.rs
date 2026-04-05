@@ -151,7 +151,7 @@ pub fn extract_vars(s: &str) -> VarExtraction {
     VarExtraction { vars, expressions }
 }
 
-/// Validate all variable references in a string.
+/// Validate all variable references in a string (Meticulous `${VAR}` / `$VAR` and `${{ … }}`).
 pub fn validate_refs(
     s: &str,
     ctx: &VariableContext,
@@ -184,6 +184,23 @@ pub fn validate_refs(
             );
         }
     }
+
+    for expr_ref in &extraction.expressions {
+        validate_expression(&expr_ref.expr, ctx, diagnostics, location.clone());
+    }
+}
+
+/// Validate references in a `run:` script body.
+///
+/// `$VAR` / `${VAR}` are shell syntax (often assigned inside the same script). Only `${{ … }}`
+/// Meticulous expressions are checked here (e.g. `inputs.repo`, `vars.X`).
+pub fn validate_refs_in_run_script(
+    s: &str,
+    ctx: &VariableContext,
+    diagnostics: &mut ParseDiagnostics,
+    location: SourceLocation,
+) {
+    let extraction = extract_vars(s);
 
     for expr_ref in &extraction.expressions {
         validate_expression(&expr_ref.expr, ctx, diagnostics, location.clone());
@@ -324,6 +341,7 @@ pub fn has_secret_refs(s: &str, ctx: &VariableContext) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[test]
     fn test_extract_vars() {
@@ -387,6 +405,42 @@ mod tests {
         assert!(diag.has_errors());
         assert_eq!(diag.len(), 1);
         assert!(diag.all()[0].message.contains("UNDEFINED"));
+    }
+
+    #[test]
+    fn test_validate_refs_in_run_script_allows_shell_locals() {
+        let mut ctx = VariableContext::new(IndexMap::new(), HashSet::new());
+        ctx.inputs.insert("repo".to_string(), "o/r".to_string());
+
+        let script = indoc! {r#"
+            WS="${METICULOUS_WORKSPACE:?}"
+            SRC="${WS}/src"
+            echo "clone ${{ inputs.repo }} into ${SRC}"
+        "#};
+
+        let mut diag = ParseDiagnostics::new();
+        validate_refs_in_run_script(script, &ctx, &mut diag, SourceLocation::new(1, 1));
+        assert!(
+            !diag.has_errors(),
+            "shell WS/SRC must not be validated as pipeline vars: {:?}",
+            diag.all()
+        );
+    }
+
+    #[test]
+    fn test_validate_refs_in_run_script_still_checks_expressions() {
+        let ctx = VariableContext::new(IndexMap::new(), HashSet::new());
+
+        let mut diag = ParseDiagnostics::new();
+        validate_refs_in_run_script(
+            "echo ${{ inputs.missing }}",
+            &ctx,
+            &mut diag,
+            SourceLocation::new(1, 1),
+        );
+        assert!(diag.has_errors());
+        let msg = diag.all()[0].message.as_str();
+        assert!(msg.contains("missing"), "unexpected diagnostic: {msg}");
     }
 
     #[test]

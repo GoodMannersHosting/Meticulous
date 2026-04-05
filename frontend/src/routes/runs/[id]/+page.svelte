@@ -25,6 +25,7 @@
 	import LogViewer from '$components/logs/LogViewer.svelte';
 	import { SbomViewer } from '$components/sbom';
 	import { RunFootprintViewer } from '$components/blast-radius';
+	import RunJobDefinitionsCompare from '$components/run-compare/RunJobDefinitionsCompare.svelte';
 	import type { RunFootprintResponse, SbomApiResponse } from '$api/types';
 
 	let run = $state<Run | null>(null);
@@ -49,6 +50,26 @@
 	let footprint = $state<RunFootprintResponse | null>(null);
 	let footprintLoading = $state(false);
 	let footprintError = $state<string | null>(null);
+	let compareRuns = $state(false);
+	let compareBaselineRunId = $state('');
+	let compareRunCandidates = $state<Run[]>([]);
+	let compareListLoading = $state(false);
+	let prevJobRuns = $state<JobRun[]>([]);
+	let prevSbomRes = $state<SbomApiResponse | null>(null);
+	let prevSbomError = $state<string | null>(null);
+	let prevFootprint = $state<RunFootprintResponse | null>(null);
+	let prevFootprintError = $state<string | null>(null);
+
+	const baselineRun = $derived(
+		compareRunCandidates.find((c) => c.id === compareBaselineRunId) ?? null
+	);
+
+	const compareRunSelectOptions = $derived.by(() =>
+		compareRunCandidates.map((r) => ({
+			value: r.id,
+			label: `#${r.run_number} · ${r.status} · ${formatRelativeTime(r.created_at)}`
+		}))
+	);
 
 	const tabs = [
 		{ id: 'jobs', label: 'Jobs', icon: Terminal },
@@ -234,26 +255,127 @@
 	});
 
 	$effect(() => {
+		if (!browser || !run) return;
+		void run.id;
+		if (!compareRuns) {
+			compareRunCandidates = [];
+			compareBaselineRunId = '';
+			prevJobRuns = [];
+			prevSbomRes = null;
+			prevSbomError = null;
+			prevFootprint = null;
+			prevFootprintError = null;
+			compareListLoading = false;
+			return;
+		}
+
+		let cancelled = false;
+		compareListLoading = true;
+		const pipelineId = run.pipeline_id;
+		const currentRunId = run.id;
+		const currentRunNumber = run.run_number;
+		void (async () => {
+			try {
+				const res = await apiMethods.runs.list({
+					pipeline_id: pipelineId,
+					per_page: 80
+				});
+				if (cancelled) return;
+				const others = res.data.filter((r) => r.id !== currentRunId);
+				others.sort((a, b) => b.run_number - a.run_number);
+				compareRunCandidates = others;
+				const preferred =
+					others.find((r) => r.run_number === currentRunNumber - 1) ?? others[0];
+				const keepCurrent =
+					compareBaselineRunId && others.some((r) => r.id === compareBaselineRunId);
+				if (!keepCurrent) {
+					compareBaselineRunId = preferred?.id ?? '';
+				}
+			} catch {
+				if (!cancelled) {
+					compareRunCandidates = [];
+					compareBaselineRunId = '';
+				}
+			} finally {
+				if (!cancelled) {
+					compareListLoading = false;
+				}
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		if (!browser || !compareRuns) {
+			prevJobRuns = [];
+			return;
+		}
+		if (!baselineRun) {
+			prevJobRuns = [];
+			return;
+		}
+		let cancelled = false;
+		void apiMethods.runs.jobs(baselineRun.id).then(
+			(j) => {
+				if (!cancelled) prevJobRuns = j;
+			},
+			() => {
+				if (!cancelled) prevJobRuns = [];
+			}
+		);
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
 		if (!browser || activeTab !== 'sbom' || !run) return;
 		void run.id;
 		void run.status;
+		void compareRuns;
+		void baselineRun?.id;
 		let cancelled = false;
 		sbomLoading = true;
 		sbomError = null;
-		void apiMethods.artifacts.sbom(run.id).then(
-			(d) => {
-				if (!cancelled) {
-					sbomRes = d;
-					sbomLoading = false;
+
+		void (async () => {
+			try {
+				const cur = await apiMethods.artifacts.sbom(run.id);
+				if (cancelled) return;
+				sbomRes = cur;
+				if (compareRuns && baselineRun) {
+					try {
+						const p = await apiMethods.artifacts.sbom(baselineRun.id);
+						if (cancelled) return;
+						prevSbomRes = p;
+						prevSbomError = null;
+					} catch (e) {
+						if (!cancelled) {
+							prevSbomRes = null;
+							prevSbomError =
+								e instanceof Error ? e.message : 'Failed to load baseline SBOM';
+						}
+					}
+				} else {
+					prevSbomRes = null;
+					prevSbomError = null;
 				}
-			},
-			(e) => {
+			} catch (e) {
 				if (!cancelled) {
 					sbomError = e instanceof Error ? e.message : 'Failed to load SBOM';
+					sbomRes = null;
+					prevSbomRes = null;
+					prevSbomError = null;
+				}
+			} finally {
+				if (!cancelled) {
 					sbomLoading = false;
 				}
 			}
-		);
+		})();
+
 		return () => {
 			cancelled = true;
 		};
@@ -263,23 +385,48 @@
 		if (!browser || activeTab !== 'blast-radius' || !run) return;
 		void run.id;
 		void run.status;
+		void compareRuns;
+		void baselineRun?.id;
 		let cancelled = false;
 		footprintLoading = true;
 		footprintError = null;
-		void apiMethods.runs.footprint(run.id).then(
-			(d) => {
-				if (!cancelled) {
-					footprint = d;
-					footprintLoading = false;
+
+		void (async () => {
+			try {
+				const cur = await apiMethods.runs.footprint(run.id);
+				if (cancelled) return;
+				footprint = cur;
+				if (compareRuns && baselineRun) {
+					try {
+						const p = await apiMethods.runs.footprint(baselineRun.id);
+						if (cancelled) return;
+						prevFootprint = p;
+						prevFootprintError = null;
+					} catch (e) {
+						if (!cancelled) {
+							prevFootprint = null;
+							prevFootprintError =
+								e instanceof Error ? e.message : 'Failed to load baseline footprint';
+						}
+					}
+				} else {
+					prevFootprint = null;
+					prevFootprintError = null;
 				}
-			},
-			(e) => {
+			} catch (e) {
 				if (!cancelled) {
 					footprintError = e instanceof Error ? e.message : 'Failed to load footprint';
+					footprint = null;
+					prevFootprint = null;
+					prevFootprintError = null;
+				}
+			} finally {
+				if (!cancelled) {
 					footprintLoading = false;
 				}
 			}
-		);
+		})();
+
 		return () => {
 			cancelled = true;
 		};
@@ -542,7 +689,128 @@
 			</Card>
 		{:else if activeTab === 'sbom'}
 			<Card>
-				{#if sbomLoading}
+				<div
+					class="mb-4 flex flex-col gap-3 border-b border-[var(--border-primary)] pb-4 sm:flex-row sm:items-end sm:justify-between"
+				>
+					<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-primary)]">
+						<input
+							type="checkbox"
+							class="rounded border-[var(--border-primary)]"
+							bind:checked={compareRuns}
+						/>
+						Compare to another run
+						<span class="text-xs text-[var(--text-tertiary)]">(defaults to previous #)</span>
+					</label>
+					{#if compareRuns && compareRunCandidates.length > 0}
+						<div class="flex w-full flex-col gap-1 sm:w-auto sm:min-w-[18rem]">
+							<span class="text-xs font-medium text-[var(--text-secondary)]">Baseline run</span>
+							<Select
+								id="sbom-baseline-select"
+								options={compareRunSelectOptions}
+								bind:value={compareBaselineRunId}
+								size="sm"
+								disabled={compareListLoading}
+							/>
+						</div>
+					{/if}
+				</div>
+
+				{#if compareRuns}
+					{#if compareListLoading}
+						<div class="space-y-3 p-2">
+							<Skeleton class="h-10 w-full" />
+							<Skeleton class="h-40 w-full" />
+						</div>
+					{:else if compareRunCandidates.length === 0}
+						<p class="p-2 text-sm text-[var(--text-secondary)]">
+							No other runs on this pipeline to compare.
+						</p>
+					{:else if !baselineRun}
+						<div class="space-y-3 p-2">
+							<Skeleton class="h-10 w-full" />
+							<Skeleton class="h-40 w-full" />
+						</div>
+					{:else if sbomLoading}
+						<div class="grid gap-6 lg:grid-cols-2">
+							<Skeleton class="h-64 w-full" />
+							<Skeleton class="h-64 w-full" />
+						</div>
+					{:else if sbomError}
+						<Alert variant="error" title="SBOM" dismissible ondismiss={() => (sbomError = null)}>
+							{sbomError}
+						</Alert>
+					{:else}
+						<div class="grid gap-6 lg:grid-cols-2">
+							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
+								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+									<span>Run #{baselineRun.run_number}</span>
+									<StatusBadge status={baselineRun.status} size="sm" />
+									<span class="text-[var(--text-tertiary)]">baseline</span>
+								</div>
+								{#if prevSbomError}
+									<Alert variant="error" title="Baseline SBOM">{prevSbomError}</Alert>
+								{:else if prevSbomRes?.sbom}
+									<SbomViewer
+										rawDocument={prevSbomRes.sbom}
+										apiFormat={prevSbomRes.format}
+										runId={prevSbomRes.run_id}
+									/>
+								{:else if prevSbomRes?.status === 'artifact_registered'}
+									<div class="space-y-2 text-sm text-[var(--text-secondary)]">
+										<p class="font-medium text-[var(--text-primary)]">
+											SBOM artifact linked, preview not loaded
+										</p>
+										<p class="text-xs text-[var(--text-tertiary)]">
+											Download from artifacts or use inline metadata for preview.
+										</p>
+									</div>
+								{:else}
+									<SbomViewer empty />
+								{/if}
+							</div>
+							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
+								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+									<span>Run #{run.run_number}</span>
+									<StatusBadge status={run.status} size="sm" />
+									<span class="text-[var(--text-tertiary)]">this run</span>
+								</div>
+								{#if sbomRes?.sbom}
+									<SbomViewer
+										rawDocument={sbomRes.sbom}
+										apiFormat={sbomRes.format}
+										runId={sbomRes.run_id}
+									/>
+								{:else if sbomRes?.status === 'artifact_registered'}
+									<div class="space-y-2 p-1 text-sm text-[var(--text-secondary)]">
+										<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
+										<p>
+											The run has an artifact whose name or path looks like an SBOM (e.g.
+											<span class="font-mono text-xs">sbom.spdx.json</span>), but the API does not yet stream the blob
+											into this view. Download it from the run&apos;s artifact list, or store the document under
+											<span class="font-mono text-xs">metadata.sbom_json</span> on the artifact row for an inline preview.
+										</p>
+										<p class="text-xs text-[var(--text-tertiary)]">
+											Trivy: <span class="font-mono">trivy fs --format spdx-json --output sbom.spdx.json .</span> then
+											upload <span class="font-mono">sbom.spdx.json</span> as a run artifact.
+										</p>
+									</div>
+								{:else}
+									<SbomViewer empty />
+								{/if}
+							</div>
+						</div>
+						<div class="mt-8">
+							<RunJobDefinitionsCompare
+								currentRunId={run.id}
+								previousRunId={baselineRun.id}
+								currentRunLabel={`Run #${run.run_number}`}
+								previousRunLabel={`Run #${baselineRun.run_number}`}
+								jobRuns={jobRuns}
+								prevJobRuns={prevJobRuns}
+							/>
+						</div>
+					{/if}
+				{:else if sbomLoading}
 					<div class="space-y-3 p-2">
 						<Skeleton class="h-10 w-full" />
 						<Skeleton class="h-40 w-full" />
@@ -552,7 +820,11 @@
 						{sbomError}
 					</Alert>
 				{:else if sbomRes?.sbom}
-					<SbomViewer rawDocument={sbomRes.sbom} />
+					<SbomViewer
+						rawDocument={sbomRes.sbom}
+						apiFormat={sbomRes.format}
+						runId={sbomRes.run_id}
+					/>
 				{:else if sbomRes?.status === 'artifact_registered'}
 					<div class="space-y-2 p-4 text-sm text-[var(--text-secondary)]">
 						<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
@@ -574,7 +846,96 @@
 			</Card>
 		{:else if activeTab === 'blast-radius'}
 			<Card>
-				{#if footprintLoading}
+				<div
+					class="mb-4 flex flex-col gap-3 border-b border-[var(--border-primary)] pb-4 sm:flex-row sm:items-end sm:justify-between"
+				>
+					<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-primary)]">
+						<input
+							type="checkbox"
+							class="rounded border-[var(--border-primary)]"
+							bind:checked={compareRuns}
+						/>
+						Compare to another run
+						<span class="text-xs text-[var(--text-tertiary)]">(defaults to previous #)</span>
+					</label>
+					{#if compareRuns && compareRunCandidates.length > 0}
+						<div class="flex w-full flex-col gap-1 sm:w-auto sm:min-w-[18rem]">
+							<span class="text-xs font-medium text-[var(--text-secondary)]">Baseline run</span>
+							<Select
+								options={compareRunSelectOptions}
+								bind:value={compareBaselineRunId}
+								size="sm"
+								disabled={compareListLoading}
+							/>
+						</div>
+					{/if}
+				</div>
+
+				{#if compareRuns}
+					{#if compareListLoading}
+						<div class="space-y-4 p-2">
+							<Skeleton class="h-24 w-full" />
+							<Skeleton class="h-48 w-full" />
+						</div>
+					{:else if compareRunCandidates.length === 0}
+						<p class="p-2 text-sm text-[var(--text-secondary)]">
+							No other runs on this pipeline to compare.
+						</p>
+					{:else if footprintLoading}
+						<div class="grid gap-6 lg:grid-cols-2">
+							<Skeleton class="min-h-64 w-full" />
+							<Skeleton class="min-h-64 w-full" />
+						</div>
+					{:else if footprintError}
+						<Alert variant="error" title="Blast radius" dismissible ondismiss={() => (footprintError = null)}>
+							{footprintError}
+						</Alert>
+					{:else if !baselineRun}
+						<div class="space-y-4 p-2">
+							<Skeleton class="h-24 w-full" />
+							<Skeleton class="h-48 w-full" />
+						</div>
+					{:else}
+						<div class="grid gap-6 lg:grid-cols-2">
+							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
+								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+									<span>Run #{baselineRun.run_number}</span>
+									<StatusBadge status={baselineRun.status} size="sm" />
+									<span class="text-[var(--text-tertiary)]">baseline</span>
+								</div>
+								{#if prevFootprintError}
+									<Alert variant="error" title="Baseline footprint">{prevFootprintError}</Alert>
+								{:else if prevFootprint}
+									<RunFootprintViewer data={prevFootprint} />
+								{:else}
+									<div class="py-8 text-center text-sm text-[var(--text-secondary)]">No data</div>
+								{/if}
+							</div>
+							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
+								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+									<span>Run #{run.run_number}</span>
+									<StatusBadge status={run.status} size="sm" />
+									<span class="text-[var(--text-tertiary)]">this run</span>
+								</div>
+								{#if footprint}
+									<RunFootprintViewer data={footprint} />
+								{:else}
+									<div class="py-8 text-center text-sm text-[var(--text-secondary)]">No data</div>
+								{/if}
+							</div>
+						</div>
+						<div class="mt-8">
+							<RunJobDefinitionsCompare
+								currentRunId={run.id}
+								previousRunId={baselineRun.id}
+								currentRunLabel={`Run #${run.run_number}`}
+								previousRunLabel={`Run #${baselineRun.run_number}`}
+								jobRuns={jobRuns}
+								prevJobRuns={prevJobRuns}
+							/>
+						</div>
+					{/if}
+				{:else if footprintLoading}
 					<div class="space-y-4 p-2">
 						<Skeleton class="h-24 w-full" />
 						<Skeleton class="h-48 w-full" />
