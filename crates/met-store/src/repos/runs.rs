@@ -1,12 +1,56 @@
 //! Run repository.
 
 use chrono::{DateTime, Utc};
-use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId, StepId, StepRunId, TriggerId};
+use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId, TriggerId};
 use met_core::models::{JobRun, JobStatus, Run, RunStatus, StepRun};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
+
+/// A run returned from a project-scoped list, including the pipeline display name.
+#[derive(Debug, Clone)]
+pub struct RunWithPipelineName {
+    pub run: Run,
+    pub pipeline_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct RunProjectListRow {
+    id: RunId,
+    pipeline_id: PipelineId,
+    trigger_id: Option<TriggerId>,
+    status: RunStatus,
+    run_number: i64,
+    commit_sha: Option<String>,
+    branch: Option<String>,
+    triggered_by: String,
+    created_at: DateTime<Utc>,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+    pipeline_name: String,
+}
+
+impl From<RunProjectListRow> for RunWithPipelineName {
+    fn from(row: RunProjectListRow) -> Self {
+        Self {
+            pipeline_name: row.pipeline_name,
+            run: Run {
+                id: row.id,
+                pipeline_id: row.pipeline_id,
+                trigger_id: row.trigger_id,
+                status: row.status,
+                run_number: row.run_number,
+                commit_sha: row.commit_sha,
+                branch: row.branch,
+                triggered_by: row.triggered_by,
+                created_at: row.created_at,
+                started_at: row.started_at,
+                finished_at: row.finished_at,
+            },
+        }
+    }
+}
 
 /// Repository for run operations.
 pub struct RunRepo<'a> {
@@ -115,25 +159,99 @@ impl<'a> RunRepo<'a> {
     pub async fn list_by_pipeline(
         &self,
         pipeline_id: PipelineId,
+        status: Option<RunStatus>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Run>> {
-        let runs = sqlx::query_as::<_, Run>(
-            r#"
-            SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
-            FROM runs
-            WHERE pipeline_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(pipeline_id.as_uuid())
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(self.pool)
-        .await?;
+        let runs = if let Some(st) = status {
+            sqlx::query_as::<_, Run>(
+                r#"
+                SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                FROM runs
+                WHERE pipeline_id = $1 AND status = $2
+                ORDER BY created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(pipeline_id.as_uuid())
+            .bind(st)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, Run>(
+                r#"
+                SELECT id, pipeline_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                FROM runs
+                WHERE pipeline_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(pipeline_id.as_uuid())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        };
 
         Ok(runs)
+    }
+
+    /// List runs for all pipelines in a project (non-deleted project only), with each pipeline's name.
+    pub async fn list_by_project(
+        &self,
+        project_id: ProjectId,
+        status: Option<RunStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RunWithPipelineName>> {
+        let rows = if let Some(st) = status {
+            sqlx::query_as::<_, RunProjectListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE p.project_id = $1
+                  AND pr.deleted_at IS NULL
+                  AND r.status = $2
+                ORDER BY r.created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(project_id.as_uuid())
+            .bind(st)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, RunProjectListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE p.project_id = $1
+                  AND pr.deleted_at IS NULL
+                ORDER BY r.created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(project_id.as_uuid())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        };
+
+        Ok(rows.into_iter().map(RunWithPipelineName::from).collect())
     }
 
     /// Update run status.

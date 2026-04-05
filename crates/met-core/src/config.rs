@@ -193,6 +193,10 @@ pub struct HttpConfig {
     pub agent_stale_after_secs: u64,
     /// How often the API runs the stale-agent sweep.
     pub agent_stale_sweep_interval_secs: u64,
+    /// Default page size for cursor-based list endpoints when `limit` / `per_page` is omitted.
+    pub pagination_default_limit: u32,
+    /// Maximum page size the API will return for list endpoints (client `limit` is clamped).
+    pub pagination_max_limit: u32,
 }
 
 impl Default for HttpConfig {
@@ -204,6 +208,8 @@ impl Default for HttpConfig {
             request_timeout_secs: 30,
             agent_stale_after_secs: 90,
             agent_stale_sweep_interval_secs: 30,
+            pagination_default_limit: 10_000,
+            pagination_max_limit: 10_000,
         }
     }
 }
@@ -300,6 +306,8 @@ mod tests {
     fn test_default_config() {
         let config = MetConfig::default();
         assert_eq!(config.http.listen_addr, "0.0.0.0:8080");
+        assert_eq!(config.http.pagination_default_limit, 10_000);
+        assert_eq!(config.http.pagination_max_limit, 10_000);
         assert_eq!(config.database.max_connections, 10);
         assert_eq!(config.log.format, LogFormat::Text);
     }

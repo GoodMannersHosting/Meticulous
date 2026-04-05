@@ -42,6 +42,11 @@ pub struct ApiConfig {
 
     /// Maximum pipeline runs executing in-process inside `met-api` at once.
     pub max_concurrent_engine_runs: usize,
+
+    /// Default list page size when the client omits `limit` / `per_page`.
+    pub pagination_default_limit: u32,
+    /// Maximum list page size (client requests are clamped to this).
+    pub pagination_max_limit: u32,
 }
 
 impl Default for ApiConfig {
@@ -58,6 +63,8 @@ impl Default for ApiConfig {
             agent_stale_after_secs: 90,
             agent_stale_sweep_interval_secs: 30,
             max_concurrent_engine_runs: 8,
+            pagination_default_limit: 10_000,
+            pagination_max_limit: 10_000,
         }
     }
 }
@@ -73,6 +80,8 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             agent_stale_sweep_interval_secs: http.agent_stale_sweep_interval_secs,
             auth: AuthConfig::default(),
             max_concurrent_engine_runs: 8,
+            pagination_default_limit: http.pagination_default_limit,
+            pagination_max_limit: http.pagination_max_limit,
             ..Default::default()
         }
     }
@@ -186,6 +195,8 @@ mod tests {
         let config = ApiConfig::default();
         assert_eq!(config.listen_addr, "0.0.0.0:8080");
         assert_eq!(config.body_limit_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.pagination_default_limit, 10_000);
+        assert_eq!(config.pagination_max_limit, 10_000);
         assert!(config.rate_limit.enabled);
     }
 }

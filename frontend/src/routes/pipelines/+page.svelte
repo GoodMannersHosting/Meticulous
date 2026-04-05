@@ -6,7 +6,8 @@
 	import type { Pipeline, Project } from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
 	import { Plus, Search, GitBranch, Filter } from 'lucide-svelte';
-	import type { Column } from '$components/data/DataTable.svelte';
+	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
+	import { sortPipelineList } from '$utils/sortPipelines';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 
@@ -16,6 +17,8 @@
 	let error = $state<string | null>(null);
 	let searchQuery = $state('');
 	let selectedProjectId = $state<string>('');
+	let sortKey = $state<string | null>('updated_at');
+	let sortDirection = $state<SortDirection>('desc');
 
 	$effect(() => {
 		const projectId = $page.url.searchParams.get('project');
@@ -72,6 +75,29 @@
 		}
 	});
 
+	function handleSort(key: string, direction: SortDirection) {
+		if (direction === null) {
+			sortKey = null;
+			sortDirection = null;
+		} else {
+			sortKey = key;
+			sortDirection = direction;
+		}
+	}
+
+	const filteredPipelines = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return pipelines;
+		return pipelines.filter(
+			(p) =>
+				p.name.toLowerCase().includes(q) ||
+				p.slug.toLowerCase().includes(q) ||
+				(p.description?.toLowerCase().includes(q) ?? false)
+		);
+	});
+
+	const sortedPipelines = $derived(sortPipelineList(filteredPipelines, sortKey, sortDirection));
+
 	const columns: Column<Pipeline>[] = [
 		{
 			key: 'name',
@@ -94,11 +120,13 @@
 		{
 			key: 'description',
 			label: 'Description',
+			sortable: true,
 			render: (value) => (value as string) || '<span class="text-[var(--text-tertiary)]">—</span>'
 		},
 		{
 			key: 'enabled',
 			label: 'Status',
+			sortable: true,
 			render: (value) =>
 				value
 					? '<span class="inline-flex items-center gap-1.5 text-sm"><span class="h-2 w-2 rounded-full bg-success-500"></span>Active</span>'
@@ -203,8 +231,11 @@
 	{:else}
 		<DataTable
 			{columns}
-			data={pipelines}
+			data={sortedPipelines}
 			rowKey="id"
+			sortKey={sortKey}
+			{sortDirection}
+			onSort={handleSort}
 			onRowClick={handleRowClick}
 		/>
 	{/if}

@@ -63,9 +63,12 @@
 		}, obj);
 	}
 
-	function handleSort(key: string) {
+	function handleSort(key: string, e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
 		let newDirection: SortDirection;
-		if (sortKey !== key) {
+		const sk = sortKey == null ? null : String(sortKey);
+		if (sk !== key) {
 			newDirection = 'asc';
 		} else if (sortDirection === 'asc') {
 			newDirection = 'desc';
@@ -73,6 +76,10 @@
 			newDirection = null;
 		}
 		onSort?.(key, newDirection);
+	}
+
+	function isActiveSortColumn(columnKey: keyof T | string): boolean {
+		return sortKey != null && String(sortKey) === String(columnKey);
 	}
 
 	function handleSelectAll() {
@@ -150,10 +157,10 @@
 										inline-flex items-center gap-1
 										transition-colors hover:text-[var(--text-primary)]
 									"
-									onclick={() => handleSort(String(column.key))}
+									onclick={(e) => handleSort(String(column.key), e)}
 								>
 									{column.label}
-									{#if sortKey === column.key}
+									{#if isActiveSortColumn(column.key)}
 										{#if sortDirection === 'asc'}
 											<ArrowUp class="h-4 w-4" />
 										{:else if sortDirection === 'desc'}

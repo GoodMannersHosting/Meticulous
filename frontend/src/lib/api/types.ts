@@ -20,6 +20,7 @@ export interface PaginatedResponse<T> {
 	pagination: {
 		has_more: boolean;
 		next_cursor?: string;
+		count?: number;
 	};
 }
 
@@ -157,6 +158,8 @@ export type RunStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed
 export interface Run {
 	id: string;
 	pipeline_id: string;
+	/** Set when listing runs by project (all pipelines). */
+	pipeline_name?: string;
 	trigger_id?: string;
 	status: RunStatus;
 	run_number: number;
@@ -324,10 +327,16 @@ export interface ListPipelinesParams {
 
 export interface ListRunsParams {
 	[key: string]: string | number | boolean | undefined;
-	pipeline_id: string;
+	/** Use this or `project_id`, not both. */
+	pipeline_id?: string;
+	/** All pipelines in the project; mutually exclusive with `pipeline_id`. */
+	project_id?: string;
 	status?: string;
 	page?: number;
 	per_page?: number;
+	limit?: number;
+	/** Offset into the pipeline's run list (API uses `cursor` query param). */
+	cursor?: string;
 }
 
 export interface ListAgentsParams {

@@ -41,7 +41,10 @@ pub use organizations::OrganizationRepo;
 pub use pipelines::PipelineRepo;
 pub use projects::ProjectRepo;
 pub use roles::RoleRepo;
-pub use runs::{JobQueueItemRow, JobRunPipelineContext, JobRunRepo, RunRepo, RunWithJobs, StepRunRepo};
+pub use runs::{
+    JobQueueItemRow, JobRunPipelineContext, JobRunRepo, RunRepo, RunWithJobs, RunWithPipelineName,
+    StepRunRepo,
+};
 pub use users::UserRepo;
 pub use workflows::{CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowScope};
 pub use run_logs::{LogEntry, RunLogRepo};

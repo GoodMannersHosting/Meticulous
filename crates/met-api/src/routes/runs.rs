@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use met_core::{
-    ids::{JobRunId, PipelineId, RunId},
+    ids::{JobRunId, PipelineId, ProjectId, RunId},
     models::{Run, RunStatus},
 };
 use met_store::{
@@ -22,7 +22,7 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, PaginatedResponse, Pagination},
+    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta},
     pipeline_execution,
     state::AppState,
 };
@@ -62,6 +62,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 pub struct ListRunsQuery {
     pipeline_id: Option<PipelineId>,
+    project_id: Option<ProjectId>,
     status: Option<String>,
 }
 
@@ -71,12 +72,19 @@ pub struct RunResponse {
     #[schema(value_type = Object)]
     pub run: Run,
     pub duration_ms: Option<i64>,
+    /// Present when listing runs by `project_id` (all pipelines in a project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline_name: Option<String>,
 }
 
 impl From<Run> for RunResponse {
     fn from(run: Run) -> Self {
         let duration_ms = run.duration().map(|d| d.num_milliseconds());
-        Self { run, duration_ms }
+        Self {
+            run,
+            duration_ms,
+            pipeline_name: None,
+        }
     }
 }
 
@@ -84,10 +92,11 @@ impl From<Run> for RunResponse {
     get,
     path = "/api/v1/runs",
     params(
-        ("pipeline_id" = Option<String>, Query, description = "Filter by pipeline ID"),
+        ("pipeline_id" = Option<String>, Query, description = "Filter by pipeline ID (mutually exclusive with `project_id`)"),
+        ("project_id" = Option<String>, Query, description = "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`)"),
         ("status" = Option<String>, Query, description = "Filter by run status"),
-        ("cursor" = Option<String>, Query, description = "Pagination cursor"),
-        ("limit" = Option<u32>, Query, description = "Items per page"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor; for runs this is the row offset as a decimal string (e.g. next page after 20 rows is `cursor=20`)"),
+        ("limit" = Option<u32>, Query, description = "Items per page (alias: `per_page`; default and max come from API `http.pagination_*` config)"),
     ),
     responses(
         (status = 200, description = "List of runs", body = serde_json::Value),
@@ -98,27 +107,108 @@ impl From<Run> for RunResponse {
 #[instrument(skip(state))]
 async fn list_runs(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     pagination: Pagination,
     axum::extract::Query(query): axum::extract::Query<ListRunsQuery>,
 ) -> ApiResult<Json<PaginatedResponse<RunResponse>>> {
     let repo = RunRepo::new(state.db());
 
-    let pipeline_id = query
-        .pipeline_id
-        .ok_or_else(|| ApiError::bad_request("pipeline_id query parameter is required"))?;
+    if query.pipeline_id.is_some() && query.project_id.is_some() {
+        return Err(ApiError::bad_request(
+            "provide only one of `pipeline_id` or `project_id`",
+        ));
+    }
 
-    let runs = repo
-        .list_by_pipeline(pipeline_id, pagination.sql_limit(), 0)
-        .await?;
+    let status_filter = parse_run_status_filter(query.status.as_deref())?;
 
-    let response = PaginatedResponse::new(
-        runs.into_iter().map(RunResponse::from).collect(),
-        pagination.limit,
-        |r| r.run.id.to_string(),
-    );
+    let offset = parse_runs_list_offset(pagination.cursor.as_deref());
+    let limit = pagination.sql_limit();
+
+    let mut items: Vec<RunResponse> = match (query.pipeline_id, query.project_id) {
+        (Some(pipeline_id), None) => {
+            let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
+            if !user.can_access_project(pipeline.project_id) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+            repo.list_by_pipeline(pipeline_id, status_filter, limit, offset)
+                .await?
+                .into_iter()
+                .map(RunResponse::from)
+                .collect()
+        }
+        (None, Some(project_id)) => {
+            if !user.can_access_project(project_id) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+            repo.list_by_project(project_id, status_filter, limit, offset)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    let mut resp = RunResponse::from(row.run);
+                    resp.pipeline_name = Some(row.pipeline_name);
+                    resp
+                })
+                .collect()
+        }
+        _ => {
+            return Err(ApiError::bad_request(
+                "`pipeline_id` or `project_id` query parameter is required",
+            ));
+        }
+    };
+
+    let limit = pagination.limit as usize;
+    let fetched = items.len();
+    let has_more = fetched > limit;
+    if has_more {
+        items.pop();
+    }
+
+    let count = items.len();
+    let next_cursor = if has_more {
+        Some((offset as usize + count).to_string())
+    } else {
+        None
+    };
+
+    let response = PaginatedResponse {
+        data: items,
+        pagination: PaginationMeta {
+            next_cursor,
+            has_more,
+            count,
+        },
+    };
 
     Ok(Json(response))
+}
+
+fn parse_run_status_filter(raw: Option<&str>) -> ApiResult<Option<RunStatus>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_value(serde_json::Value::String(trimmed.to_owned()))
+        .map_err(|_| ApiError::bad_request(format!("invalid run status: {trimmed}")))
+}
+
+/// `cursor` for run lists is a non-negative SQL `OFFSET` as a decimal string.
+fn parse_runs_list_offset(cursor: Option<&str>) -> i64 {
+    let Some(raw) = cursor else {
+        return 0;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    trimmed
+        .parse::<i64>()
+        .ok()
+        .filter(|&o| o >= 0)
+        .unwrap_or(0)
 }
 
 #[utoipa::path(
