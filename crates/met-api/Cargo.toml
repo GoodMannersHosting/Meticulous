@@ -29,6 +29,7 @@ base64 = "0.22"
 clap = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 hex = "0.4"
 hmac = "0.12"
 http = "1"

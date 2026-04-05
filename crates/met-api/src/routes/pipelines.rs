@@ -508,8 +508,6 @@ async fn trigger_pipeline(
     )
     .await?;
 
-    let _req_variables = req.variables;
-
     let run_repo = RunRepo::new(state.db());
     let run = run_repo.create(id, None, &user.email).await?;
     let run_id = run.id;
@@ -522,6 +520,7 @@ async fn trigger_pipeline(
         pipeline.id,
         pipeline.project_id,
         "api",
+        req.variables,
     )
     .await?;
 

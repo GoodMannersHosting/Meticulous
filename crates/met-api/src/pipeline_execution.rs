@@ -1,16 +1,66 @@
 //! Resolve [`PipelineIR`](met_parser::ir::PipelineIR) and start the pipeline engine for an existing `runs` row.
 //! Manual trigger and run retry both use this so a retried run is actually scheduled.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use met_core::ids::{OrganizationId, PipelineId, ProjectId, RunId};
 use met_core::models::Pipeline;
 use met_parser::ir::PipelineIR;
 use met_parser::{DatabaseWorkflowProvider, PipelineParser};
+use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE};
 use crate::github_scm;
 use crate::state::AppState;
+
+/// Project-level variables first, then pipeline-level overrides (same name wins for narrower scope).
+async fn load_platform_variables_merged(
+    pool: &PgPool,
+    org_id: OrganizationId,
+    project_id: ProjectId,
+    pipeline_id: PipelineId,
+) -> Result<IndexMap<String, String>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT name, value FROM variables
+        WHERE org_id = $1 AND project_id = $2
+          AND (pipeline_id IS NULL OR pipeline_id = $3)
+        ORDER BY CASE WHEN pipeline_id IS NULL THEN 0 ELSE 1 END, name ASC
+        "#,
+    )
+    .bind(org_id.as_uuid())
+    .bind(project_id.as_uuid())
+    .bind(pipeline_id.as_uuid())
+    .fetch_all(pool)
+    .await?;
+
+    let mut map = IndexMap::new();
+    for (name, value) in rows {
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
+/// Precedence: DB project < DB pipeline < YAML `variables:` < one-off trigger payload.
+pub(crate) fn merge_runtime_variables_into_ir(
+    pipeline_ir: &mut PipelineIR,
+    platform: IndexMap<String, String>,
+    trigger: Option<HashMap<String, String>>,
+) {
+    let from_yaml = std::mem::take(&mut pipeline_ir.variables);
+    let mut merged = platform;
+    for (k, v) in from_yaml {
+        merged.insert(k, v);
+    }
+    if let Some(tv) = trigger {
+        for (k, v) in tv {
+            merged.insert(k, v);
+        }
+    }
+    pipeline_ir.variables = merged;
+}
 
 /// Build pipeline IR the same way as POST `/pipelines/{id}/trigger`.
 pub async fn load_pipeline_ir_for_execution(
@@ -90,6 +140,7 @@ pub async fn start_engine_for_existing_run_from_state(
     pipeline_id: PipelineId,
     project_id: ProjectId,
     triggered_by: &'static str,
+    trigger_variables: Option<HashMap<String, String>>,
 ) -> ApiResult<()> {
     let Some(engine) = state.engine.as_ref().map(Arc::clone) else {
         let detail = state
@@ -103,6 +154,11 @@ pub async fn start_engine_for_existing_run_from_state(
 
     pipeline_ir.id = pipeline_id;
     pipeline_ir.project_id = Some(project_id);
+
+    let platform_vars = load_platform_variables_merged(state.db(), org_id, project_id, pipeline_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("load variables: {e}")))?;
+    merge_runtime_variables_into_ir(&mut pipeline_ir, platform_vars, trigger_variables);
 
     let permit = state
         .engine_run_semaphore

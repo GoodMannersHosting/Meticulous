@@ -125,9 +125,12 @@ use crate::routes::{
         crate::routes::secrets::delete_secret,
         // Stored secrets (builtin_secrets)
         crate::routes::stored_secrets::list_stored_secrets,
+        crate::routes::stored_secrets::list_stored_secret_versions,
         crate::routes::stored_secrets::create_stored_secret,
         crate::routes::stored_secrets::rotate_stored_secret,
         crate::routes::stored_secrets::delete_stored_secret,
+        crate::routes::stored_secrets::activate_stored_secret_version,
+        crate::routes::stored_secrets::purge_stored_secret_version,
         // Variables
         crate::routes::variables::list_variables,
         crate::routes::variables::create_variable,

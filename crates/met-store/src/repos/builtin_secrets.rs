@@ -279,11 +279,104 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .map_err(Into::into)
     }
 
+    /// Metadata by primary key, including soft-deleted rows (for admin purge).
+    pub async fn get_meta_by_id_including_deleted(&self, id: Uuid) -> Result<Option<BuiltinSecretMetaRow>> {
+        sqlx::query_as::<_, BuiltinSecretMetaRow>(
+            r#"
+            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+                   created_at, updated_at
+            FROM builtin_secrets
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn soft_delete(&self, id: Uuid) -> Result<()> {
         let r = sqlx::query(
             r#"
             UPDATE builtin_secrets SET deleted_at = NOW(), updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("builtin_secret", id));
+        }
+        Ok(())
+    }
+
+    /// All non-deleted versions for the same org / project / pipeline scope and logical `path`.
+    pub async fn list_versions_for_scope(
+        &self,
+        org_id: OrganizationId,
+        project_id: ProjectId,
+        pipeline_id: Option<PipelineId>,
+        path: &str,
+    ) -> Result<Vec<BuiltinSecretMetaRow>> {
+        sqlx::query_as::<_, BuiltinSecretMetaRow>(
+            r#"
+            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+                   created_at, updated_at
+            FROM builtin_secrets
+            WHERE org_id = $1
+              AND COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND path = $3
+              AND deleted_at IS NULL
+              AND COALESCE(pipeline_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($4, '00000000-0000-0000-0000-000000000000'::uuid)
+            ORDER BY version DESC
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(Some(project_id.as_uuid()))
+        .bind(path)
+        .bind(pipeline_id.map(|p| p.as_uuid()))
+        .fetch_all(self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Soft-delete newer versions so resolver picks `anchor` (same scope + path as anchor row).
+    pub async fn soft_delete_versions_newer_than(&self, anchor: &BuiltinSecretMetaRow) -> Result<u64> {
+        let r = sqlx::query(
+            r#"
+            UPDATE builtin_secrets
+            SET deleted_at = NOW(), updated_at = NOW()
+            WHERE org_id = $1
+              AND COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND path = $3
+              AND COALESCE(pipeline_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($4, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND version > $5
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(anchor.org_id)
+        .bind(anchor.project_id)
+        .bind(&anchor.path)
+        .bind(anchor.pipeline_id)
+        .bind(anchor.version)
+        .execute(self.pool)
+        .await?;
+
+        Ok(r.rows_affected())
+    }
+
+    /// Permanently remove one version row (ciphertext). Use only when operators need a hard delete.
+    pub async fn hard_delete_by_id(&self, id: Uuid) -> Result<()> {
+        let r = sqlx::query(
+            r#"
+            DELETE FROM builtin_secrets
+            WHERE id = $1
             "#,
         )
         .bind(id)

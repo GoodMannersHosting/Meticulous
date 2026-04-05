@@ -358,6 +358,7 @@ async fn retry_run(
         pipeline.id,
         pipeline.project_id,
         "retry",
+        None,
     )
     .await?;
 

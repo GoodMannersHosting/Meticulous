@@ -6,7 +6,8 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use chrono::{DateTime, Utc};
-use met_core::ids::{ProjectId, VariableId};
+use met_core::ids::{PipelineId, ProjectId, VariableId};
+use met_store::repos::PipelineRepo;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -35,6 +36,7 @@ pub struct VariableRow {
     pub id: Uuid,
     pub project_id: Uuid,
     pub org_id: Uuid,
+    pub pipeline_id: Option<Uuid>,
     pub name: String,
     pub value: String,
     pub scope: String,
@@ -49,6 +51,9 @@ pub struct VariableResponse {
     pub id: VariableId,
     #[schema(value_type = String)]
     pub project_id: ProjectId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub pipeline_id: Option<PipelineId>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
@@ -64,6 +69,7 @@ impl From<VariableRow> for VariableResponse {
         Self {
             id: VariableId::from_uuid(r.id),
             project_id: ProjectId::from_uuid(r.project_id),
+            pipeline_id: r.pipeline_id.map(PipelineId::from_uuid),
             name: r.name,
             value,
             scope: r.scope,
@@ -101,10 +107,10 @@ async fn list_variables(
 
     let rows = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE project_id = $1 AND org_id = $2
-        ORDER BY name ASC
+        ORDER BY pipeline_id NULLS FIRST, name ASC
         LIMIT $3 OFFSET 0
         "#,
     )
@@ -132,6 +138,9 @@ pub struct CreateVariableRequest {
     pub scope: String,
     #[serde(default)]
     pub is_sensitive: bool,
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub pipeline_id: Option<PipelineId>,
 }
 
 fn default_scope() -> String {
@@ -165,19 +174,30 @@ async fn create_variable(
         return Err(ApiError::bad_request("name is required"));
     }
 
+    if let Some(pid) = req.pipeline_id {
+        let pl = PipelineRepo::new(state.db())
+            .get(pid)
+            .await
+            .map_err(met_store::StoreError::from)?;
+        if pl.project_id.as_uuid() != project_id.as_uuid() {
+            return Err(ApiError::bad_request("pipeline does not belong to this project"));
+        }
+    }
+
     let id = Uuid::now_v7();
     let now = Utc::now();
 
     let row = sqlx::query_as::<_, VariableRow>(
         r#"
-        INSERT INTO variables (id, project_id, org_id, name, value, scope, is_sensitive, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6::variable_scope, $7, $8, $8)
-        RETURNING id, project_id, org_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        INSERT INTO variables (id, project_id, org_id, pipeline_id, name, value, scope, is_sensitive, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::variable_scope, $8, $9, $9)
+        RETURNING id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(project_id.as_uuid())
     .bind(user.org_id.as_uuid())
+    .bind(req.pipeline_id.map(|p| p.as_uuid()))
     .bind(&req.name)
     .bind(&req.value)
     .bind(&req.scope)
@@ -220,7 +240,7 @@ async fn update_variable(
 ) -> ApiResult<Json<VariableResponse>> {
     let existing = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE id = $1
         "#,
@@ -237,6 +257,11 @@ async fn update_variable(
         ));
     }
 
+    let project_id = ProjectId::from_uuid(existing.project_id);
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
     let name = req.name.unwrap_or(existing.name);
     let value = req.value.unwrap_or(existing.value);
     let is_sensitive = req.is_sensitive.unwrap_or(existing.is_sensitive);
@@ -246,7 +271,7 @@ async fn update_variable(
         UPDATE variables
         SET name = $2, value = $3, is_sensitive = $4, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, project_id, org_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        RETURNING id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
         "#,
     )
     .bind(id.as_uuid())
@@ -281,7 +306,7 @@ async fn delete_variable(
 ) -> ApiResult<Json<serde_json::Value>> {
     let existing = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE id = $1
         "#,
@@ -296,6 +321,11 @@ async fn delete_variable(
         return Err(ApiError::forbidden(
             "cannot delete variables in other organizations",
         ));
+    }
+
+    let project_id = ProjectId::from_uuid(existing.project_id);
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
     }
 
     sqlx::query("DELETE FROM variables WHERE id = $1")

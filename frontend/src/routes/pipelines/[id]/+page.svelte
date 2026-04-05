@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Button, Card, Badge, Tabs, Dialog, Alert, CopyButton, Select } from '$components/ui';
+	import { Button, Card, Badge, Tabs, Dialog, Alert, CopyButton, Select, Input } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Pipeline, PipelineJob, Run, StoredSecret } from '$api/types';
+	import type { Pipeline, PipelineJob, ProjectVariable, Run, StoredSecret } from '$api/types';
 	import { formatRelativeTime, truncateId } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -21,7 +21,10 @@
 		Pause,
 		Trash2,
 		ExternalLink,
-		KeyRound
+		KeyRound,
+		Braces,
+		Plus,
+		History
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { sortRunList } from '$utils/sortRuns';
@@ -47,16 +50,82 @@
 	let pipelineSecrets = $state<StoredSecret[]>([]);
 	let secretsLoading = $state(false);
 	let secretsError = $state<string | null>(null);
+	let showCreateSecret = $state(false);
+	let createPath = $state('');
+	let createKind = $state('kv');
+	let createValue = $state('');
+	let createDescription = $state('');
+	let secScopePipelineId = $state('');
+	let ghAppId = $state('');
+	let ghInstallationId = $state('');
+	let ghPrivateKey = $state('');
+	let ghApiBase = $state('');
+	let ghExtraJson = $state('');
+	let secretActionLoading = $state(false);
+	let rotateTarget = $state<StoredSecret | null>(null);
+	let rotateValue = $state('');
+	let showRotateSecretDialog = $state(false);
+	let deleteTarget = $state<StoredSecret | null>(null);
+	let showDeleteSecretDialog = $state(false);
+	let showSecretVersionsDialog = $state(false);
+	let versionsContext = $state<StoredSecret | null>(null);
+	let secretVersionRows = $state<StoredSecret[]>([]);
+	let versionsLoading = $state(false);
+	let versionsError = $state<string | null>(null);
+	let purgeVersionTarget = $state<StoredSecret | null>(null);
+	let showPurgeVersionDialog = $state(false);
 	let runSortKey = $state<string | null>('created_at');
 	let runSortDirection = $state<SortDirection>('desc');
 	let runsPerPage = $state('20');
 	let runsListOffset = $state(0);
 	let runsHasMore = $state(false);
 
+	let projectVariablesAll = $state<ProjectVariable[]>([]);
+	let variablesLoading = $state(false);
+	let variablesError = $state<string | null>(null);
+	let showCreateVariable = $state(false);
+	let cvName = $state('');
+	let cvValue = $state('');
+	let cvSensitive = $state(false);
+	let cvPipelineId = $state('');
+	let variableActionLoading = $state(false);
+	let editVariableTarget = $state<ProjectVariable | null>(null);
+	let evName = $state('');
+	let evValue = $state('');
+	let evSensitive = $state(false);
+	let showEditVariableDialog = $state(false);
+	let deleteVariableTarget = $state<ProjectVariable | null>(null);
+	let showDeleteVariableDialog = $state(false);
+
+	const pipelineVariablesRelevant = $derived.by(() => {
+		const p = pipeline;
+		if (!p) return [];
+		return projectVariablesAll.filter(
+			(v) => !v.pipeline_id || v.pipeline_id === p.id
+		);
+	});
+
+	const pipelineVarScopeOptions = $derived(
+		pipeline
+			? [
+					{ value: '', label: 'Project-wide (all pipelines)' },
+					{ value: pipeline.id, label: `This pipeline (${pipeline.name})` }
+				]
+			: [{ value: '', label: 'Project-wide' }]
+	);
+
 	const runsPageSizeOptions = [
 		{ value: '20', label: '20 per page' },
 		{ value: '50', label: '50 per page' },
 		{ value: '100', label: '100 per page' }
+	];
+
+	const kindOptions = [
+		{ value: 'kv', label: 'Key / value (kv)' },
+		{ value: 'api_key', label: 'API key' },
+		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
+		{ value: 'github_app', label: 'GitHub App' },
+		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
 	];
 
 	function definitionJobs(def: Pipeline['definition']): PipelineJob[] {
@@ -69,6 +138,7 @@
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
+		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
 		{ id: 'definition', label: 'Definition', icon: Settings }
 	];
@@ -155,6 +225,285 @@
 		if (activeTab !== 'secrets' || !pipeline || loading) return;
 		void loadPipelineSecrets();
 	});
+
+	function storedSecretScopeLabel(s: StoredSecret): string {
+		const p = pipeline;
+		if (!s.pipeline_id) return 'Project';
+		if (p && s.pipeline_id === p.id) return 'This pipeline';
+		return s.pipeline_id.slice(0, 8);
+	}
+
+	function openCreateSecret() {
+		createPath = '';
+		createKind = 'kv';
+		createValue = '';
+		createDescription = '';
+		secScopePipelineId = pipeline?.id ?? '';
+		ghAppId = '';
+		ghInstallationId = '';
+		ghPrivateKey = '';
+		ghApiBase = '';
+		ghExtraJson = '';
+		showCreateSecret = true;
+	}
+
+	function createSecretValid(): boolean {
+		if (!createPath.trim()) return false;
+		if (createKind === 'github_app') {
+			return !!(ghAppId.trim() && ghInstallationId.trim() && ghPrivateKey.trim());
+		}
+		return !!createValue.trim();
+	}
+
+	async function submitCreateSecret() {
+		const p = pipeline;
+		if (!p) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			let value: string;
+			if (createKind === 'github_app') {
+				if (!ghAppId.trim() || !ghInstallationId.trim() || !ghPrivateKey.trim()) {
+					secretsError = 'GitHub App: App ID, Installation ID, and private key are required';
+					return;
+				}
+				const app_id = Number(ghAppId);
+				const installation_id = Number(ghInstallationId);
+				if (!Number.isFinite(app_id) || !Number.isFinite(installation_id)) {
+					secretsError = 'GitHub App: App ID and Installation ID must be numeric';
+					return;
+				}
+				let extraFields: Record<string, unknown> = {};
+				if (ghExtraJson.trim()) {
+					try {
+						const parsed = JSON.parse(ghExtraJson) as unknown;
+						if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+							secretsError = 'GitHub App: Additional fields must be a JSON object';
+							return;
+						}
+						extraFields = parsed as Record<string, unknown>;
+					} catch {
+						secretsError = 'GitHub App: Additional fields are not valid JSON';
+						return;
+					}
+				}
+				value = JSON.stringify({
+					app_id,
+					installation_id,
+					private_key_pem: ghPrivateKey.trim(),
+					...(ghApiBase.trim() ? { github_api_base: ghApiBase.trim() } : {}),
+					...extraFields
+				});
+			} else {
+				value = createValue;
+			}
+
+			await apiMethods.storedSecrets.create(p.project_id, {
+				path: createPath.trim(),
+				kind: createKind,
+				value,
+				description: createDescription.trim() || undefined,
+				pipeline_id: secScopePipelineId || undefined
+			});
+			showCreateSecret = false;
+			await loadPipelineSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to create secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function submitRotateSecret() {
+		if (!rotateTarget || !pipeline) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.rotate(rotateTarget.id, rotateValue);
+			showRotateSecretDialog = false;
+			rotateTarget = null;
+			rotateValue = '';
+			await loadPipelineSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to rotate secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function submitDeleteSecret() {
+		if (!deleteTarget) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.delete(deleteTarget.id);
+			showDeleteSecretDialog = false;
+			deleteTarget = null;
+			await loadPipelineSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to delete secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	function openSecretVersions(s: StoredSecret) {
+		versionsContext = s;
+		versionsError = null;
+		secretVersionRows = [];
+		showSecretVersionsDialog = true;
+		void refreshSecretVersions();
+	}
+
+	async function refreshSecretVersions() {
+		const ctx = versionsContext;
+		const p = pipeline;
+		if (!ctx || !p) return;
+		versionsLoading = true;
+		versionsError = null;
+		try {
+			secretVersionRows = await apiMethods.storedSecrets.listVersions(p.project_id, {
+				path: ctx.path,
+				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {})
+			});
+		} catch (e) {
+			versionsError = e instanceof Error ? e.message : 'Failed to load versions';
+			secretVersionRows = [];
+		} finally {
+			versionsLoading = false;
+		}
+	}
+
+	async function submitActivateSecretVersion(row: StoredSecret) {
+		secretActionLoading = true;
+		versionsError = null;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.activateVersion(row.id);
+			await loadPipelineSecrets();
+			await refreshSecretVersions();
+		} catch (e) {
+			versionsError = e instanceof Error ? e.message : 'Failed to roll back';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function submitPurgeSecretVersion() {
+		if (!purgeVersionTarget) return;
+		secretActionLoading = true;
+		versionsError = null;
+		secretsError = null;
+		try {
+			await apiMethods.storedSecrets.purgeVersionPermanent(purgeVersionTarget.id);
+			showPurgeVersionDialog = false;
+			purgeVersionTarget = null;
+			await loadPipelineSecrets();
+			await refreshSecretVersions();
+		} catch (e) {
+			versionsError = e instanceof Error ? e.message : 'Failed to purge version';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	async function loadPipelineVariables() {
+		if (!pipeline) return;
+		variablesLoading = true;
+		variablesError = null;
+		try {
+			const res = await apiMethods.variables.list(pipeline.project_id);
+			projectVariablesAll = res.data;
+		} catch (e) {
+			variablesError = e instanceof Error ? e.message : 'Failed to load variables';
+			projectVariablesAll = [];
+		} finally {
+			variablesLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (activeTab !== 'variables' || !pipeline || loading) return;
+		void loadPipelineVariables();
+	});
+
+	function variableScopeLabel(v: ProjectVariable): string {
+		if (!v.pipeline_id) return 'Project';
+		if (pipeline && v.pipeline_id === pipeline.id) return 'This pipeline';
+		return v.pipeline_id.slice(0, 8);
+	}
+
+	function openCreateVariable() {
+		cvName = '';
+		cvValue = '';
+		cvSensitive = false;
+		cvPipelineId = pipeline?.id ?? '';
+		showCreateVariable = true;
+	}
+
+	async function submitCreateVariable() {
+		if (!pipeline) return;
+		variableActionLoading = true;
+		variablesError = null;
+		try {
+			await apiMethods.variables.create(pipeline.project_id, {
+				name: cvName.trim(),
+				value: cvValue,
+				is_sensitive: cvSensitive,
+				pipeline_id: cvPipelineId || undefined
+			});
+			showCreateVariable = false;
+			await loadPipelineVariables();
+		} catch (e) {
+			variablesError = e instanceof Error ? e.message : 'Failed to create variable';
+		} finally {
+			variableActionLoading = false;
+		}
+	}
+
+	function openEditVariable(v: ProjectVariable) {
+		editVariableTarget = v;
+		evName = v.name;
+		evValue = v.value ?? '';
+		evSensitive = v.is_sensitive;
+		showEditVariableDialog = true;
+	}
+
+	async function submitEditVariable() {
+		if (!editVariableTarget) return;
+		variableActionLoading = true;
+		variablesError = null;
+		try {
+			await apiMethods.variables.update(editVariableTarget.id, {
+				name: evName.trim(),
+				...(evValue !== '' ? { value: evValue } : {}),
+				is_sensitive: evSensitive
+			});
+			showEditVariableDialog = false;
+			editVariableTarget = null;
+			await loadPipelineVariables();
+		} catch (e) {
+			variablesError = e instanceof Error ? e.message : 'Failed to update variable';
+		} finally {
+			variableActionLoading = false;
+		}
+	}
+
+	async function submitDeleteVariable() {
+		if (!deleteVariableTarget) return;
+		variableActionLoading = true;
+		variablesError = null;
+		try {
+			await apiMethods.variables.delete(deleteVariableTarget.id);
+			showDeleteVariableDialog = false;
+			deleteVariableTarget = null;
+			await loadPipelineVariables();
+		} catch (e) {
+			variablesError = e instanceof Error ? e.message : 'Failed to delete variable';
+		} finally {
+			variableActionLoading = false;
+		}
+	}
 
 	async function triggerPipeline() {
 		if (!pipeline) return;
@@ -403,19 +752,119 @@
 					/>
 				</div>
 			{/if}
+		{:else if activeTab === 'variables'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<p class="text-sm text-[var(--text-secondary)]">
+					Variables that apply to this pipeline: <strong>project-wide</strong> entries plus any
+					<strong>pipeline-only</strong> overrides. YAML and trigger-time variables still override for the same name.
+				</p>
+				<div class="flex gap-2">
+					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}">
+						All project variables
+					</Button>
+					<Button variant="ghost" size="sm" onclick={loadPipelineVariables} loading={variablesLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+					<Button variant="primary" size="sm" onclick={openCreateVariable}>
+						<Plus class="h-4 w-4" />
+						Add variable
+					</Button>
+				</div>
+			</div>
+			{#if variablesError}
+				<Alert variant="error" title="Variables" dismissible ondismiss={() => (variablesError = null)}>
+					{variablesError}
+				</Alert>
+			{/if}
+			{#if variablesLoading && pipelineVariablesRelevant.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(3) as _, i (i)}
+							<Skeleton class="h-10 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else if pipelineVariablesRelevant.length === 0}
+				<Card>
+					<EmptyState
+						title="No variables yet"
+						description="Add project-wide defaults or pipeline-specific values."
+					>
+						<Button variant="primary" onclick={openCreateVariable}>
+							<Plus class="h-4 w-4" />
+							Add variable
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+					<table class="w-full text-sm">
+						<thead class="bg-[var(--bg-tertiary)]">
+							<tr>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Value</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Sensitive</th>
+								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-secondary)]">
+							{#each pipelineVariablesRelevant as v (v.id)}
+								<tr class="bg-[var(--bg-secondary)]">
+									<td class="px-4 py-3 font-mono text-sm">{v.name}</td>
+									<td class="px-4 py-3">{variableScopeLabel(v)}</td>
+									<td class="px-4 py-3 text-[var(--text-secondary)]">
+										{#if v.is_sensitive}
+											<span class="italic">hidden</span>
+										{:else}
+											{v.value ?? '—'}
+										{/if}
+									</td>
+									<td class="px-4 py-3">{v.is_sensitive ? 'Yes' : 'No'}</td>
+									<td class="px-4 py-3 text-right">
+										<div class="flex justify-end gap-2">
+											<Button variant="ghost" size="sm" onclick={() => openEditVariable(v)}>
+												Edit
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => {
+													deleteVariableTarget = v;
+													showDeleteVariableDialog = true;
+												}}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		{:else if activeTab === 'secrets'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<p class="text-sm text-[var(--text-secondary)]">
-					Secrets scoped to this pipeline. Create project-wide or other pipeline secrets from the project
-					page.
+					Project-wide secrets plus pipeline-specific overrides for <strong>{pipeline.name}</strong>. Reference in
+					YAML with
+					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
+						>stored: &#123; name: MY_TOKEN &#125;</code
+					>.
 				</p>
-				<div class="flex gap-2">
+				<div class="flex flex-wrap gap-2">
 					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}">
 						Project secrets
 					</Button>
 					<Button variant="ghost" size="sm" onclick={loadPipelineSecrets} loading={secretsLoading}>
 						<RefreshCw class="h-4 w-4" />
 						Refresh
+					</Button>
+					<Button variant="primary" size="sm" onclick={openCreateSecret}>
+						<Plus class="h-4 w-4" />
+						Add secret
 					</Button>
 				</div>
 			</div>
@@ -435,11 +884,12 @@
 			{:else if pipelineSecrets.length === 0}
 				<Card>
 					<EmptyState
-						title="No pipeline-scoped secrets"
-						description={`Add a secret on the project page and choose this pipeline as the scope, or use project-wide secrets with stored: { name: ... } in YAML.`}
+						title="No secrets for this pipeline yet"
+						description="Add a project-wide secret or one scoped to this pipeline. Pipeline-scoped values override the same name at project scope."
 					>
-						<Button variant="primary" href="/projects/{pipeline.project_id}">
-							Open project
+						<Button variant="primary" onclick={openCreateSecret}>
+							<Plus class="h-4 w-4" />
+							Add secret
 						</Button>
 					</EmptyState>
 				</Card>
@@ -450,8 +900,10 @@
 							<tr>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
+								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-[var(--border-secondary)]">
@@ -459,9 +911,51 @@
 								<tr class="bg-[var(--bg-secondary)]">
 									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
 									<td class="px-4 py-3">{s.kind}</td>
-									<td class="px-4 py-3 font-mono">v{s.version}</td>
+									<td class="px-4 py-3">{storedSecretScopeLabel(s)}</td>
+									<td class="px-4 py-3 font-mono">
+										<button
+											type="button"
+											class="text-primary-600 hover:underline dark:text-primary-400"
+											onclick={() => openSecretVersions(s)}
+										>
+											v{s.version}
+										</button>
+									</td>
 									<td class="px-4 py-3 text-[var(--text-secondary)]">
 										{formatRelativeTime(s.updated_at)}
+									</td>
+									<td class="px-4 py-3 text-right">
+										<div class="flex justify-end gap-2">
+											<Button
+												variant="ghost"
+												size="sm"
+												title="Versions, roll back, purge"
+												onclick={() => openSecretVersions(s)}
+											>
+												<History class="h-4 w-4" />
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => {
+													rotateTarget = s;
+													rotateValue = '';
+													showRotateSecretDialog = true;
+												}}
+											>
+												Rotate
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => {
+													deleteTarget = s;
+													showDeleteSecretDialog = true;
+												}}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</div>
 									</td>
 								</tr>
 							{/each}
@@ -494,3 +988,390 @@
 		{/if}
 	{/if}
 </div>
+
+<Dialog bind:open={showCreateVariable} title="Add environment variable">
+	<div class="space-y-4">
+		<div>
+			<label class="mb-1 block text-sm font-medium" for="pv-name">Name</label>
+			<Input id="pv-name" bind:value={cvName} placeholder="e.g. NODE_VERSION" />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium" for="pv-val">Value</label>
+			<Input id="pv-val" bind:value={cvValue} />
+		</div>
+		<label class="flex items-center gap-2 text-sm">
+			<input type="checkbox" bind:checked={cvSensitive} class="rounded border-[var(--border-primary)]" />
+			Mask value in API responses (sensitive)
+		</label>
+		<div>
+			<label class="mb-1 block text-sm font-medium" for="pv-scope">Scope</label>
+			<Select id="pv-scope" options={pipelineVarScopeOptions} bind:value={cvPipelineId} />
+		</div>
+		<div class="flex justify-end gap-2 pt-2">
+			<Button variant="outline" onclick={() => (showCreateVariable = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				onclick={submitCreateVariable}
+				loading={variableActionLoading}
+				disabled={!cvName.trim()}
+			>
+				Save
+			</Button>
+		</div>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showEditVariableDialog}
+	title="Edit variable"
+	onclose={() => {
+		editVariableTarget = null;
+	}}
+>
+	{#if editVariableTarget}
+		<div class="space-y-4">
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="pev-name">Name</label>
+				<Input id="pev-name" bind:value={evName} />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="pev-val">New value</label>
+				<Input
+					id="pev-val"
+					bind:value={evValue}
+					placeholder={editVariableTarget.is_sensitive ? 'Leave blank to keep current value' : ''}
+				/>
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={evSensitive} class="rounded border-[var(--border-primary)]" />
+				Mask value in API responses
+			</label>
+			<div class="flex justify-end gap-2 pt-2">
+				<Button variant="outline" onclick={() => (showEditVariableDialog = false)}>Cancel</Button>
+				<Button variant="primary" onclick={submitEditVariable} loading={variableActionLoading}>
+					Save
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showDeleteVariableDialog}
+	title="Delete variable?"
+	onclose={() => {
+		deleteVariableTarget = null;
+	}}
+>
+	{#if deleteVariableTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Delete <span class="font-mono">{deleteVariableTarget.name}</span>?
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showDeleteVariableDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitDeleteVariable}
+				loading={variableActionLoading}
+			>
+				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog bind:open={showCreateSecret} title="Add stored secret">
+	<div class="space-y-4">
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-path"
+				>Logical name</label
+			>
+			<Input id="pl-sec-path" bind:value={createPath} placeholder="e.g. MY_API_TOKEN" />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-kind">Kind</label
+			>
+			<Select id="pl-sec-kind" options={kindOptions} bind:value={createKind} />
+		</div>
+		{#if createKind === 'github_app'}
+			<div class="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+				<p class="text-xs text-[var(--text-secondary)]">
+					Paste GitHub App credentials. Values are encrypted; the private key is only used to mint short-lived tokens.
+				</p>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="pl-gh-app">App ID</label>
+						<Input id="pl-gh-app" bind:value={ghAppId} placeholder="123456" />
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="pl-gh-inst">Installation ID</label>
+						<Input id="pl-gh-inst" bind:value={ghInstallationId} placeholder="78901234" />
+					</div>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium" for="pl-gh-pem">Private key (PEM)</label>
+					<textarea
+						id="pl-gh-pem"
+						bind:value={ghPrivateKey}
+						rows="6"
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+						placeholder="-----BEGIN RSA PRIVATE KEY----- ..."
+					></textarea>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium" for="pl-gh-base">GitHub API base (optional)</label>
+					<Input id="pl-gh-base" bind:value={ghApiBase} placeholder="https://api.github.com (default)" />
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium" for="pl-gh-extra">Additional fields (optional JSON)</label
+					>
+					<textarea
+						id="pl-gh-extra"
+						bind:value={ghExtraJson}
+						rows="3"
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+						placeholder={`{\n  "client_id": "..."\n}`}
+					></textarea>
+				</div>
+			</div>
+		{:else}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-val"
+					>Value (one-time)</label
+				>
+				<textarea
+					id="pl-sec-val"
+					bind:value={createValue}
+					rows="4"
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					placeholder="Secret value or PEM / JSON payload"
+				></textarea>
+			</div>
+		{/if}
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-desc"
+				>Description (optional)</label
+			>
+			<Input id="pl-sec-desc" bind:value={createDescription} />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-scope">Scope</label>
+			<Select id="pl-sec-scope" options={pipelineVarScopeOptions} bind:value={secScopePipelineId} />
+		</div>
+		<div class="flex justify-end gap-2 pt-2">
+			<Button variant="outline" onclick={() => (showCreateSecret = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				onclick={submitCreateSecret}
+				loading={secretActionLoading}
+				disabled={!createSecretValid()}
+			>
+				Save
+			</Button>
+		</div>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showRotateSecretDialog}
+	title="Rotate secret"
+	onclose={() => {
+		rotateTarget = null;
+		rotateValue = '';
+	}}
+>
+	{#if rotateTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
+			version).
+		</p>
+		{#if rotateTarget.kind === 'github_app'}
+			<p class="mt-2 text-xs text-[var(--text-secondary)]">
+				Use a single JSON object with <code class="font-mono">app_id</code>, <code class="font-mono"
+					>installation_id</code
+				>, <code class="font-mono">private_key_pem</code>, optional <code class="font-mono"
+					>github_api_base</code
+				>, and any other fields you need preserved.
+			</p>
+		{/if}
+		<div class="mt-4">
+			<textarea
+				bind:value={rotateValue}
+				rows={rotateTarget.kind === 'github_app' ? 14 : 4}
+				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+			></textarea>
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showRotateSecretDialog = false;
+					rotateTarget = null;
+					rotateValue = '';
+				}}
+			>
+				Cancel
+			</Button>
+			<Button
+				variant="primary"
+				onclick={submitRotateSecret}
+				loading={secretActionLoading}
+				disabled={!rotateValue?.trim()}
+			>
+				Rotate
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showDeleteSecretDialog}
+	title="Delete secret?"
+	onclose={() => {
+		deleteTarget = null;
+	}}
+>
+	{#if deleteTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Soft-delete <span class="font-mono">{deleteTarget.path}</span>? Runs that still need it may fail validation.
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showDeleteSecretDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitDeleteSecret}
+				loading={secretActionLoading}
+			>
+				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showSecretVersionsDialog}
+	title="Secret versions"
+	onclose={() => {
+		versionsContext = null;
+		secretVersionRows = [];
+	}}
+>
+	{#if versionsContext}
+		<p class="text-sm text-[var(--text-secondary)]">
+			<span class="font-mono text-[var(--text-primary)]">{versionsContext.path}</span>
+			· {storedSecretScopeLabel(versionsContext)}
+		</p>
+		<p class="mt-2 text-xs text-[var(--text-tertiary)]">
+			Roll back soft-deletes newer ciphertext rows so jobs resolve this version. Purge permanently removes one row from
+			the database (including soft-deleted rows).
+		</p>
+		{#if versionsError}
+			<div class="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
+				{versionsError}
+			</div>
+		{/if}
+		<div class="mt-3 flex justify-end">
+			<Button variant="ghost" size="sm" onclick={refreshSecretVersions} loading={versionsLoading}>
+				<RefreshCw class="h-4 w-4" />
+				Refresh
+			</Button>
+		</div>
+		{#if versionsLoading && secretVersionRows.length === 0}
+			<div class="mt-4 space-y-2">
+				{#each Array(3) as _, i (i)}
+					<Skeleton class="h-10 w-full" />
+				{/each}
+			</div>
+		{:else if secretVersionRows.length === 0}
+			<p class="mt-4 text-sm text-[var(--text-secondary)]">No versions found.</p>
+		{:else}
+			<div class="mt-4 max-h-80 overflow-auto rounded-lg border border-[var(--border-primary)]">
+				<table class="w-full text-sm">
+					<thead class="sticky top-0 bg-[var(--bg-tertiary)]">
+						<tr>
+							<th class="px-3 py-2 text-left font-medium text-[var(--text-secondary)]">Ver</th>
+							<th class="px-3 py-2 text-left font-medium text-[var(--text-secondary)]">Updated</th>
+							<th class="px-3 py-2 text-left font-medium text-[var(--text-secondary)]">Row</th>
+							<th class="px-3 py-2 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-[var(--border-secondary)]">
+						{#each secretVersionRows as row, idx (row.id)}
+							<tr class="bg-[var(--bg-secondary)]">
+								<td class="px-3 py-2 font-mono">
+									v{row.version}
+									{#if idx === 0}
+										<Badge variant="success" size="sm" class="ml-2">Current</Badge>
+									{/if}
+								</td>
+								<td class="px-3 py-2 text-[var(--text-secondary)]">
+									{formatRelativeTime(row.updated_at)}
+								</td>
+								<td class="px-3 py-2 font-mono text-xs text-[var(--text-tertiary)]">
+									{row.id.slice(0, 8)}…
+								</td>
+								<td class="px-3 py-2 text-right">
+									<div class="flex flex-wrap justify-end gap-1">
+										{#if idx > 0}
+											<Button
+												variant="outline"
+												size="sm"
+												onclick={() => submitActivateSecretVersion(row)}
+												disabled={secretActionLoading}
+											>
+												Roll back here
+											</Button>
+										{/if}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+											onclick={() => {
+												purgeVersionTarget = row;
+												showPurgeVersionDialog = true;
+											}}
+											disabled={secretActionLoading}
+										>
+											Purge
+										</Button>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+		<div class="mt-4 flex justify-end">
+			<Button variant="outline" onclick={() => (showSecretVersionsDialog = false)}>Close</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showPurgeVersionDialog}
+	title="Purge version permanently?"
+	onclose={() => {
+		purgeVersionTarget = null;
+	}}
+>
+	{#if purgeVersionTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Remove version <span class="font-mono">v{purgeVersionTarget.version}</span> row
+			<span class="font-mono text-xs">{purgeVersionTarget.id}</span> from the database? This cannot be undone.
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showPurgeVersionDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitPurgeSecretVersion}
+				loading={secretActionLoading}
+			>
+				Purge permanently
+			</Button>
+		</div>
+	{/if}
+</Dialog>

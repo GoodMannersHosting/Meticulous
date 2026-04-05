@@ -260,6 +260,13 @@ export const apiMethods = {
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secrets`, {
 				params
 			}),
+		listVersions: (projectId: string, params: { path: string; pipeline_id?: string }) =>
+			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secret-versions`, {
+				params: {
+					path: params.path,
+					...(params.pipeline_id ? { pipeline_id: params.pipeline_id } : {})
+				}
+			}),
 		create: (
 			projectId: string,
 			body: {
@@ -272,7 +279,40 @@ export const apiMethods = {
 		) => api.post<StoredSecret>(`/api/v1/projects/${projectId}/stored-secrets`, body),
 		rotate: (id: string, value: string) =>
 			api.post<StoredSecret>(`/api/v1/stored-secrets/${id}/rotate`, { value }),
-		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`)
+		activateVersion: (id: string) =>
+			api.post<{
+				message: string;
+				invalidated_newer_versions: number;
+				activated: StoredSecret;
+			}>(`/api/v1/stored-secrets/${id}/activate`, {}),
+		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`),
+		purgeVersionPermanent: (id: string) =>
+			api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}/permanent`)
+	},
+
+	// Environment variables (project / pipeline scope)
+	variables: {
+		list: (projectId: string) =>
+			api.get<import('./types').PaginatedResponse<import('./types').ProjectVariable>>(
+				`/api/v1/projects/${projectId}/variables`
+			),
+		create: (
+			projectId: string,
+			body: {
+				name: string;
+				value: string;
+				is_sensitive?: boolean;
+				pipeline_id?: string;
+				scope?: string;
+			}
+		) =>
+			api.post<import('./types').ProjectVariable>(`/api/v1/projects/${projectId}/variables`, {
+				scope: 'project',
+				...body
+			}),
+		update: (id: string, body: { name?: string; value?: string; is_sensitive?: boolean }) =>
+			api.patch<import('./types').ProjectVariable>(`/api/v1/variables/${id}`, body),
+		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/variables/${id}`)
 	},
 
 	// Pipelines

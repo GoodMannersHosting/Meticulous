@@ -152,6 +152,20 @@ export interface ImportPipelineGitInput {
 	credentials_path: string;
 }
 
+/** Project or pipeline-scoped environment variable (non-secret config). */
+export interface ProjectVariable {
+	id: string;
+	project_id: string;
+	pipeline_id?: string | null;
+	name: string;
+	/** Omitted when `is_sensitive` is true. */
+	value?: string | null;
+	scope: string;
+	is_sensitive: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
 // Run Types
 export type RunStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
 

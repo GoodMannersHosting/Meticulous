@@ -20,8 +20,11 @@ pub struct GithubAppCredentials {
     /// PEM PKCS#8 or PKCS#1 private key content.
     pub private_key_pem: String,
     /// Optional API base (e.g. `https://api.github.com` or GHE root + `/api/v3`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_api_base: Option<String>,
+    /// Any additional JSON fields (preserved on parse/serialize).
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Error)]
@@ -164,6 +167,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_preserves_extra_fields() {
+        let j = r#"{"app_id":1,"installation_id":2,"private_key_pem":"k","client_id":"c","webhook_secret":"ws"}"#;
+        let c = parse_github_app_credentials(j).unwrap();
+        assert_eq!(c.extra.get("client_id").and_then(|v| v.as_str()), Some("c"));
+        assert_eq!(c.extra.get("webhook_secret").and_then(|v| v.as_str()), Some("ws"));
+        let out = serde_json::to_value(&c).unwrap();
+        assert_eq!(out.get("client_id").and_then(|v| v.as_str()), Some("c"));
+    }
+
+    #[test]
     fn parse_json_with_pem_body_is_not_legacy() {
         let pem = "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----";
         let j = serde_json::json!({
@@ -193,6 +206,7 @@ mod tests {
             installation_id: 99,
             private_key_pem: pem,
             github_api_base: None,
+            extra: serde_json::Map::new(),
         };
         let jwt = create_app_jwt(&creds).expect("jwt");
         let h = decode_header(&jwt).expect("header");
@@ -224,6 +238,7 @@ mod tests {
             installation_id: 99,
             private_key_pem: pem,
             github_api_base: Some(server.uri()),
+            extra: serde_json::Map::new(),
         };
 
         let tok = installation_access_token(&creds).await.expect("install token");

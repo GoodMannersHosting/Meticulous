@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{OrganizationId, PipelineId, ProjectId};
+use met_secrets::parse_github_app_credentials;
 use met_store::repos::{
     BuiltinSecretMetaRow, BuiltinSecretsRepo, PipelineRepo, ProjectRepo, StoredSecretKind,
 };
@@ -26,8 +27,17 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
+            "/projects/{project_id}/stored-secret-versions",
+            get(list_stored_secret_versions),
+        )
+        .route(
             "/projects/{project_id}/stored-secrets",
             get(list_stored_secrets).post(create_stored_secret),
+        )
+        .route("/stored-secrets/{id}/activate", post(activate_stored_secret_version))
+        .route(
+            "/stored-secrets/{id}/permanent",
+            delete(purge_stored_secret_version),
         )
         .route("/stored-secrets/{id}/rotate", post(rotate_stored_secret))
         .route("/stored-secrets/{id}", delete(delete_stored_secret))
@@ -35,6 +45,12 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 struct ListStoredQuery {
+    pipeline_id: Option<PipelineId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListStoredSecretVersionsQuery {
+    path: String,
     pipeline_id: Option<PipelineId>,
 }
 
@@ -143,6 +159,60 @@ async fn list_stored_secrets(
     Ok(Json(out))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/stored-secret-versions",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("path" = String, Query, description = "Secret logical name"),
+        ("pipeline_id" = Option<String>, Query, description = "Omit for project-wide secret scope; set for pipeline-scoped secrets"),
+    ),
+    responses(
+        (status = 200, description = "All versions (metadata only)", body = Vec<StoredSecretResponse>),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state))]
+async fn list_stored_secret_versions(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Query(q): Query<ListStoredSecretVersionsQuery>,
+) -> ApiResult<Json<Vec<StoredSecretResponse>>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let path = q.path.trim();
+    if path.is_empty() {
+        return Err(ApiError::bad_request("path is required"));
+    }
+
+    let org_id = ProjectRepo::new(state.db())
+        .get(project_id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .org_id;
+
+    if let Some(pid) = q.pipeline_id {
+        let pl = PipelineRepo::new(state.db())
+            .get(pid)
+            .await
+            .map_err(met_store::StoreError::from)?;
+        if pl.project_id.as_uuid() != project_id.as_uuid() {
+            return Err(ApiError::bad_request("pipeline does not belong to project"));
+        }
+    }
+
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let rows = repo
+        .list_versions_for_scope(org_id, project_id, q.pipeline_id, path)
+        .await
+        .map_err(met_store::StoreError::from)?;
+    Ok(Json(rows.into_iter().map(StoredSecretResponse::from).collect()))
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateStoredSecretRequest {
     /// Logical name (`builtin_secrets.path`); becomes YAML `stored.name`.
@@ -196,6 +266,14 @@ async fn create_stored_secret(
 
     let kind =
         StoredSecretKind::parse(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    if kind == StoredSecretKind::GithubApp {
+        parse_github_app_credentials(req.value.trim()).map_err(|e| {
+            ApiError::bad_request(format!(
+                "github_app value must be JSON with app_id, installation_id, private_key_pem, and optional extra fields: {e}"
+            ))
+        })?;
+    }
 
     let project = ProjectRepo::new(state.db())
         .get(project_id)
@@ -302,6 +380,14 @@ async fn rotate_stored_secret(
         return Err(ApiError::forbidden("wrong organization"));
     }
 
+    if existing.kind == "github_app" {
+        parse_github_app_credentials(req.value.trim()).map_err(|e| {
+            ApiError::bad_request(format!(
+                "github_app value must be JSON with app_id, installation_id, private_key_pem, and optional extra fields: {e}"
+            ))
+        })?;
+    }
+
     let org_id = OrganizationId::from_uuid(existing.org_id);
     let kind = StoredSecretKind::parse(&existing.kind)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -387,4 +473,116 @@ async fn delete_stored_secret(
     Ok(Json(
         serde_json::json!({ "message": "stored secret deleted" }),
     ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/stored-secrets/{id}/activate",
+    params(
+        ("id" = String, Path, description = "Row id of the version to make current"),
+    ),
+    responses(
+        (status = 200, description = "Newer versions soft-deleted", body = serde_json::Value),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state))]
+async fn activate_stored_secret_version(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let anchor = repo
+        .get_meta_by_id(id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
+
+    let Some(project_id) = anchor.project_id.map(ProjectId::from_uuid) else {
+        return Err(ApiError::bad_request(
+            "cannot activate org-wide secrets via this API",
+        ));
+    };
+
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+    if anchor.org_id != user.org_id.as_uuid() {
+        return Err(ApiError::forbidden("wrong organization"));
+    }
+
+    let activated = StoredSecretResponse::from(anchor.clone());
+    let n = repo
+        .soft_delete_versions_newer_than(&anchor)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    tracing::info!(
+        stored_secret_id = %id,
+        path = %anchor.path,
+        invalidated_newer = n,
+        "stored secret version activated (rollback)"
+    );
+
+    Ok(Json(serde_json::json!({
+        "message": "newer versions removed from resolution",
+        "invalidated_newer_versions": n,
+        "activated": activated,
+    })))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/stored-secrets/{id}/permanent",
+    params(
+        ("id" = String, Path, description = "Row id of the version to purge"),
+    ),
+    responses(
+        (status = 200, description = "Row deleted from database", body = serde_json::Value),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "stored_secrets",
+)]
+#[instrument(skip(state))]
+async fn purge_stored_secret_version(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let repo = BuiltinSecretsRepo::new(state.db());
+    let existing = repo
+        .get_meta_by_id_including_deleted(id)
+        .await
+        .map_err(met_store::StoreError::from)?
+        .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
+
+    let Some(project_id) = existing.project_id.map(ProjectId::from_uuid) else {
+        return Err(ApiError::bad_request(
+            "cannot purge org-wide secrets via this API",
+        ));
+    };
+
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+    if existing.org_id != user.org_id.as_uuid() {
+        return Err(ApiError::forbidden("wrong organization"));
+    }
+
+    repo.hard_delete_by_id(id)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+    tracing::warn!(
+        stored_secret_id = %id,
+        path = %existing.path,
+        version = existing.version,
+        "stored secret version permanently purged"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "stored secret version permanently deleted" })))
 }
