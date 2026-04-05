@@ -312,6 +312,25 @@ pub struct JobRunPipelineContext {
     pub definition: serde_json::Value,
 }
 
+/// Rows for the operator job queue: concrete `job_runs` waiting to start, or a **run** that is
+/// still `pending`/`queued` before any `job_runs` exist (engine has not scheduled jobs yet).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct JobQueueItemRow {
+    pub job_run_id: Option<Uuid>,
+    pub run_id: Uuid,
+    pub job_id: Option<Uuid>,
+    pub job_name: String,
+    pub status: JobStatus,
+    pub attempt: i32,
+    pub job_run_created_at: DateTime<Utc>,
+    pub run_number: i64,
+    pub run_status: RunStatus,
+    pub pipeline_id: Uuid,
+    pub pipeline_name: String,
+    pub project_id: Uuid,
+    pub project_slug: String,
+}
+
 /// Repository for job run operations.
 pub struct JobRunRepo<'a> {
     pool: &'a PgPool,
@@ -367,6 +386,93 @@ impl<'a> JobRunRepo<'a> {
         .fetch_optional(self.pool)
         .await?
         .ok_or_else(|| StoreError::not_found("job_run", id))
+    }
+
+    /// List queued work: `job_runs` in `pending`/`queued`, plus **runs** in `pending`/`queued` with no
+    /// `job_runs` yet (so admins still see backlog while the executor is starting).
+    pub async fn list_job_queue_for_org(
+        &self,
+        org_id: OrganizationId,
+        limit: i64,
+    ) -> Result<Vec<JobQueueItemRow>> {
+        let org_u = org_id.as_uuid();
+
+        let rows = sqlx::query_as::<_, JobQueueItemRow>(
+            r#"
+            SELECT
+                q.job_run_id,
+                q.run_id,
+                q.job_id,
+                q.job_name,
+                q.status,
+                q.attempt,
+                q.job_run_created_at,
+                q.run_number,
+                q.run_status,
+                q.pipeline_id,
+                q.pipeline_name,
+                q.project_id,
+                q.project_slug
+            FROM (
+                (
+                    SELECT
+                        jr.id AS job_run_id,
+                        jr.run_id,
+                        jr.job_id,
+                        jr.job_name,
+                        jr.status,
+                        jr.attempt,
+                        jr.created_at AS job_run_created_at,
+                        r.run_number,
+                        r.status AS run_status,
+                        p.id AS pipeline_id,
+                        p.name AS pipeline_name,
+                        pr.id AS project_id,
+                        pr.slug AS project_slug
+                    FROM job_runs jr
+                    INNER JOIN runs r ON r.id = jr.run_id
+                    INNER JOIN pipelines p ON p.id = r.pipeline_id
+                    INNER JOIN projects pr ON pr.id = p.project_id
+                    WHERE pr.org_id = $1
+                      AND pr.deleted_at IS NULL
+                      AND jr.status IN ('pending', 'queued')
+                      AND r.status IN ('pending', 'queued', 'running')
+                )
+                UNION ALL
+                (
+                    SELECT
+                        NULL::uuid AS job_run_id,
+                        r.id AS run_id,
+                        NULL::uuid AS job_id,
+                        '(run pending — no job rows yet)'::text AS job_name,
+                        'pending'::run_status AS status,
+                        0 AS attempt,
+                        r.created_at AS job_run_created_at,
+                        r.run_number,
+                        r.status AS run_status,
+                        p.id AS pipeline_id,
+                        p.name AS pipeline_name,
+                        pr.id AS project_id,
+                        pr.slug AS project_slug
+                    FROM runs r
+                    INNER JOIN pipelines p ON p.id = r.pipeline_id
+                    INNER JOIN projects pr ON pr.id = p.project_id
+                    WHERE pr.org_id = $1
+                      AND pr.deleted_at IS NULL
+                      AND r.status IN ('pending', 'queued')
+                      AND NOT EXISTS (SELECT 1 FROM job_runs jr WHERE jr.run_id = r.id)
+                )
+            ) AS q
+            ORDER BY q.job_run_created_at ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(org_u)
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     /// List job runs for a run.

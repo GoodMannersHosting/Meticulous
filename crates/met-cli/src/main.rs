@@ -9,7 +9,10 @@ mod context;
 mod output;
 
 use api_client::ApiClient;
-use commands::{agents, auth as auth_cmd, config as config_cmd, debug, org, pipelines, project, runs, secret, variable, workflow};
+use commands::{
+    admin, agents, auth as auth_cmd, config as config_cmd, debug, org, pipelines, project, runs,
+    secret, variable, workflow,
+};
 use config::CliConfig;
 use context::ResolvedContext;
 
@@ -106,6 +109,11 @@ enum Commands {
     Debug {
         #[command(subcommand)]
         action: DebugCommands,
+    },
+    /// Organization administration (requires admin API access)
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
     },
     /// CLI configuration
     Config {
@@ -414,6 +422,18 @@ enum JoinTokenCommands {
     },
 }
 
+// ─── Admin ───────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum AdminCommands {
+    /// List job runs waiting for an agent (`pending` / `queued`)
+    JobQueue {
+        /// Maximum rows (capped at 500)
+        #[arg(short, long, default_value_t = 200)]
+        limit: u32,
+    },
+}
+
 // ─── Debug ───────────────────────────────────────────────────────────
 
 #[derive(Subcommand)]
@@ -691,6 +711,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     agents::join_token_revoke(&client, &id, format).await
                 }
             },
+        },
+
+        // ── Admin ─────────────────────────────────────────────
+        Commands::Admin { action } => match action {
+            AdminCommands::JobQueue { limit } => admin::job_queue(&client, limit, format).await,
         },
 
         // ── Debug ────────────────────────────────────────────

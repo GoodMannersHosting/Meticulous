@@ -20,7 +20,7 @@ use met_core::models::{
     PermissionRole, UpdateAuthProvider, User, UserRole, generate_join_token,
 };
 use met_store::repos::{
-    AgentRepo, AuthProviderRepo, GroupRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo,
+    AuthProviderRepo, GroupRepo, JoinTokenRepo, JobRunRepo, ProjectRepo, RoleRepo, UserRepo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -115,6 +115,7 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_join_token),
         )
         .route("/admin/ops/jobs-dlq", get(list_jobs_dlq))
+        .route("/admin/ops/job-queue", get(list_job_queue))
 }
 
 // ============================================================================
@@ -160,6 +161,73 @@ async fn list_jobs_dlq(
         .await
         .map_err(|e| ApiError::internal(format!("DLQ fetch failed: {e}")))?;
     Ok(Json(JobsDlqListResponse { messages }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JobQueueQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobQueueEntryResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<String>,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    pub job_name: String,
+    pub job_status: String,
+    pub attempt: i32,
+    pub job_run_created_at: String,
+    pub run_number: i64,
+    pub run_status: String,
+    pub pipeline_id: String,
+    pub pipeline_name: String,
+    pub project_id: String,
+    pub project_slug: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobQueueListResponse {
+    pub count: usize,
+    pub data: Vec<JobQueueEntryResponse>,
+}
+
+#[instrument(skip(state))]
+async fn list_job_queue(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Query(q): Query<JobQueueQuery>,
+) -> ApiResult<Json<JobQueueListResponse>> {
+    require_admin(&admin)?;
+    let limit = i64::from(q.limit.unwrap_or(200).min(500));
+    let repo = JobRunRepo::new(state.db());
+    let rows = repo
+        .list_job_queue_for_org(admin.org_id, limit)
+        .await
+        .map_err(|e| ApiError::internal(format!("job queue query failed: {e}")))?;
+
+    let data: Vec<JobQueueEntryResponse> = rows
+        .into_iter()
+        .map(|r| JobQueueEntryResponse {
+            job_run_id: r.job_run_id.map(|u| u.to_string()),
+            run_id: r.run_id.to_string(),
+            job_id: r.job_id.map(|u| u.to_string()),
+            job_name: r.job_name,
+            job_status: format!("{:?}", r.status).to_lowercase(),
+            attempt: r.attempt,
+            job_run_created_at: r.job_run_created_at.to_rfc3339(),
+            run_number: r.run_number,
+            run_status: format!("{:?}", r.run_status).to_lowercase(),
+            pipeline_id: r.pipeline_id.to_string(),
+            pipeline_name: r.pipeline_name,
+            project_id: r.project_id.to_string(),
+            project_slug: r.project_slug,
+        })
+        .collect();
+
+    let count = data.len();
+    Ok(Json(JobQueueListResponse { count, data }))
 }
 
 // ============================================================================

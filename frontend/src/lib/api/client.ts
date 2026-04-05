@@ -386,6 +386,27 @@ export const apiMethods = {
 				delete: (providerId: string, mappingId: string) => 
 					api.delete<{ message: string }>(`/admin/auth-providers/${providerId}/group-mappings/${mappingId}`)
 			}
+		},
+		ops: {
+			jobQueue: (params?: { limit?: number }) =>
+				api.get<{ count: number; data: JobQueueEntry[] }>('/admin/ops/job-queue', { params })
 		}
 	}
 };
+
+/** Admin job queue row (`/admin/ops/job-queue`). */
+export interface JobQueueEntry {
+	job_run_id?: string;
+	run_id: string;
+	job_id?: string;
+	job_name: string;
+	job_status: string;
+	attempt: number;
+	job_run_created_at: string;
+	run_number: number;
+	run_status: string;
+	pipeline_id: string;
+	pipeline_name: string;
+	project_id: string;
+	project_slug: string;
+}

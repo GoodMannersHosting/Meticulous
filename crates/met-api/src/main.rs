@@ -146,32 +146,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error = %e,
                 "met-engine failed to initialize (is NATS up?); pipeline trigger returns 503 until fixed"
             );
-            // #region agent log
-            {
-                use std::io::Write;
-                const AGENT_DEBUG_LOG: &str =
-                    "/home/dan/code/gmh/meticulous/.cursor/debug-79bb16.log";
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                let line = serde_json::json!({
-                    "sessionId": "79bb16",
-                    "timestamp": ts,
-                    "hypothesisId": "H1",
-                    "location": "crates/met-api/src/main.rs:engine_init",
-                    "message": "met-engine init failed",
-                    "data": { "err": e.to_string() }
-                });
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(AGENT_DEBUG_LOG)
-                {
-                    let _ = writeln!(f, "{}", line);
-                }
-            }
-            // #endregion agent log
             (None, Some(e.to_string()))
         }
     };
