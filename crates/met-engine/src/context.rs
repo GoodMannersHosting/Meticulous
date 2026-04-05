@@ -8,6 +8,7 @@ use met_core::ids::{JobId, OrganizationId, PipelineId, ProjectId, RunId};
 use met_parser::{EnvValue, PipelineIR, SecretRef};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 /// Resolved secret value (decrypted).
 #[derive(Clone)]
@@ -49,7 +50,7 @@ struct ExecutionContextInner {
     triggered_by: String,
     commit_sha: Option<String>,
     branch: Option<String>,
-    trace_id: Option<String>,
+    trace_id: String,
 
     variables: RwLock<IndexMap<String, String>>,
     secrets: RwLock<IndexMap<String, ResolvedSecret>>,
@@ -76,9 +77,23 @@ impl ExecutionContext {
         pipeline_ir: PipelineIR,
         triggered_by: impl Into<String>,
     ) -> Self {
+        Self::new_traced(run_id, org_id, pipeline_ir, triggered_by, None)
+    }
+
+    /// Create a context with an optional OpenTelemetry-style trace id string (for events).
+    pub fn new_traced(
+        run_id: RunId,
+        org_id: OrganizationId,
+        pipeline_ir: PipelineIR,
+        triggered_by: impl Into<String>,
+        trace_id: Option<String>,
+    ) -> Self {
         let pipeline_id = pipeline_ir.id;
         let project_id = pipeline_ir.project_id;
         let variables = pipeline_ir.variables.clone();
+        let trace_id = trace_id
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         Self {
             inner: Arc::new(ExecutionContextInner {
@@ -90,7 +105,7 @@ impl ExecutionContext {
                 triggered_by: triggered_by.into(),
                 commit_sha: None,
                 branch: None,
-                trace_id: None,
+                trace_id,
                 variables: RwLock::new(variables),
                 secrets: RwLock::new(IndexMap::new()),
                 artifacts: RwLock::new(IndexMap::new()),
@@ -132,8 +147,13 @@ impl ExecutionContext {
         self.inner.branch.as_deref()
     }
 
-    pub fn trace_id(&self) -> Option<&str> {
-        self.inner.trace_id.as_deref()
+    pub fn trace_id(&self) -> &str {
+        &self.inner.trace_id
+    }
+
+    /// Trace id as UUID for database columns (`runs.trace_id`).
+    pub fn trace_uuid(&self) -> Uuid {
+        Uuid::parse_str(&self.inner.trace_id).unwrap_or_else(|_| Uuid::new_v4())
     }
 
     /// Get a variable value.

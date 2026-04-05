@@ -80,6 +80,7 @@ pub fn router() -> Router<AppState> {
                 .patch(update_join_token)
                 .delete(delete_join_token),
         )
+        .route("/admin/ops/jobs-dlq", get(list_jobs_dlq))
 }
 
 // ============================================================================
@@ -91,6 +92,40 @@ fn require_admin(user: &crate::extractors::CurrentUser) -> ApiResult<()> {
         return Err(ApiError::forbidden("admin access required"));
     }
     Ok(())
+}
+
+// ============================================================================
+// Ops / JetStream
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct JobsDlqQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobsDlqListResponse {
+    pub messages: Vec<serde_json::Value>,
+}
+
+#[instrument(skip(state))]
+async fn list_jobs_dlq(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Query(q): Query<JobsDlqQuery>,
+) -> ApiResult<Json<JobsDlqListResponse>> {
+    require_admin(&admin)?;
+    let Some(nats) = state.nats_ops.as_ref() else {
+        return Err(ApiError::unavailable(
+            "NATS is not connected; job DLQ preview is unavailable",
+        ));
+    };
+    let limit = q.limit.unwrap_or(50);
+    let messages = nats
+        .fetch_recent_jobs_dlq(admin.org_id, limit)
+        .await
+        .map_err(|e| ApiError::internal(format!("DLQ fetch failed: {e}")))?;
+    Ok(Json(JobsDlqListResponse { messages }))
 }
 
 // ============================================================================

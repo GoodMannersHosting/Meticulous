@@ -30,9 +30,13 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod heartbeat;
+pub mod job_claim;
 pub mod process_watcher;
 pub mod registration;
+pub mod seccomp_exec;
 pub mod security;
+pub mod step_log;
+pub mod telemetry;
 
 pub use config::{AgentConfig, JoinTokenSource};
 pub use error::{AgentError, Result};

@@ -5,19 +5,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_nats::jetstream::consumer::pull::Stream as PullStream;
 use chrono::Utc;
+use async_nats::jetstream::AckKind;
 use futures::StreamExt;
 use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient, ExecutedBinary as ProtoExecutedBinary,
-    JobAssignment, JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange,
-    JobStatusUpdate, SecretMaterialKind, StepSpec, StepStatusUpdate,
+    JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange, JobStatusUpdate,
+    SecretMaterialKind, StepStatusUpdate,
 };
-use met_proto::common::v1::{RunStatus, StepKind, Timestamp};
+use met_proto::common::v1::{RunStatus, Timestamp};
 use prost::Message;
-use sha2::{Digest, Sha256};
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{watch, RwLock};
+use tokio_stream;
 use tonic::transport::Channel;
+use tonic::Request;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::backend::ExecutionBackend;
@@ -26,6 +27,7 @@ use crate::error::{AgentError, Result};
 use crate::heartbeat::HeartbeatState;
 use crate::process_watcher::{merge_execution_metadata, JobExecutionMetadata, ProcessWatcher};
 use crate::security::JobPki;
+use crate::step_log::{step_log_spool_path, StepLogSession};
 
 /// Job executor that pulls jobs from NATS and executes them.
 pub struct JobExecutor {
@@ -156,18 +158,26 @@ impl JobExecutor {
                 msg = messages.next() => {
                     match msg {
                         Some(Ok(message)) => {
-                            match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref()) {
+                            match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref())
+                            {
                                 Ok(job) => {
-                                    if let Err(e) = message.ack().await {
-                                        warn!(error = %e, "failed to ack message");
-                                    }
-
-                                    if let Err(e) = self.execute_job(job).await {
-                                        error!(error = %e, "job execution failed");
+                                    let exec = self.execute_job(job).await;
+                                    match exec {
+                                        Ok(()) => {
+                                            if let Err(e) = message.ack().await {
+                                                warn!(error = %e, "failed to ack message after job success");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, "job execution failed; NAK for redelivery");
+                                            let _ = message
+                                                .ack_with(AckKind::Nak(None))
+                                                .await;
+                                        }
                                     }
                                 }
                                 Err(e) => {
-                                    warn!(error = %e, "failed to decode job dispatch");
+                                    warn!(error = %e, "failed to decode job dispatch; ACK to drop poison payload");
                                     let _ = message.ack().await;
                                 }
                             }
@@ -207,6 +217,14 @@ impl JobExecutor {
             "executing job"
         );
 
+        if crate::job_claim::job_successfully_completed(&self.config, &job.job_run_id).await {
+            info!(
+                job_run_id = %job.job_run_id,
+                "skipping job: already completed successfully on this agent (idempotent)"
+            );
+            return Ok(());
+        }
+
         // Update heartbeat state
         {
             let mut state = self.heartbeat_state.write().await;
@@ -236,13 +254,15 @@ impl JobExecutor {
 
         // Execute steps sequentially
         let mut job_success = true;
+        let mut last_exit_code: Option<i32> = None;
         for step in &job.steps {
             let step_result = self
-                .execute_step(step, &workspace, &job.variables, &secrets)
+                .execute_step(&job.job_run_id, step, &workspace, &job.variables, &secrets)
                 .await;
 
             match step_result {
                 Ok((exit_code, metadata)) => {
+                    last_exit_code = Some(exit_code);
                     // Collect step metadata
                     if let Some(meta) = metadata {
                         step_metadata.push((step.step_id.clone(), meta));
@@ -297,8 +317,28 @@ impl JobExecutor {
         } else {
             RunStatus::Failed
         };
-        self.report_job_status(&job.job_run_id, final_status, Some(0), None, job_metadata)
-            .await?;
+        let job_exit = if job_success {
+            Some(0)
+        } else {
+            last_exit_code.or(Some(1))
+        };
+        self.report_job_status(
+            &job.job_run_id,
+            final_status,
+            job_exit,
+            None,
+            job_metadata,
+        )
+        .await?;
+
+        if job_success {
+            if let Err(e) =
+                crate::job_claim::record_job_successful_completion(&self.config, &job.job_run_id)
+                    .await
+            {
+                warn!(error = %e, "failed to persist local job completion idempotency marker");
+            }
+        }
 
         // Cleanup workspace
         self.cleanup_workspace(&workspace).await?;
@@ -327,6 +367,7 @@ impl JobExecutor {
     #[instrument(skip(self, step, workspace, variables, secrets), fields(step_name = %step.name))]
     async fn execute_step(
         &mut self,
+        job_run_id: &str,
         step: &met_proto::controller::v1::StepSpec,
         workspace: &Path,
         variables: &HashMap<String, String>,
@@ -334,8 +375,23 @@ impl JobExecutor {
     ) -> Result<(i32, Option<JobExecutionMetadata>)> {
         info!(step = %step.name, "executing step");
 
+        let step_run_id = step.step_run_id.as_str();
+
+        let spool_path = step_log_spool_path(workspace, &step.step_run_id);
+        let log_session = StepLogSession::spawn(
+            self.client.clone(),
+            job_run_id.to_string(),
+            step.step_run_id.clone(),
+            spool_path,
+            128,
+            128,
+        )?;
+        let log_pipe = log_session
+            .pipe()
+            .ok_or_else(|| AgentError::Internal("step log pipe not initialized".to_string()))?;
+
         // Report step started
-        self.report_step_status(&step.step_run_id, &step.step_id, RunStatus::Running, None, None)
+        self.report_step_status(step_run_id, job_run_id, RunStatus::Running, None, None)
             .await?;
 
         // Build environment
@@ -346,6 +402,8 @@ impl JobExecutor {
         // Convert to backend step spec
         let backend_step = crate::backend::StepSpec {
             step_id: step.step_id.clone(),
+            step_run_id: step.step_run_id.clone(),
+            step_sequence: step.sequence,
             name: step.name.clone(),
             command: step.command.clone(),
             image: step.image.clone(),
@@ -358,11 +416,31 @@ impl JobExecutor {
         // Create a process watcher for this step
         let mut watcher = ProcessWatcher::new();
 
-        // Execute with process watching
+        // Execute with process watching and live log shipping
         let result = self
             .backend
-            .execute_with_watcher(&backend_step, workspace, &mut watcher)
+            .execute_with_watcher(
+                &backend_step,
+                workspace,
+                &mut watcher,
+                Some(&log_pipe),
+            )
             .await;
+
+        let log_finish = log_session.finish().await;
+        if let Err(log_err) = log_finish {
+            if result.is_ok() {
+                self.report_step_status(
+                    step_run_id,
+                    job_run_id,
+                    RunStatus::Failed,
+                    None,
+                    Some(log_err.to_string()),
+                )
+                .await?;
+            }
+            return Err(log_err);
+        }
 
         match result {
             Ok(step_result) => {
@@ -373,8 +451,8 @@ impl JobExecutor {
                     RunStatus::Failed
                 };
                 self.report_step_status(
-                    &step.step_run_id,
-                    &step.step_id,
+                    step_run_id,
+                    job_run_id,
                     status,
                     Some(exit_code),
                     None,
@@ -392,8 +470,8 @@ impl JobExecutor {
             }
             Err(e) => {
                 self.report_step_status(
-                    &step.step_run_id,
-                    &step.step_id,
+                    step_run_id,
+                    job_run_id,
                     RunStatus::Failed,
                     None,
                     Some(e.to_string()),
@@ -553,29 +631,32 @@ impl JobExecutor {
         execution_metadata: Option<JobExecutionMetadata>,
     ) -> Result<()> {
         // Convert execution metadata to protobuf format
-        let proto_metadata = execution_metadata.map(|meta| ProtoJobExecutionMetadata {
-            job_run_id: job_run_id.to_string(),
-            executed_binaries: meta
-                .executed_binaries
-                .into_iter()
-                .map(|b| ProtoExecutedBinary {
-                    path: b.path,
-                    sha256: b.sha256,
-                    execution_count: b.execution_count,
-                    first_executed_at: Some(Timestamp {
-                        seconds: b.first_executed_at.timestamp(),
-                        nanos: 0,
-                    }),
-                    last_executed_at: Some(Timestamp {
-                        seconds: b.last_executed_at.timestamp(),
-                        nanos: 0,
-                    }),
-                    step_ids: b.step_ids,
-                })
-                .collect(),
-            total_processes_spawned: meta.total_processes_spawned,
-            execution_tree_depth: meta.execution_tree_depth,
-            unique_binaries_count: 0, // Will be set from executed_binaries.len()
+        let proto_metadata = execution_metadata.map(|meta| {
+            let unique_binaries_count = meta.executed_binaries.len() as u32;
+            ProtoJobExecutionMetadata {
+                job_run_id: job_run_id.to_string(),
+                executed_binaries: meta
+                    .executed_binaries
+                    .into_iter()
+                    .map(|b| ProtoExecutedBinary {
+                        path: b.path,
+                        sha256: b.sha256,
+                        execution_count: b.execution_count,
+                        first_executed_at: Some(Timestamp {
+                            seconds: b.first_executed_at.timestamp(),
+                            nanos: 0,
+                        }),
+                        last_executed_at: Some(Timestamp {
+                            seconds: b.last_executed_at.timestamp(),
+                            nanos: 0,
+                        }),
+                        step_ids: b.step_ids,
+                    })
+                    .collect(),
+                total_processes_spawned: meta.total_processes_spawned,
+                execution_tree_depth: meta.execution_tree_depth,
+                unique_binaries_count,
+            }
         });
 
         let update = JobStatusUpdate {
@@ -588,15 +669,12 @@ impl JobExecutor {
                 nanos: 0,
             }),
             execution_metadata: proto_metadata,
+            agent_id: Some(self.identity.agent_id.clone()),
         };
 
-        // Would stream this in production
-        debug!(
-            job_run_id,
-            status = ?status,
-            has_metadata = update.execution_metadata.is_some(),
-            "reported job status"
-        );
+        self.client
+            .report_job_status(Request::new(tokio_stream::iter(vec![update])))
+            .await?;
 
         Ok(())
     }
@@ -622,8 +700,9 @@ impl JobExecutor {
             }),
         };
 
-        // Would stream this in production
-        debug!(step_run_id, status = ?status, "reported step status");
+        self.client
+            .report_step_status(Request::new(tokio_stream::iter(vec![update])))
+            .await?;
 
         Ok(())
     }

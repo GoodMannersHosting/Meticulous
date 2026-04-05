@@ -68,7 +68,7 @@ pub use cache::{CacheBackend, CacheKey, CacheLookupResult, CacheManager, MemoryC
 pub use context::{ArtifactRef, CacheHit, ExecutionContext, ResolvedSecret};
 pub use error::{EngineError, Result};
 pub use events::{subjects as event_subjects, EventBroadcaster};
-pub use executor::{topological_order, ExecutionResult, Executor, ExecutorConfig};
+pub use executor::{topological_order, ExecutionResult, Executor, ExecutorConfig, RunStartKind};
 pub use log_streaming::{LogChunk, LogStreamRelay};
 pub use persistence::{MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
 pub use retry::{RetryExecutor, RetryPolicy, RetryState};
@@ -129,11 +129,15 @@ impl Engine {
 
         let cache = Arc::new(CacheManager::new(MemoryCache::new()));
 
+        let persistence: Arc<dyn RunPersistence> =
+            Arc::new(PostgresRunPersistence::new(config.pool.clone()));
+
         let scheduler = Arc::new(Scheduler::new(
-            jetstream,
+            jetstream.clone(),
             config.pool.clone(),
             events.clone(),
             config.scheduler,
+            persistence.clone(),
         ));
 
         let builtin_stored_crypto = Self::make_builtin_crypto(
@@ -148,6 +152,8 @@ impl Engine {
             config.pool.clone(),
             config.executor,
             builtin_stored_crypto,
+            persistence,
+            jetstream,
         ));
 
         info!("engine initialized successfully");
@@ -191,11 +197,14 @@ impl Engine {
 
         let cache = Arc::new(CacheManager::new(cache_backend));
 
+        let persistence: Arc<dyn RunPersistence> = Arc::new(PostgresRunPersistence::new(pool.clone()));
+
         let scheduler = Arc::new(Scheduler::new(
-            jetstream,
+            jetstream.clone(),
             pool.clone(),
             events.clone(),
             scheduler_config,
+            persistence.clone(),
         ));
 
         let builtin_stored_crypto = Self::make_builtin_crypto(None, None);
@@ -207,6 +216,8 @@ impl Engine {
             pool.clone(),
             executor_config,
             builtin_stored_crypto,
+            persistence,
+            jetstream,
         ));
 
         Ok(EngineWithCache {
@@ -235,14 +246,41 @@ impl Engine {
                 run_id,
                 ctx.pipeline_id(),
                 triggered_by,
-                ctx.trace_id(),
+                Some(ctx.trace_id()),
             )
             .await
         {
             tracing::warn!(error = %e, "Failed to broadcast run queued event");
         }
 
-        self.executor.execute(ctx).await
+        self.executor.execute(ctx, RunStartKind::New).await
+    }
+
+    /// Execute using a `runs` row that already exists (for example created by the REST API).
+    #[instrument(skip(self, pipeline), fields(pipeline = %pipeline.name, run_id = %run_id))]
+    pub async fn execute_with_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        pipeline: PipelineIR,
+        triggered_by: &str,
+    ) -> Result<ExecutionResult> {
+        let ctx = ExecutionContext::new(run_id, org_id, pipeline, triggered_by);
+
+        if let Err(e) = self
+            .events
+            .run_queued(
+                run_id,
+                ctx.pipeline_id(),
+                triggered_by,
+                Some(ctx.trace_id()),
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "Failed to broadcast run queued event");
+        }
+
+        self.executor.execute(ctx, RunStartKind::Existing).await
     }
 
     /// Get a handle to cancel a running pipeline.
@@ -282,7 +320,19 @@ impl<C: CacheBackend> EngineWithCache<C> {
     ) -> Result<ExecutionResult> {
         let run_id = RunId::new();
         let ctx = ExecutionContext::new(run_id, org_id, pipeline, triggered_by);
-        self.executor.execute(ctx).await
+        self.executor.execute(ctx, RunStartKind::New).await
+    }
+
+    /// Execute with a pre-created `runs` row.
+    pub async fn execute_with_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        pipeline: PipelineIR,
+        triggered_by: &str,
+    ) -> Result<ExecutionResult> {
+        let ctx = ExecutionContext::new(run_id, org_id, pipeline, triggered_by);
+        self.executor.execute(ctx, RunStartKind::Existing).await
     }
 }
 
@@ -363,7 +413,7 @@ impl CompletionListener {
     }
 }
 
-fn parse_completion_message(payload: &[u8]) -> Result<JobCompletionNotification> {
+pub(crate) fn parse_completion_message(payload: &[u8]) -> Result<JobCompletionNotification> {
     use met_proto::controller::v1::JobCompletion;
     use prost::Message;
 

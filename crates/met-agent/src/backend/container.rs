@@ -1,5 +1,6 @@
 //! Container execution backend for Linux.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -7,11 +8,12 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
-use super::{ExecutionBackend, StepResult, StepSpec};
+use super::{poll_watcher_emit_telemetry, ExecutionBackend, StepResult, StepSpec};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
+use crate::step_log::StepLogPipe;
 
 /// Container runtime type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +168,7 @@ impl ExecutionBackend for ContainerBackend {
         step: &StepSpec,
         workspace: &Path,
         watcher: &mut ProcessWatcher,
+        logs: Option<&StepLogPipe>,
     ) -> Result<StepResult> {
         if step.image.is_empty() {
             return Err(AgentError::ContainerRuntime(
@@ -174,6 +177,12 @@ impl ExecutionBackend for ContainerBackend {
         }
 
         let start = Instant::now();
+
+        let workspace_canon = tokio::fs::canonicalize(workspace)
+            .await
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let mut runtime_budget = crate::telemetry::MAX_RUNTIME_SCRIPT_BYTES_PER_STEP;
+        let mut runtime_seen = HashSet::new();
 
         debug!(
             runtime = ?self.runtime,
@@ -204,29 +213,46 @@ impl ExecutionBackend for ContainerBackend {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Spawn tasks to read output
         let stdout_handle = if let Some(stdout) = stdout {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    info!(step = %step_name, "[stdout] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stdout_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
 
         let stderr_handle = if let Some(stderr) = stderr {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    warn!(step = %step_name, "[stderr] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stderr_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
@@ -264,16 +290,29 @@ impl ExecutionBackend for ContainerBackend {
                     }
                 }
                 _ = tokio::time::sleep(poll_interval) => {
-                    // Poll for new child processes
-                    if let Err(e) = watcher.poll().await {
-                        trace!(error = %e, "process watcher poll error");
-                    }
+                    poll_watcher_emit_telemetry(
+                        watcher,
+                        logs,
+                        step,
+                        &workspace_canon,
+                        &mut runtime_budget,
+                        &mut runtime_seen,
+                    )
+                    .await?;
                 }
             }
         };
 
         // Final poll to catch any remaining processes
-        let _ = watcher.poll().await;
+        poll_watcher_emit_telemetry(
+            watcher,
+            logs,
+            step,
+            &workspace_canon,
+            &mut runtime_budget,
+            &mut runtime_seen,
+        )
+        .await?;
 
         // Wait for output tasks
         if let Some(h) = stdout_handle {

@@ -104,4 +104,8 @@ pub enum AgentError {
     /// Internal error.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Log shipping to controller failed or the stream closed unexpectedly.
+    #[error("log stream: {0}")]
+    LogStream(String),
 }

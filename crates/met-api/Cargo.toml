@@ -19,6 +19,7 @@ met-core = { workspace = true }
 met-store = { workspace = true }
 met-secrets = { workspace = true }
 met-engine = { workspace = true }
+met-parser = { workspace = true, features = ["database"] }
 met-controller = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
@@ -38,6 +39,7 @@ rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }

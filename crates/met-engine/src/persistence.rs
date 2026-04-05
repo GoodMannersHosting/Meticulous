@@ -25,6 +25,14 @@ pub trait RunPersistence: Send + Sync {
         trace_id: uuid::Uuid,
     ) -> Result<()>;
 
+    /// Backfill org/trace on a run row created elsewhere (e.g. API `RunRepo::create`).
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
+    ) -> Result<()>;
+
     /// Update run status.
     async fn update_run_status(&self, run_id: RunId, status: RunStatus) -> Result<()>;
 
@@ -155,6 +163,32 @@ impl RunPersistence for PostgresRunPersistence {
         .map_err(met_store::StoreError::from)?;
 
         debug!(%run_id, "created run record");
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE runs
+            SET org_id = COALESCE(org_id, $2),
+                trace_id = COALESCE(trace_id, $3)
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(org_id.as_uuid())
+        .bind(trace_id)
+        .execute(&self.pool)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+        debug!(%run_id, "prepared existing run row for engine");
         Ok(())
     }
 
@@ -577,6 +611,22 @@ impl RunPersistence for MemoryRunPersistence {
             finished_at: None,
             error_message: None,
         });
+        Ok(())
+    }
+
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
+    ) -> Result<()> {
+        let mut runs = self.runs.lock().unwrap();
+        if let Some(run) = runs.iter_mut().find(|r| r.id == run_id) {
+            run.org_id = org_id;
+            if let Some(t) = trace_id {
+                run.trace_id = t;
+            }
+        }
         Ok(())
     }
 

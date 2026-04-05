@@ -1,13 +1,14 @@
 //! Execution backends for running steps.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::process_watcher::{ExecutedBinaryRecord, ProcessWatcher};
+use crate::step_log::StepLogPipe;
 
 #[cfg(target_os = "linux")]
 mod container;
@@ -21,6 +22,8 @@ pub use native::NativeBackend;
 #[derive(Debug, Clone)]
 pub struct StepSpec {
     pub step_id: String,
+    pub step_run_id: String,
+    pub step_sequence: i32,
     pub name: String,
     pub command: String,
     pub image: String,
@@ -53,6 +56,29 @@ impl StepResult {
     }
 }
 
+pub(crate) async fn poll_watcher_emit_telemetry(
+    watcher: &ProcessWatcher,
+    logs: Option<&StepLogPipe>,
+    step: &StepSpec,
+    workspace_canon: &Path,
+    runtime_budget: &mut u64,
+    runtime_seen: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let discovered = watcher.poll().await?;
+    if let Some(pipe) = logs {
+        crate::telemetry::emit_for_discovered_processes(
+            pipe,
+            step.step_sequence,
+            &discovered,
+            workspace_canon,
+            runtime_budget,
+            runtime_seen,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Trait for step execution backends.
 #[async_trait]
 pub trait ExecutionBackend: Send + Sync {
@@ -62,12 +88,15 @@ pub trait ExecutionBackend: Send + Sync {
         step: &StepSpec,
         workspace: &Path,
         watcher: &mut ProcessWatcher,
+        logs: Option<&StepLogPipe>,
     ) -> Result<StepResult>;
 
     /// Execute a step and return the exit code (simple interface without process watching).
     async fn execute(&self, step: &StepSpec, workspace: &Path) -> Result<i32> {
         let mut watcher = ProcessWatcher::new();
-        let result = self.execute_with_watcher(step, workspace, &mut watcher).await?;
+        let result = self
+            .execute_with_watcher(step, workspace, &mut watcher, None)
+            .await?;
         Ok(result.exit_code)
     }
 

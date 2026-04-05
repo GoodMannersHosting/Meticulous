@@ -39,6 +39,9 @@ pub struct ApiConfig {
     pub agent_stale_after_secs: u64,
     /// Interval for the stale-agent sweep background task.
     pub agent_stale_sweep_interval_secs: u64,
+
+    /// Maximum pipeline runs executing in-process inside `met-api` at once.
+    pub max_concurrent_engine_runs: usize,
 }
 
 impl Default for ApiConfig {
@@ -54,6 +57,7 @@ impl Default for ApiConfig {
             auth: AuthConfig::default(),
             agent_stale_after_secs: 90,
             agent_stale_sweep_interval_secs: 30,
+            max_concurrent_engine_runs: 8,
         }
     }
 }
@@ -68,6 +72,7 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             agent_stale_after_secs: http.agent_stale_after_secs,
             agent_stale_sweep_interval_secs: http.agent_stale_sweep_interval_secs,
             auth: AuthConfig::default(),
+            max_concurrent_engine_runs: 8,
             ..Default::default()
         }
     }

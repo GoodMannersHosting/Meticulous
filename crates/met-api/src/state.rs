@@ -4,14 +4,17 @@
 //! shared resources like database pools, configuration, and service clients.
 
 use crate::config::ApiConfig;
+use met_controller::nats::NatsDispatcher;
+use met_engine::Engine;
 use met_secrets::BuiltinStoredCrypto;
 use met_store::PgPool;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
-/// Shared application state for all API handlers.
+/// Shared state for all API handlers.
 ///
 /// This struct is cloned for each request, so all fields use `Arc` or are `Clone`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppState {
     /// PostgreSQL connection pool.
     pub db: PgPool,
@@ -21,15 +24,44 @@ pub struct AppState {
 
     /// Encrypts stored secret payloads (same master key as engine/controller).
     pub stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
+
+    /// Shared pipeline engine (NATS + Postgres); unset if initialization failed.
+    pub engine: Option<Arc<Engine>>,
+
+    /// Limits concurrent in-process pipeline runs started from the API.
+    pub engine_run_semaphore: Arc<Semaphore>,
+
+    /// Second NATS connection for admin/ops (e.g. JOBS_DLQ preview). Does not receive advisories.
+    pub nats_ops: Option<Arc<NatsDispatcher>>,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("engine_initialized", &self.engine.is_some())
+            .field("nats_ops", &self.nats_ops.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AppState {
     /// Create a new `AppState` instance.
-    pub fn new(db: PgPool, config: ApiConfig, stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>) -> Self {
+    pub fn new(
+        db: PgPool,
+        config: ApiConfig,
+        stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
+        engine: Option<Arc<Engine>>,
+        max_concurrent_engine_runs: usize,
+        nats_ops: Option<Arc<NatsDispatcher>>,
+    ) -> Self {
+        let permits = max_concurrent_engine_runs.max(1);
         Self {
             db,
             config: Arc::new(config),
             stored_secret_crypto,
+            engine,
+            engine_run_semaphore: Arc::new(Semaphore::new(permits)),
+            nats_ops,
         }
     }
 

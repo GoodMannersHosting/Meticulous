@@ -11,6 +11,7 @@ use met_core::{
 };
 use met_store::repos::PipelineRepo;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::instrument;
 use utoipa::ToSchema;
 
@@ -254,16 +255,70 @@ async fn trigger_pipeline(
     Path(id): Path<PipelineId>,
     Json(_req): Json<TriggerPipelineRequest>,
 ) -> ApiResult<Json<TriggerPipelineResponse>> {
-    use met_store::repos::RunRepo;
+    use met_core::ids::RunId;
+    use met_parser::{DatabaseWorkflowProvider, PipelineParser};
+    use met_store::repos::{ProjectRepo, RunRepo};
+
+    let Some(engine) = state.engine.as_ref().map(Arc::clone) else {
+        return Err(ApiError::unavailable(
+            "pipeline engine is not available (NATS connection failed at startup)",
+        ));
+    };
 
     let pipeline_repo = PipelineRepo::new(state.db());
-    let _pipeline = pipeline_repo.get(id).await?;
+    let pipeline = pipeline_repo.get(id).await?;
+
+    let project = ProjectRepo::new(state.db())
+        .get(pipeline.project_id)
+        .await?;
+    let org_id = project.org_id;
+
+    let yaml = serde_yaml::to_string(&pipeline.definition).map_err(|e| {
+        ApiError::bad_request(format!("pipeline definition is not representable as YAML: {e}"))
+    })?;
+
+    let wf_provider = DatabaseWorkflowProvider::new(state.db().clone(), org_id.as_uuid());
+    let mut parser = PipelineParser::new(&wf_provider);
+    let mut pipeline_ir = parser
+        .parse(&yaml)
+        .await
+        .map_err(|diags| {
+            ApiError::bad_request(format!(
+                "invalid pipeline definition: {}",
+                diags
+                    .iter()
+                    .map(|d| d.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+        })?;
+
+    pipeline_ir.id = pipeline.id;
+    pipeline_ir.project_id = Some(pipeline.project_id);
 
     let run_repo = RunRepo::new(state.db());
     let run = run_repo.create(id, None, &user.email).await?;
+    let run_id: RunId = run.id;
+
+    let permit = state
+        .engine_run_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::unavailable("engine shutdown"))?;
+
+    tokio::spawn(async move {
+        let _run_capacity = permit;
+        if let Err(e) = engine
+            .execute_with_existing_run(run_id, org_id, pipeline_ir, "api")
+            .await
+        {
+            tracing::error!(%run_id, error = %e, "pipeline engine run failed");
+        }
+    });
 
     Ok(Json(TriggerPipelineResponse {
-        run_id: run.id,
+        run_id,
         run_number: run.run_number,
         status: format!("{:?}", run.status).to_lowercase(),
     }))

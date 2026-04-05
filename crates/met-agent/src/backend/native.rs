@@ -1,5 +1,6 @@
 //! Native process execution backend.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -7,11 +8,12 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info};
 
-use super::{ExecutionBackend, StepResult, StepSpec};
+use super::{poll_watcher_emit_telemetry, ExecutionBackend, StepResult, StepSpec};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
+use crate::step_log::StepLogPipe;
 
 /// Native process execution backend for macOS and Windows.
 pub struct NativeBackend {
@@ -69,8 +71,15 @@ impl ExecutionBackend for NativeBackend {
         step: &StepSpec,
         workspace: &Path,
         watcher: &mut ProcessWatcher,
+        logs: Option<&StepLogPipe>,
     ) -> Result<StepResult> {
         let start = Instant::now();
+
+        let workspace_canon = tokio::fs::canonicalize(workspace)
+            .await
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let mut runtime_budget = crate::telemetry::MAX_RUNTIME_SCRIPT_BYTES_PER_STEP;
+        let mut runtime_seen = HashSet::new();
 
         let (shell, args) = self.get_shell_command(step);
 
@@ -139,29 +148,47 @@ impl ExecutionBackend for NativeBackend {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Spawn tasks to read output
+        // Read child output: optional live+spool via `logs`, otherwise discard (never log to agent console).
         let stdout_handle = if let Some(stdout) = stdout {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    info!(step = %step_name, "[stdout] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stdout_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
 
         let stderr_handle = if let Some(stderr) = stderr {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    warn!(step = %step_name, "[stderr] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stderr_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
@@ -199,16 +226,29 @@ impl ExecutionBackend for NativeBackend {
                     }
                 }
                 _ = tokio::time::sleep(poll_interval) => {
-                    // Poll for new child processes
-                    if let Err(e) = watcher.poll().await {
-                        trace!(error = %e, "process watcher poll error");
-                    }
+                    poll_watcher_emit_telemetry(
+                        watcher,
+                        logs,
+                        step,
+                        &workspace_canon,
+                        &mut runtime_budget,
+                        &mut runtime_seen,
+                    )
+                    .await?;
                 }
             }
         };
 
         // Final poll to catch any remaining processes
-        let _ = watcher.poll().await;
+        poll_watcher_emit_telemetry(
+            watcher,
+            logs,
+            step,
+            &workspace_canon,
+            &mut runtime_budget,
+            &mut runtime_seen,
+        )
+        .await?;
 
         // Wait for output tasks
         if let Some(h) = stdout_handle {
@@ -274,6 +314,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test".to_string(),
+            step_run_id: "step-run-1".to_string(),
+            step_sequence: 0,
             name: "echo test".to_string(),
             command: "echo hello".to_string(),
             image: String::new(),
@@ -284,7 +326,7 @@ mod tests {
         };
 
         let result = backend
-            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .execute_with_watcher(&step, &temp_dir, &mut watcher, None)
             .await
             .unwrap();
         assert_eq!(result.exit_code, 0);
@@ -298,6 +340,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test".to_string(),
+            step_run_id: "step-run-2".to_string(),
+            step_sequence: 0,
             name: "exit 42".to_string(),
             command: if cfg!(windows) {
                 "exit /b 42".to_string()
@@ -312,7 +356,7 @@ mod tests {
         };
 
         let result = backend
-            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .execute_with_watcher(&step, &temp_dir, &mut watcher, None)
             .await
             .unwrap();
         assert_eq!(result.exit_code, 42);
@@ -327,6 +371,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-children".to_string(),
+            step_run_id: "step-run-3".to_string(),
+            step_sequence: 0,
             name: "spawn children".to_string(),
             // This command spawns multiple child processes
             command: "echo start && ls /tmp && echo end".to_string(),
@@ -338,7 +384,7 @@ mod tests {
         };
 
         let result = backend
-            .execute_with_watcher(&step, &temp_dir, &mut watcher)
+            .execute_with_watcher(&step, &temp_dir, &mut watcher, None)
             .await
             .unwrap();
 

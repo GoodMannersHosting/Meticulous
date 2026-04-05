@@ -1,6 +1,6 @@
 //! gRPC service implementation for agent communication.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
@@ -10,13 +10,17 @@ use met_core::models::{
     Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
 };
 use met_store::StoreError;
+use met_logging::{Redactor, RedactorConfig};
 use met_proto::agent::v1::{
     agent_service_server::AgentService, DeregisterRequest, DeregisterResponse,
     EncryptedSecretValue, HeartbeatAction, HeartbeatRequest, HeartbeatResponse, JobKeyExchange,
-    JobSecretsPayload, JobStatusAck, JobStatusUpdate, LogAck, LogChunk, RegisterRequest,
+    JobExecutionMetadata as ProtoJobExecMeta, JobSecretsPayload, JobStatusAck, JobStatusUpdate,
+    LogAck, LogChunk, LogStream, RegisterRequest,
     RegisterResponse, SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
 };
 use met_proto::common::v1::RunStatus as ProtoRunStatus;
+use met_proto::common::v1::Timestamp as ProtoTimestamp;
+use met_proto::controller::v1::JobCompletion;
 use met_secrets::pki::encryption::HybridEncryption;
 use met_secrets::BuiltinStoredCrypto;
 use met_objstore::ObjectStore;
@@ -127,6 +131,19 @@ impl AgentServiceImpl {
             ProtoRunStatus::TimedOut => JobStatus::TimedOut,
             ProtoRunStatus::Skipped => JobStatus::Skipped,
             ProtoRunStatus::Unspecified => JobStatus::Pending,
+        }
+    }
+
+    fn job_status_to_proto(status: JobStatus) -> ProtoRunStatus {
+        match status {
+            JobStatus::Pending => ProtoRunStatus::Pending,
+            JobStatus::Queued => ProtoRunStatus::Queued,
+            JobStatus::Running => ProtoRunStatus::Running,
+            JobStatus::Succeeded => ProtoRunStatus::Succeeded,
+            JobStatus::Failed => ProtoRunStatus::Failed,
+            JobStatus::Cancelled => ProtoRunStatus::Cancelled,
+            JobStatus::TimedOut => ProtoRunStatus::TimedOut,
+            JobStatus::Skipped => ProtoRunStatus::Skipped,
         }
     }
 
@@ -627,9 +644,17 @@ impl AgentService for AgentServiceImpl {
             };
 
             let result = match status {
-                JobStatus::Running => job_run_repo
-                    .mark_running(job_run_id, AgentId::new()) // Agent ID should come from context
-                    .await,
+                JobStatus::Running => {
+                    let Some(raw) = update.agent_id.as_deref().filter(|s| !s.is_empty()) else {
+                        return Err(Status::invalid_argument(
+                            "agent_id is required when reporting job running status",
+                        ));
+                    };
+                    let aid: AgentId = raw
+                        .parse()
+                        .map_err(|_| Status::invalid_argument("invalid agent_id"))?;
+                    job_run_repo.mark_running(job_run_id, aid).await
+                }
                 JobStatus::Succeeded => job_run_repo
                     .mark_completed(
                         job_run_id,
@@ -656,37 +681,97 @@ impl AgentService for AgentServiceImpl {
                 _ => job_run_repo.get(job_run_id).await,
             };
 
-            if let Err(e) = result {
-                error!(error = %e, job_run_id = %job_run_id, "failed to update job_run status");
-            } else if status.is_terminal() {
-                // Trigger engine callbacks for terminal statuses via NATS event
-                let job_completed_event = serde_json::json!({
-                    "type": "job.completed",
-                    "job_run_id": job_run_id.to_string(),
-                    "success": status.is_success(),
-                    "exit_code": update.exit_code,
-                    "timestamp": Utc::now().to_rfc3339(),
-                });
+            match result {
+                Ok(ref job_row) if status.is_terminal() => {
+                    if let Some(ref meta) = update.execution_metadata {
+                        let aid = job_row.agent_id.or_else(|| {
+                            update
+                                .agent_id
+                                .as_deref()
+                                .and_then(|s| s.parse().ok())
+                        });
+                        if let Err(e) = persist_run_binaries_for_job(
+                            self.pool.as_ref(),
+                            job_row.run_id,
+                            job_run_id,
+                            aid,
+                            meta,
+                        )
+                        .await
+                        {
+                            warn!(
+                                error = %e,
+                                job_run_id = %job_run_id,
+                                "failed to persist executed binaries from job metadata"
+                            );
+                        }
+                    }
 
-                if let Err(e) = self
-                    .nats
-                    .client()
-                    .publish(
-                        format!("met.engine.callbacks.{}", job_run_id.as_uuid()),
-                        serde_json::to_vec(&job_completed_event)
-                            .unwrap_or_default()
-                            .into(),
-                    )
-                    .await
-                {
-                    warn!(error = %e, "failed to publish job completion callback");
+                    match job_run_repo.get_pipeline_context(job_run_id).await {
+                        Ok(Some(ctx)) => {
+                            let org_id = OrganizationId::from_uuid(ctx.org_id);
+                            let duration_ms = match (job_row.started_at, job_row.finished_at) {
+                                (Some(s), Some(f)) => (f - s).num_milliseconds().max(0) as i64,
+                                _ => 0,
+                            };
+                            let ts = Utc::now();
+                            let completion = JobCompletion {
+                                job_run_id: job_row.id.to_string(),
+                                run_id: job_row.run_id.to_string(),
+                                agent_id: job_row
+                                    .agent_id
+                                    .map(|a| a.to_string())
+                                    .unwrap_or_default(),
+                                status: Self::job_status_to_proto(job_row.status) as i32,
+                                exit_code: job_row.exit_code,
+                                error_message: job_row
+                                    .error_message
+                                    .clone()
+                                    .unwrap_or_default(),
+                                duration_ms,
+                                timestamp: Some(ProtoTimestamp {
+                                    seconds: ts.timestamp(),
+                                    nanos: ts.timestamp_subsec_nanos() as i32,
+                                }),
+                                ..Default::default()
+                            };
+                            if let Err(e) = self
+                                .nats
+                                .publish_job_completion_proto(org_id, &completion)
+                                .await
+                            {
+                                warn!(
+                                    error = %e,
+                                    job_run_id = %job_run_id,
+                                    "failed to publish JobCompletion to JetStream"
+                                );
+                            }
+                        }
+                        Ok(None) => {
+                            warn!(
+                                job_run_id = %job_run_id,
+                                "skipping JobCompletion publish: no pipeline context for job run"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                job_run_id = %job_run_id,
+                                "get_pipeline_context failed for JobCompletion"
+                            );
+                        }
+                    }
+
+                    let pool = Arc::clone(&self.pool);
+                    let store = self.object_store.clone();
+                    tokio::spawn(async move {
+                        finalize_job_logs(pool.as_ref(), store, job_run_id).await;
+                    });
                 }
-
-                let pool = Arc::clone(&self.pool);
-                let store = self.object_store.clone();
-                tokio::spawn(async move {
-                    finalize_job_logs(pool.as_ref(), store, job_run_id).await;
-                });
+                Err(ref e) => {
+                    error!(error = %e, job_run_id = %job_run_id, "failed to update job_run status");
+                }
+                Ok(_) => {}
             }
 
             count += 1;
@@ -800,14 +885,10 @@ impl AgentService for AgentServiceImpl {
                 )
             };
 
-            // Determine stream type from proto enum
-            let stream_type = match met_proto::agent::v1::LogStream::try_from(chunk.stream) {
-                Ok(met_proto::agent::v1::LogStream::Stderr) => "stderr",
-                _ => "stdout",
-            };
+            let log_stream = LogStream::try_from(chunk.stream).unwrap_or(LogStream::Unspecified);
 
-            // Convert content bytes to string (logs are UTF-8 text)
-            let content = String::from_utf8_lossy(&chunk.content);
+            // Convert content bytes to string (telemetry JSON or UTF-8 log text)
+            let content_raw = String::from_utf8_lossy(&chunk.content);
 
             let line_ts = chunk
                 .timestamp
@@ -815,53 +896,105 @@ impl AgentService for AgentServiceImpl {
                 .and_then(|t| Utc.timestamp_opt(t.seconds, t.nanos as u32).single())
                 .unwrap_or_else(Utc::now);
 
-            if let Err(e) = log_repo
-                .append_streaming(
-                    job_run_id,
-                    run_id,
-                    step_run_id,
-                    chunk.sequence,
-                    stream_type,
-                    &content,
-                    line_ts,
-                )
-                .await
-            {
-                warn!(error = %e, job_run_id = %job_run_id, "failed to store log chunk");
+            match log_stream {
+                LogStream::ExecBinary | LogStream::Syscall | LogStream::RuntimeScript => {
+                    if let Err(e) = ingest_telemetry_log_chunk(
+                        self.pool.as_ref(),
+                        run_id,
+                        job_run_id,
+                        step_run_id,
+                        log_stream,
+                        content_raw.as_ref(),
+                    )
+                    .await
+                    {
+                        warn!(error = %e, job_run_id = %job_run_id, "telemetry chunk ingest failed");
+                    }
+                    let evt_type = match log_stream {
+                        LogStream::ExecBinary => "exec.binary",
+                        LogStream::Syscall => "exec.syscall",
+                        LogStream::RuntimeScript => "exec.runtime_script",
+                        _ => "exec.chunk",
+                    };
+                    let payload_parse =
+                        serde_json::from_str::<serde_json::Value>(content_raw.as_ref()).ok();
+                    let log_event = serde_json::json!({
+                        "type": evt_type,
+                        "job_run_id": job_run_id.to_string(),
+                        "step_run_id": step_run_id.map(|s| s.to_string()),
+                        "sequence": chunk.sequence,
+                        "payload": payload_parse,
+                        "timestamp": Utc::now().to_rfc3339(),
+                    });
+                    let subject = format!("met.logs.{}", job_run_id.as_uuid());
+                    if let Err(e) = self
+                        .nats
+                        .client()
+                        .publish(
+                            subject,
+                            serde_json::to_vec(&log_event).unwrap_or_default().into(),
+                        )
+                        .await
+                    {
+                        warn!(error = %e, "failed to publish telemetry chunk to NATS");
+                    }
+                }
+                _ => {
+                    let stream_type = if log_stream == LogStream::Stderr {
+                        "stderr"
+                    } else {
+                        "stdout"
+                    };
+                    let content = telemetry_log_redactor().redact(content_raw.as_ref());
+
+                    if let Err(e) = log_repo
+                        .append_streaming(
+                            job_run_id,
+                            run_id,
+                            step_run_id,
+                            chunk.sequence,
+                            stream_type,
+                            &content,
+                            line_ts,
+                        )
+                        .await
+                    {
+                        warn!(error = %e, job_run_id = %job_run_id, "failed to store log chunk");
+                    }
+
+                    let log_event = serde_json::json!({
+                        "type": "log.chunk",
+                        "job_run_id": job_run_id.to_string(),
+                        "step_run_id": step_run_id.map(|s| s.to_string()),
+                        "sequence": chunk.sequence,
+                        "stream": stream_type,
+                        "content": content,
+                        "timestamp": Utc::now().to_rfc3339(),
+                    });
+
+                    let subject = format!("met.logs.{}", job_run_id.as_uuid());
+                    if let Err(e) = self
+                        .nats
+                        .client()
+                        .publish(
+                            subject,
+                            serde_json::to_vec(&log_event)
+                                .unwrap_or_default()
+                                .into(),
+                        )
+                        .await
+                    {
+                        warn!(error = %e, "failed to publish log chunk to NATS");
+                    }
+
+                    debug!(
+                        job_run_id = %job_run_id,
+                        sequence = chunk.sequence,
+                        stream = stream_type,
+                        "log chunk processed"
+                    );
+                }
             }
-
-            // Publish to NATS for WebSocket streaming
-            let log_event = serde_json::json!({
-                "type": "log.chunk",
-                "job_run_id": job_run_id.to_string(),
-                "step_run_id": step_run_id.map(|s| s.to_string()),
-                "sequence": chunk.sequence,
-                "stream": stream_type,
-                "content": content,
-                "timestamp": Utc::now().to_rfc3339(),
-            });
-
-            let subject = format!("met.logs.{}", job_run_id.as_uuid());
-            if let Err(e) = self
-                .nats
-                .client()
-                .publish(
-                    subject,
-                    serde_json::to_vec(&log_event)
-                        .unwrap_or_default()
-                        .into(),
-                )
-                .await
-            {
-                warn!(error = %e, "failed to publish log chunk to NATS");
-            }
-
-            debug!(
-                job_run_id = %job_run_id,
-                sequence = chunk.sequence,
-                stream = stream_type,
-                "log chunk processed"
-            );
         }
 
         Ok(Response::new(LogAck { last_sequence }))
@@ -985,4 +1118,181 @@ impl AgentService for AgentServiceImpl {
 
         Ok(Response::new(DeregisterResponse { success: true }))
     }
+}
+
+fn telemetry_log_redactor() -> &'static Redactor {
+    static R: OnceLock<Redactor> = OnceLock::new();
+    R.get_or_init(|| Redactor::new(RedactorConfig::default()))
+}
+
+/// ADR-006-style path redaction before persistence and fanout (home directory prefix).
+fn redact_exec_path_for_storage(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("/home/") {
+        if let Some(idx) = rest.find('/') {
+            return format!("/home/<redacted>{}", &rest[idx..]);
+        }
+        return "/home/<redacted>".to_string();
+    }
+    path.to_string()
+}
+
+async fn persist_run_binaries_for_job(
+    pool: &PgPool,
+    run_id: RunId,
+    job_run_id: JobRunId,
+    agent_id: Option<AgentId>,
+    meta: &ProtoJobExecMeta,
+) -> sqlx::Result<()> {
+    for b in &meta.executed_binaries {
+        let path = redact_exec_path_for_storage(&b.path);
+        sqlx::query(
+            r#"
+            INSERT INTO run_binary_executions
+                (run_id, job_run_id, agent_id, binary_path, binary_sha256, pid, ppid)
+            VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+            "#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(job_run_id.as_uuid())
+        .bind(agent_id.map(|a| a.as_uuid()))
+        .bind(&path)
+        .bind(&b.sha256)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn ingest_telemetry_log_chunk(
+    pool: &PgPool,
+    run_id: RunId,
+    job_run_id: JobRunId,
+    step_run_id: Option<StepRunId>,
+    stream: LogStream,
+    text: &str,
+) -> sqlx::Result<()> {
+    match stream {
+        LogStream::ExecBinary => {
+            let v: serde_json::Value =
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}));
+            let path = redact_exec_path_for_storage(
+                v.get("path")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default(),
+            );
+            let sha = v
+                .get("sha256")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default();
+            let pid = v
+                .get("pid")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok());
+            let ppid = v
+                .get("ppid")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok());
+            let step_seq = v.get("step_sequence").and_then(|x| x.as_i64()).map(|i| i as i32);
+            sqlx::query(
+                r#"
+                INSERT INTO run_binary_executions
+                    (run_id, job_run_id, step_run_id, binary_path, binary_sha256,
+                     pid, ppid, step_sequence)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                "#,
+            )
+            .bind(run_id.as_uuid())
+            .bind(job_run_id.as_uuid())
+            .bind(step_run_id.map(|s| s.as_uuid()))
+            .bind(&path)
+            .bind(sha)
+            .bind(pid)
+            .bind(ppid)
+            .bind(step_seq)
+            .execute(pool)
+            .await?;
+        }
+        LogStream::Syscall => {
+            let v: serde_json::Value =
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}));
+            let nr = v
+                .get("nr")
+                .or_else(|| v.get("syscall_nr"))
+                .and_then(|x| x.as_i64())
+                .unwrap_or(-1) as i32;
+            let name = v
+                .get("name")
+                .or_else(|| v.get("syscall_name"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let outcome = v
+                .get("outcome")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let rc = v.get("return_code").and_then(|x| x.as_i64());
+            let pid = v
+                .get("pid")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok());
+            let tid = v
+                .get("tid")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok());
+            sqlx::query(
+                r#"
+                INSERT INTO run_syscall_events
+                    (run_id, job_run_id, step_run_id, syscall_nr, syscall_name,
+                     outcome, return_code, pid, tid, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                "#,
+            )
+            .bind(run_id.as_uuid())
+            .bind(job_run_id.as_uuid())
+            .bind(step_run_id.map(|s| s.as_uuid()))
+            .bind(nr)
+            .bind(&name)
+            .bind(&outcome)
+            .bind(rc)
+            .bind(pid)
+            .bind(tid)
+            .bind(v)
+            .execute(pool)
+            .await?;
+        }
+        LogStream::RuntimeScript => {
+            let v: serde_json::Value =
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}));
+            let sha = v
+                .get("sha256_hex")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let byte_length = v.get("byte_length").and_then(|x| x.as_i64()).unwrap_or(0);
+            let truncated = v.get("truncated").and_then(|x| x.as_bool()).unwrap_or(false);
+            let object_key = v
+                .get("object_key")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            sqlx::query(
+                r#"
+                INSERT INTO run_runtime_script_artifacts
+                    (run_id, job_run_id, step_run_id, sha256_hex, byte_length, truncated, object_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+            )
+            .bind(run_id.as_uuid())
+            .bind(job_run_id.as_uuid())
+            .bind(step_run_id.map(|s| s.as_uuid()))
+            .bind(&sha)
+            .bind(byte_length)
+            .bind(truncated)
+            .bind(object_key.as_deref())
+            .execute(pool)
+            .await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }

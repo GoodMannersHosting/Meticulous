@@ -8,12 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use met_core::ids::{JobId, JobRunId, RunId};
+use futures::StreamExt;
+use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
 use met_parser::{JobIR, PipelineIR};
 use met_secrets::BuiltinStoredCrypto;
 use secrecy::SecretString;
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use tokio::time::interval;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -22,8 +24,19 @@ use crate::cel::{evaluate_condition, CelContext};
 use crate::context::ExecutionContext;
 use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
+use crate::parse_completion_message;
+use crate::persistence::RunPersistence;
 use crate::scheduler::{JobCompletionNotification, Scheduler};
 use crate::state::{JobState, RunState};
+
+/// How the `runs` table row was created before [`Executor::execute`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStartKind {
+    /// Create a new `runs` row from the engine (standalone execution).
+    New,
+    /// Row already exists (for example API trigger); only backfill org/trace when null.
+    Existing,
+}
 
 /// Executor configuration.
 #[derive(Debug, Clone)]
@@ -69,6 +82,8 @@ pub struct Executor<C: CacheBackend> {
     config: ExecutorConfig,
     /// When set, stored/builtin pipeline secrets are validated and resolved into the run context.
     builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
+    persistence: Arc<dyn RunPersistence>,
+    jetstream: async_nats::jetstream::Context,
 }
 
 impl<C: CacheBackend> Executor<C> {
@@ -80,6 +95,8 @@ impl<C: CacheBackend> Executor<C> {
         pool: PgPool,
         config: ExecutorConfig,
         builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
+        persistence: Arc<dyn RunPersistence>,
+        jetstream: async_nats::jetstream::Context,
     ) -> Self {
         Self {
             scheduler,
@@ -88,12 +105,14 @@ impl<C: CacheBackend> Executor<C> {
             pool,
             config,
             builtin_stored_crypto,
+            persistence,
+            jetstream,
         }
     }
 
     /// Execute a pipeline run.
     #[instrument(skip(self, ctx), fields(run_id = %ctx.run_id(), pipeline = %ctx.pipeline().name))]
-    pub async fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult> {
+    pub async fn execute(&self, ctx: ExecutionContext, start: RunStartKind) -> Result<ExecutionResult> {
         let run_id = ctx.run_id();
         let pipeline_id = ctx.pipeline_id();
         let start_time = Utc::now();
@@ -130,12 +149,31 @@ impl<C: CacheBackend> Executor<C> {
             }
         }
 
+        match start {
+            RunStartKind::New => {
+                self.persistence
+                    .create_run(
+                        ctx.run_id(),
+                        ctx.pipeline_id(),
+                        ctx.org_id(),
+                        ctx.triggered_by(),
+                        ctx.trace_uuid(),
+                    )
+                    .await?;
+            }
+            RunStartKind::Existing => {
+                self.persistence
+                    .prepare_existing_run(ctx.run_id(), ctx.org_id(), Some(ctx.trace_uuid()))
+                    .await?;
+            }
+        }
+
         let run_state = RunState::new(run_id);
         run_state.set_status(RunStatus::Running).await;
 
         if let Err(e) = self
             .events
-            .run_started(run_id, pipeline_id, ctx.trace_id())
+            .run_started(run_id, pipeline_id, Some(ctx.trace_id()))
             .await
         {
             warn!(error = %e, "Failed to broadcast run started event");
@@ -143,7 +181,18 @@ impl<C: CacheBackend> Executor<C> {
 
         self.initialize_job_states(&ctx, &run_state).await?;
 
-        let exec_result = self.run_execution_loop(&ctx, &run_state).await;
+        let (completion_tx, completion_rx) = mpsc::channel::<JobCompletionNotification>(64);
+        let comp_task = {
+            let js = self.jetstream.clone();
+            let org_id = ctx.org_id();
+            let run_id = ctx.run_id();
+            tokio::spawn(run_completion_pull_task(js, org_id, run_id, completion_tx))
+        };
+
+        let exec_result = self
+            .run_execution_loop(&ctx, &run_state, completion_rx)
+            .await;
+        comp_task.abort();
 
         let final_status = match &exec_result {
             Ok(_) => run_state.compute_final_status().await,
@@ -168,7 +217,7 @@ impl<C: CacheBackend> Executor<C> {
                 pipeline_id,
                 final_status.is_success(),
                 duration_ms,
-                ctx.trace_id(),
+                Some(ctx.trace_id()),
             )
             .await
         {
@@ -197,6 +246,9 @@ impl<C: CacheBackend> Executor<C> {
     async fn initialize_job_states(&self, ctx: &ExecutionContext, run_state: &RunState) -> Result<()> {
         for job in &ctx.pipeline().jobs {
             let job_run_id = JobRunId::new();
+            self.persistence
+                .create_job_run(job_run_id, ctx.run_id(), job.id, &job.name)
+                .await?;
             let job_state = JobState::new(job.id, job_run_id, &job.name);
             run_state.register_job(job_state).await;
         }
@@ -207,42 +259,58 @@ impl<C: CacheBackend> Executor<C> {
         &self,
         ctx: &ExecutionContext,
         run_state: &RunState,
+        mut completion_rx: mpsc::Receiver<JobCompletionNotification>,
     ) -> Result<()> {
         let mut poll_interval = interval(self.config.poll_interval);
         let run_start = Utc::now();
 
         loop {
-            poll_interval.tick().await;
+            tokio::select! {
+                _ = poll_interval.tick() => {
+                    if run_state.is_cancellation_requested().await {
+                        return Err(EngineError::RunCancelled { run_id: ctx.run_id() });
+                    }
 
-            if run_state.is_cancellation_requested().await {
-                return Err(EngineError::RunCancelled { run_id: ctx.run_id() });
-            }
+                    let elapsed = Utc::now() - run_start;
+                    if elapsed > chrono::Duration::from_std(self.config.run_timeout).unwrap_or(chrono::TimeDelta::MAX) {
+                        error!("Run timed out");
+                        return Err(EngineError::Internal("Run execution timed out".to_string()));
+                    }
 
-            let elapsed = Utc::now() - run_start;
-            if elapsed > chrono::Duration::from_std(self.config.run_timeout).unwrap_or(chrono::TimeDelta::MAX) {
-                error!("Run timed out");
-                return Err(EngineError::Internal("Run execution timed out".to_string()));
-            }
+                    self.scheduler.check_timeouts(run_state).await;
 
-            self.scheduler.check_timeouts(run_state).await;
+                    let ready_jobs = self.find_ready_jobs(ctx, run_state).await?;
 
-            let ready_jobs = self.find_ready_jobs(ctx, run_state).await?;
+                    let active_count = self.scheduler.active_job_count(ctx.run_id()).await;
+                    let can_dispatch = self.config.max_concurrent.saturating_sub(active_count);
 
-            let active_count = self.scheduler.active_job_count(ctx.run_id()).await;
-            let can_dispatch = self.config.max_concurrent.saturating_sub(active_count);
+                    for job in ready_jobs.into_iter().take(can_dispatch) {
+                        self.dispatch_job_if_ready(ctx, run_state, job).await?;
+                    }
 
-            for job in ready_jobs.into_iter().take(can_dispatch) {
-                self.dispatch_job_if_ready(ctx, run_state, job).await?;
-            }
+                    if self.config.fail_fast && run_state.has_failures().await {
+                        info!("Fail-fast triggered, cancelling remaining jobs");
+                        self.cancel_pending_jobs(ctx, run_state).await?;
+                        break;
+                    }
 
-            if self.config.fail_fast && run_state.has_failures().await {
-                info!("Fail-fast triggered, cancelling remaining jobs");
-                self.cancel_pending_jobs(ctx, run_state).await?;
-                break;
-            }
-
-            if run_state.is_complete().await {
-                break;
+                    if run_state.is_complete().await {
+                        break;
+                    }
+                }
+                note = completion_rx.recv() => {
+                    let Some(note) = note else {
+                        return Err(EngineError::Internal(
+                            "job completion subscriber disconnected".to_string(),
+                        ));
+                    };
+                    if note.run_id != ctx.run_id() {
+                        continue;
+                    }
+                    if let Err(e) = self.handle_job_completion(note, ctx, run_state).await {
+                        warn!(error = %e, "failed to apply job completion notification");
+                    }
+                }
             }
         }
 
@@ -394,6 +462,67 @@ impl<C: CacheBackend> Executor<C> {
     /// Request cancellation of a run.
     pub async fn cancel(&self, run_state: &RunState) {
         run_state.request_cancellation().await;
+    }
+}
+
+async fn run_completion_pull_task(
+    jetstream: async_nats::jetstream::Context,
+    org_id: OrganizationId,
+    run_id_filter: RunId,
+    tx: mpsc::Sender<JobCompletionNotification>,
+) {
+    use async_nats::jetstream::consumer::pull::Config;
+
+    loop {
+        let stream = match jetstream.get_stream("COMPLETIONS").await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "get COMPLETIONS stream; retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        let filter_subject = format!("met.completions.{}", org_id.as_uuid());
+        let config = Config {
+            name: Some(format!("engine-{}", uuid::Uuid::new_v4())),
+            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::New,
+            filter_subject,
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        };
+        let consumer = match stream.create_consumer(config).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(error = %e, "create ephemeral completion consumer; retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(error = %e, "completion consumer messages(); retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        while let Some(msg) = messages.next().await {
+            let msg = match msg {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(error = %e, "completion pull error");
+                    break;
+                }
+            };
+            if let Ok(note) = parse_completion_message(msg.payload.as_ref()) {
+                if note.run_id == run_id_filter && tx.send(note).await.is_err() {
+                    return;
+                }
+            }
+            let _ = msg.ack().await;
+        }
+        warn!("completion message stream ended; reconnecting");
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

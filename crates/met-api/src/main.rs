@@ -9,6 +9,7 @@ use met_core::MetConfig;
 use met_store::repos::AgentRepo;
 use met_store::{PoolConfig, create_pool};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -106,8 +107,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
         .map(std::sync::Arc::new);
 
+    let nats_ops =
+        match met_controller::nats::NatsDispatcher::connect(&met_config.nats.url, None).await {
+            Ok(n) => Some(Arc::new(n)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "NATS ops client not connected; admin JOBS_DLQ preview disabled"
+                );
+                None
+            }
+        };
+
+    let engine = match met_engine::Engine::new(met_engine::EngineConfig {
+        nats_url: met_config.nats.url.clone(),
+        pool: db.clone(),
+        executor: Default::default(),
+        scheduler: Default::default(),
+        cache_prefix: String::new(),
+        builtin_secrets_master_key: std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY").ok(),
+        builtin_secrets_key_id: None,
+    })
+    .await
+    {
+        Ok(e) => Some(Arc::new(e)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "met-engine failed to initialize (is NATS up?); pipeline trigger returns 503 until fixed"
+            );
+            None
+        }
+    };
+
     // Build application state
-    let state = AppState::new(db, api_config.clone(), stored_secret_crypto);
+    let state = AppState::new(
+        db,
+        api_config.clone(),
+        stored_secret_crypto,
+        engine,
+        api_config.max_concurrent_engine_runs,
+        nats_ops,
+    );
 
     // Build router
     let router = routes::build_router(state);

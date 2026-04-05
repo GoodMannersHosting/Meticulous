@@ -321,6 +321,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-step".to_string(),
+            step_run_id: "sr-test-step".to_string(),
+            step_sequence: 0,
             name: "echo hello".to_string(),
             command: "echo hello".to_string(),
             image: String::new(),
@@ -350,6 +352,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-env".to_string(),
+            step_run_id: "sr-test-env".to_string(),
+            step_sequence: 0,
             name: "test env var".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -376,6 +380,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-exit".to_string(),
+            step_run_id: "sr-test-exit".to_string(),
+            step_sequence: 0,
             name: "exit with code".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -402,6 +408,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-cwd".to_string(),
+            step_run_id: "sr-test-cwd".to_string(),
+            step_sequence: 0,
             name: "check working dir".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -431,6 +439,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-timeout".to_string(),
+            step_run_id: "sr-test-timeout".to_string(),
+            step_sequence: 0,
             name: "long running command".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -552,6 +562,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "isolation-test".to_string(),
+            step_run_id: "sr-isolation".to_string(),
+            step_sequence: 0,
             name: "test isolation".to_string(),
             command: command.to_string(),
             image: String::new(),

@@ -15,6 +15,7 @@ use tracing::{debug, info, instrument, warn};
 use crate::context::ExecutionContext;
 use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
+use crate::persistence::RunPersistence;
 use crate::state::RunState;
 
 /// Job dispatch message for NATS.
@@ -101,6 +102,7 @@ pub struct Scheduler {
     pool: PgPool,
     config: SchedulerConfig,
     events: Arc<EventBroadcaster>,
+    persistence: Arc<dyn RunPersistence>,
     active_jobs: RwLock<std::collections::HashMap<JobRunId, ActiveJob>>,
 }
 
@@ -119,12 +121,14 @@ impl Scheduler {
         pool: PgPool,
         events: Arc<EventBroadcaster>,
         config: SchedulerConfig,
+        persistence: Arc<dyn RunPersistence>,
     ) -> Self {
         Self {
             jetstream,
             pool,
             config,
             events,
+            persistence,
             active_jobs: RwLock::new(std::collections::HashMap::new()),
         }
     }
@@ -142,6 +146,12 @@ impl Scheduler {
 
         let variables = ctx.variables().await;
         let steps = self.prepare_steps(ctx, job).await?;
+
+        for s in &steps {
+            self.persistence
+                .create_step_run(s.step_run_id, job_run_id, s.step_id, &s.name)
+                .await?;
+        }
 
         let pool_tag = job
             .pool_selector
@@ -388,7 +398,7 @@ impl Scheduler {
                     notification.success,
                     notification.exit_code,
                     duration_ms,
-                    ctx.trace_id(),
+                    Some(ctx.trace_id()),
                 )
                 .await
             {
