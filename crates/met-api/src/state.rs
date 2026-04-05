@@ -28,6 +28,9 @@ pub struct AppState {
     /// Shared pipeline engine (NATS + Postgres); unset if initialization failed.
     pub engine: Option<Arc<Engine>>,
 
+    /// When [`Self::engine`] is `None`, the error from `Engine::new` (for 503 bodies and ops).
+    pub engine_init_error: Option<String>,
+
     /// Limits concurrent in-process pipeline runs started from the API.
     pub engine_run_semaphore: Arc<Semaphore>,
 
@@ -51,6 +54,7 @@ impl AppState {
         config: ApiConfig,
         stored_secret_crypto: Option<Arc<BuiltinStoredCrypto>>,
         engine: Option<Arc<Engine>>,
+        engine_init_error: Option<String>,
         max_concurrent_engine_runs: usize,
         nats_ops: Option<Arc<NatsDispatcher>>,
     ) -> Self {
@@ -60,6 +64,7 @@ impl AppState {
             config: Arc::new(config),
             stored_secret_crypto,
             engine,
+            engine_init_error,
             engine_run_semaphore: Arc::new(Semaphore::new(permits)),
             nats_ops,
         }

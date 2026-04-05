@@ -27,6 +27,24 @@ pub struct Pipeline {
     /// Path to the pipeline definition file (if file-based).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition_path: Option<String>,
+    /// SCM provider when definition is loaded from a remote repo (e.g. `github`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_provider: Option<String>,
+    /// Repository slug (`owner/name`) or normalized identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_repository: Option<String>,
+    /// Git ref (branch, tag, or SHA) last synced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_ref: Option<String>,
+    /// Path to pipeline YAML within the repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_path: Option<String>,
+    /// `builtin_secrets.path` for GitHub App credentials (project-scoped).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_credentials_secret_path: Option<String>,
+    /// Commit SHA of the definition blob last fetched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_revision: Option<String>,
     /// Whether the pipeline is enabled.
     pub enabled: bool,
     /// When the pipeline was created.
@@ -53,6 +71,12 @@ impl Pipeline {
             description: None,
             definition,
             definition_path: None,
+            scm_provider: None,
+            scm_repository: None,
+            scm_ref: None,
+            scm_path: None,
+            scm_credentials_secret_path: None,
+            scm_revision: None,
             enabled: true,
             created_at: now,
             updated_at: now,
@@ -75,6 +99,18 @@ pub struct CreatePipeline {
     /// Path to definition file (if file-based).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_credentials_secret_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_revision: Option<String>,
 }
 
 /// Input for updating a pipeline.
@@ -92,4 +128,16 @@ pub struct UpdatePipeline {
     /// Whether the pipeline is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_credentials_secret_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_revision: Option<String>,
 }

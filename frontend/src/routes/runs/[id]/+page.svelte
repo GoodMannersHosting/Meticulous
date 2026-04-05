@@ -4,7 +4,7 @@
 	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton } from '$components/ui';
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Run, JobRun, Pipeline } from '$api/types';
+	import type { Run, JobRun, Pipeline, PipelineJob } from '$api/types';
 	import { formatRelativeTime, formatDurationMs, truncateId, formatDateTime } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -132,13 +132,19 @@
 		run?.status && ['succeeded', 'failed', 'cancelled', 'timed_out'].includes(run.status)
 	);
 
+	function jobsFromPipelineDef(def: Pipeline['definition'] | undefined): PipelineJob[] {
+		if (!def || typeof def !== 'object' || !('jobs' in def)) return [];
+		const j = (def as { jobs: unknown }).jobs;
+		return Array.isArray(j) ? (j as PipelineJob[]) : [];
+	}
+
 	const dagJobs = $derived(() => {
-		if (!pipeline?.definition?.jobs) return [];
-		return pipeline.definition.jobs.map((job) => {
+		const jobs = jobsFromPipelineDef(pipeline?.definition);
+		return jobs.map((job: PipelineJob) => {
 			const jobRun = jobRuns.find((jr) => jr.job_id === job.name);
 			return {
 				name: job.name,
-				depends_on: job.depends_on,
+				depends_on: job.depends_on ?? [],
 				status: jobRun?.status
 			};
 		});

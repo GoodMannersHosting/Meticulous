@@ -95,8 +95,14 @@ export interface Pipeline {
 	name: string;
 	slug: string;
 	description?: string;
-	definition: PipelineDefinition;
+	definition: PipelineDefinition | Record<string, unknown>;
 	definition_path?: string;
+	scm_provider?: string | null;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_credentials_secret_path?: string | null;
+	scm_revision?: string | null;
 	enabled: boolean;
 	created_at: string;
 	updated_at: string;
@@ -133,6 +139,16 @@ export interface CreatePipelineInput {
 	description?: string;
 	definition: PipelineDefinition | Record<string, unknown>;
 	definition_path?: string;
+}
+
+export interface ImportPipelineGitInput {
+	name: string;
+	slug: string;
+	description?: string;
+	repository: string;
+	git_ref: string;
+	scm_path: string;
+	credentials_path: string;
 }
 
 // Run Types

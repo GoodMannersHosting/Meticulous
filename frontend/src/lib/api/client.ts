@@ -126,7 +126,25 @@ class ApiClient {
 
 			let apiError: ApiError;
 			try {
-				apiError = await response.json();
+				const raw = (await response.json()) as { error?: ApiError } | ApiError;
+				if (
+					raw &&
+					typeof raw === 'object' &&
+					'error' in raw &&
+					raw.error &&
+					typeof raw.error.message === 'string'
+				) {
+					apiError = raw.error;
+				} else {
+					apiError = raw as ApiError;
+				}
+				if (!apiError?.message) {
+					apiError = {
+						code: apiError?.code || 'UNKNOWN_ERROR',
+						message: response.statusText || 'Request failed',
+						details: apiError?.details
+					};
+				}
 			} catch {
 				apiError = {
 					code: 'UNKNOWN_ERROR',
@@ -266,8 +284,15 @@ export const apiMethods = {
 			api.get<import('./types').Pipeline>(`/api/v1/pipelines/by-slug/${projectId}/${slug}`),
 		create: (data: import('./types').CreatePipelineInput) =>
 			api.post<import('./types').Pipeline>('/api/v1/pipelines', data),
+		importGit: (projectId: string, data: import('./types').ImportPipelineGitInput) =>
+			api.post<import('./types').Pipeline>(
+				`/api/v1/projects/${projectId}/pipelines/import-git`,
+				data
+			),
+		syncFromGit: (id: string, data?: { git_ref?: string }) =>
+			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/sync-from-git`, data ?? {}),
 		update: (id: string, data: Partial<import('./types').Pipeline>) =>
-			api.patch<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
+			api.put<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
 			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {})

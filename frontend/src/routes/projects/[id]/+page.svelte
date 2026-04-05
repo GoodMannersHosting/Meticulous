@@ -34,6 +34,10 @@
 	let createValue = $state('');
 	let createDescription = $state('');
 	let createPipelineId = $state('');
+	let ghAppId = $state('');
+	let ghInstallationId = $state('');
+	let ghPrivateKey = $state('');
+	let ghApiBase = $state('');
 	let secretActionLoading = $state(false);
 	let rotateTarget = $state<StoredSecret | null>(null);
 	let rotateValue = $state('');
@@ -45,7 +49,7 @@
 		{ value: 'kv', label: 'Key / value (kv)' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
-		{ value: 'github_app', label: 'GitHub App (JSON)' },
+		{ value: 'github_app', label: 'GitHub App' },
 		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
 	];
 
@@ -139,6 +143,10 @@
 		createValue = '';
 		createDescription = '';
 		createPipelineId = '';
+		ghAppId = '';
+		ghInstallationId = '';
+		ghPrivateKey = '';
+		ghApiBase = '';
 		showCreateSecret = true;
 	}
 
@@ -147,10 +155,32 @@
 		secretActionLoading = true;
 		secretsError = null;
 		try {
+			let value: string;
+			if (createKind === 'github_app') {
+				if (!ghAppId.trim() || !ghInstallationId.trim() || !ghPrivateKey.trim()) {
+					secretsError = 'GitHub App: App ID, Installation ID, and private key are required';
+					return;
+				}
+				const app_id = Number(ghAppId);
+				const installation_id = Number(ghInstallationId);
+				if (!Number.isFinite(app_id) || !Number.isFinite(installation_id)) {
+					secretsError = 'GitHub App: App ID and Installation ID must be numeric';
+					return;
+				}
+				value = JSON.stringify({
+					app_id,
+					installation_id,
+					private_key_pem: ghPrivateKey.trim(),
+					...(ghApiBase.trim() ? { github_api_base: ghApiBase.trim() } : {})
+				});
+			} else {
+				value = createValue;
+			}
+
 			await apiMethods.storedSecrets.create(project.id, {
 				path: createPath.trim(),
 				kind: createKind,
-				value: createValue,
+				value,
 				description: createDescription.trim() || undefined,
 				pipeline_id: createPipelineId || undefined
 			});
@@ -161,6 +191,14 @@
 		} finally {
 			secretActionLoading = false;
 		}
+	}
+
+	function createSecretValid(): boolean {
+		if (!createPath.trim()) return false;
+		if (createKind === 'github_app') {
+			return !!(ghAppId.trim() && ghInstallationId.trim() && ghPrivateKey.trim());
+		}
+		return !!createValue.trim();
 	}
 
 	async function submitRotateSecret() {
@@ -425,18 +463,55 @@
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-kind">Kind</label>
 			<Select id="sec-kind" options={kindOptions} bind:value={createKind} />
 		</div>
-		<div>
-			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-val"
-				>Value (one-time)</label
-			>
-			<textarea
-				id="sec-val"
-				bind:value={createValue}
-				rows="4"
-				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
-				placeholder="Secret value or PEM / JSON payload"
-			></textarea>
-		</div>
+		{#if createKind === 'github_app'}
+			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 space-y-3">
+				<p class="text-xs text-[var(--text-secondary)]">
+					Create a GitHub App, install it on your org or repo, then paste credentials here. Values are encrypted; the
+					private key never leaves the control plane except to mint short-lived tokens for jobs.
+				</p>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="gh-app-id">App ID</label>
+						<Input id="gh-app-id" bind:value={ghAppId} placeholder="123456" />
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="gh-install">Installation ID</label>
+						<Input id="gh-install" bind:value={ghInstallationId} placeholder="78901234" />
+					</div>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium" for="gh-pem">Private key (PEM)</label>
+					<textarea
+						id="gh-pem"
+						bind:value={ghPrivateKey}
+						rows="6"
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+						placeholder="-----BEGIN RSA PRIVATE KEY----- ..."
+					></textarea>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium" for="gh-api-base">GitHub API base (optional)</label>
+					<Input
+						id="gh-api-base"
+						bind:value={ghApiBase}
+						placeholder="https://api.github.com (default)"
+					/>
+				</div>
+			</div>
+		{:else}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-val"
+					>Value (one-time)</label
+				>
+				<textarea
+					id="sec-val"
+					bind:value={createValue}
+					rows="4"
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					placeholder="Secret value or PEM / JSON payload"
+				></textarea>
+			</div>
+		{/if}
 		<div>
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-desc"
 				>Description (optional)</label
@@ -453,7 +528,7 @@
 				variant="primary"
 				onclick={submitCreateSecret}
 				loading={secretActionLoading}
-				disabled={!createPath.trim() || !createValue}
+				disabled={!createSecretValid()}
 			>
 				Save
 			</Button>

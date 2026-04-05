@@ -10,4 +10,4 @@ mod git;
 
 #[cfg(feature = "database")]
 pub use database::DatabaseWorkflowProvider;
-pub use git::GitWorkflowProvider;
+pub use git::{CompositeWorkflowProvider, GitWorkflowProvider};

@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    error::{ApiError, ApiResult},
+    error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
     extractors::Auth,
     state::AppState,
 };
@@ -182,9 +182,7 @@ async fn create_stored_secret(
     }
 
     let Some(ref crypto) = state.stored_secret_crypto else {
-        return Err(ApiError::unavailable(
-            "stored secrets are not configured (set MET_BUILTIN_SECRETS_MASTER_KEY)",
-        ));
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
     };
 
     if req.path.trim().is_empty() {
@@ -279,9 +277,7 @@ async fn rotate_stored_secret(
     Json(req): Json<RotateStoredSecretRequest>,
 ) -> ApiResult<Json<StoredSecretResponse>> {
     let Some(ref crypto) = state.stored_secret_crypto else {
-        return Err(ApiError::unavailable(
-            "stored secrets are not configured (set MET_BUILTIN_SECRETS_MASTER_KEY)",
-        ));
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
     };
 
     if req.value.is_empty() {

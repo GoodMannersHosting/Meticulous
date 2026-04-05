@@ -57,7 +57,7 @@ pub use ir::{
 };
 pub use parser::{ParserConfig, PipelineParser};
 #[cfg(feature = "database")]
-pub use providers::DatabaseWorkflowProvider;
+pub use providers::{CompositeWorkflowProvider, DatabaseWorkflowProvider};
 pub use providers::GitWorkflowProvider;
 pub use schema::{
     RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef, RawService,

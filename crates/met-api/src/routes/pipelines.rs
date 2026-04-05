@@ -9,15 +9,17 @@ use met_core::{
     ids::{PipelineId, ProjectId},
     models::{CreatePipeline, Pipeline, UpdatePipeline},
 };
-use met_store::repos::PipelineRepo;
+use met_store::repos::{PipelineRepo, ProjectRepo};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::instrument;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::{
-    error::{ApiError, ApiResult},
+    error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
     extractors::{Auth, Pagination, PaginatedResponse},
+    github_scm,
     state::AppState,
 };
 
@@ -29,6 +31,11 @@ pub fn router() -> Router<AppState> {
             get(get_pipeline).put(update_pipeline).delete(delete_pipeline),
         )
         .route("/pipelines/by-slug/{project_id}/{slug}", get(get_pipeline_by_slug))
+        .route(
+            "/projects/{project_id}/pipelines/import-git",
+            post(import_pipeline_git),
+        )
+        .route("/pipelines/{id}/sync-from-git", post(sync_pipeline_from_git))
         .route("/pipelines/{id}/trigger", post(trigger_pipeline))
         .route("/pipelines/{id}/validate", post(validate_pipeline))
 }
@@ -113,6 +120,10 @@ async fn create_pipeline(
     Auth(user): Auth,
     Json(req): Json<CreatePipelineRequest>,
 ) -> ApiResult<Json<PipelineResponse>> {
+    if !user.can_access_project(req.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
     let repo = PipelineRepo::new(state.db());
 
     let create = CreatePipeline {
@@ -121,10 +132,210 @@ async fn create_pipeline(
         description: req.description,
         definition: req.definition,
         definition_path: req.definition_path,
+        scm_provider: None,
+        scm_repository: None,
+        scm_ref: None,
+        scm_path: None,
+        scm_credentials_secret_path: None,
+        scm_revision: None,
     };
 
     let pipeline = repo.create(req.project_id, &create).await?;
 
+    Ok(Json(PipelineResponse { pipeline }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ImportPipelineGitRequest {
+    pub name: String,
+    pub slug: String,
+    pub description: Option<String>,
+    /// GitHub repository as `owner/name` or `https://github.com/owner/repo`.
+    pub repository: String,
+    /// Branch, tag, or commit SHA.
+    pub git_ref: String,
+    /// Path to the pipeline YAML in the repo (e.g. `.stable/demo.yaml`).
+    pub scm_path: String,
+    /// `builtin_secrets.path` for a project-scoped `github_app` secret.
+    pub credentials_path: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/pipelines/import-git",
+    request_body = ImportPipelineGitRequest,
+    params(("project_id" = String, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Pipeline created from Git", body = PipelineResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "pipelines",
+)]
+#[instrument(skip(state, req))]
+async fn import_pipeline_git(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<ImportPipelineGitRequest>,
+) -> ApiResult<Json<PipelineResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(
+            STORED_SECRETS_UNAVAILABLE,
+        ));
+    };
+
+    let project = ProjectRepo::new(state.db()).get(project_id).await?;
+    let org_id = project.org_id;
+
+    let (ir, commit_sha, def) = github_scm::parse_pipeline_from_github_checkout(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        project_id,
+        &req.repository,
+        &req.git_ref,
+        &req.scm_path,
+        &req.credentials_path,
+    )
+    .await?;
+
+    let nil_pipe = PipelineId::from_uuid(Uuid::nil());
+    met_secret_resolve::validate_secret_refs(
+        state.db(),
+        org_id,
+        Some(project_id),
+        nil_pipe,
+        &ir.secret_refs,
+    )
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let repo = PipelineRepo::new(state.db());
+    let create = CreatePipeline {
+        name: req.name,
+        slug: req.slug,
+        description: req.description,
+        definition: def,
+        definition_path: Some(req.scm_path.clone()),
+        scm_provider: Some("github".to_string()),
+        scm_repository: Some(req.repository.trim().to_string()),
+        scm_ref: Some(req.git_ref.clone()),
+        scm_path: Some(req.scm_path),
+        scm_credentials_secret_path: Some(req.credentials_path),
+        scm_revision: Some(commit_sha),
+    };
+
+    let pipeline = repo.create(project_id, &create).await?;
+
+    Ok(Json(PipelineResponse { pipeline }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SyncPipelineGitRequest {
+    /// When set, sync from this ref instead of the pipeline's stored `scm_ref`.
+    pub git_ref: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/pipelines/{id}/sync-from-git",
+    request_body = SyncPipelineGitRequest,
+    params(("id" = String, Path, description = "Pipeline ID")),
+    responses(
+        (status = 200, description = "Pipeline definition refreshed", body = PipelineResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "pipelines",
+)]
+#[instrument(skip(state, req))]
+async fn sync_pipeline_from_git(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<PipelineId>,
+    Json(req): Json<SyncPipelineGitRequest>,
+) -> ApiResult<Json<PipelineResponse>> {
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(
+            STORED_SECRETS_UNAVAILABLE,
+        ));
+    };
+
+    let pipeline_repo = PipelineRepo::new(state.db());
+    let pipeline = pipeline_repo.get(id).await?;
+
+    if !user.can_access_project(pipeline.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    if pipeline.scm_provider.as_deref() != Some("github") {
+        return Err(ApiError::bad_request(
+            "pipeline is not linked to GitHub (scm_provider is not github)",
+        ));
+    }
+
+    let repository = pipeline
+        .scm_repository
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("pipeline is missing scm_repository"))?;
+    let credentials_path = pipeline
+        .scm_credentials_secret_path
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("pipeline is missing scm_credentials_secret_path"))?;
+    let scm_path = pipeline
+        .scm_path
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("pipeline is missing scm_path"))?;
+    let default_ref = pipeline
+        .scm_ref
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("pipeline is missing scm_ref"))?;
+    let git_ref = req.git_ref.as_deref().unwrap_or(default_ref);
+
+    let project = ProjectRepo::new(state.db())
+        .get(pipeline.project_id)
+        .await?;
+    let org_id = project.org_id;
+
+    let (ir, commit_sha, def) = github_scm::parse_pipeline_from_github_checkout(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        pipeline.project_id,
+        repository,
+        git_ref,
+        scm_path,
+        credentials_path,
+    )
+    .await?;
+
+    met_secret_resolve::validate_secret_refs(
+        state.db(),
+        org_id,
+        Some(pipeline.project_id),
+        id,
+        &ir.secret_refs,
+    )
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let update = UpdatePipeline {
+        name: None,
+        description: None,
+        definition: Some(def),
+        enabled: None,
+        scm_provider: None,
+        scm_repository: None,
+        scm_ref: Some(git_ref.to_string()),
+        scm_path: None,
+        scm_credentials_secret_path: None,
+        scm_revision: Some(commit_sha),
+    };
+
+    let pipeline = pipeline_repo.update(id, &update).await?;
     Ok(Json(PipelineResponse { pipeline }))
 }
 
@@ -166,6 +377,12 @@ pub struct UpdatePipelineRequest {
     pub description: Option<String>,
     pub definition: Option<serde_json::Value>,
     pub enabled: Option<bool>,
+    pub scm_provider: Option<String>,
+    pub scm_repository: Option<String>,
+    pub scm_ref: Option<String>,
+    pub scm_path: Option<String>,
+    pub scm_credentials_secret_path: Option<String>,
+    pub scm_revision: Option<String>,
 }
 
 #[utoipa::path(
@@ -194,6 +411,12 @@ async fn update_pipeline(
         description: req.description,
         definition: req.definition,
         enabled: req.enabled,
+        scm_provider: req.scm_provider,
+        scm_repository: req.scm_repository,
+        scm_ref: req.scm_ref,
+        scm_path: req.scm_path,
+        scm_credentials_secret_path: req.scm_credentials_secret_path,
+        scm_revision: req.scm_revision,
     };
 
     let pipeline = repo.update(id, &update).await?;
@@ -248,50 +471,100 @@ pub struct TriggerPipelineResponse {
     ),
     tag = "pipelines",
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, req))]
 async fn trigger_pipeline(
     State(state): State<AppState>,
     Auth(user): Auth,
     Path(id): Path<PipelineId>,
-    Json(_req): Json<TriggerPipelineRequest>,
+    Json(req): Json<TriggerPipelineRequest>,
 ) -> ApiResult<Json<TriggerPipelineResponse>> {
     use met_core::ids::RunId;
     use met_parser::{DatabaseWorkflowProvider, PipelineParser};
-    use met_store::repos::{ProjectRepo, RunRepo};
+    use met_store::repos::RunRepo;
 
     let Some(engine) = state.engine.as_ref().map(Arc::clone) else {
-        return Err(ApiError::unavailable(
-            "pipeline engine is not available (NATS connection failed at startup)",
-        ));
+        let detail = state
+            .engine_init_error
+            .as_deref()
+            .unwrap_or("NATS or JetStream initialization failed (see API logs)");
+        return Err(ApiError::unavailable(format!(
+            "pipeline engine is not available: {detail}"
+        )));
     };
 
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
+
+    if !user.can_access_project(pipeline.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
 
     let project = ProjectRepo::new(state.db())
         .get(pipeline.project_id)
         .await?;
     let org_id = project.org_id;
 
-    let yaml = serde_yaml::to_string(&pipeline.definition).map_err(|e| {
-        ApiError::bad_request(format!("pipeline definition is not representable as YAML: {e}"))
-    })?;
+    let effective_ref = req
+        .commit_sha
+        .as_deref()
+        .or(req.branch.as_deref())
+        .or(pipeline.scm_ref.as_deref())
+        .unwrap_or("main");
 
-    let wf_provider = DatabaseWorkflowProvider::new(state.db().clone(), org_id.as_uuid());
-    let mut parser = PipelineParser::new(&wf_provider);
-    let mut pipeline_ir = parser
-        .parse(&yaml)
-        .await
-        .map_err(|diags| {
-            ApiError::bad_request(format!(
-                "invalid pipeline definition: {}",
-                diags
-                    .iter()
-                    .map(|d| d.message.clone())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ))
+    let mut pipeline_ir = if pipeline.scm_provider.as_deref() == Some("github") {
+        let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+            return Err(ApiError::unavailable(
+                STORED_SECRETS_UNAVAILABLE,
+            ));
+        };
+        let repository = pipeline
+            .scm_repository
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_repository"))?;
+        let credentials_path = pipeline
+            .scm_credentials_secret_path
+            .as_deref()
+            .ok_or_else(|| {
+                ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
+            })?;
+        let scm_path = pipeline
+            .scm_path
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_path"))?;
+
+        let (ir, _, _) = github_scm::parse_pipeline_from_github_checkout(
+            state.db(),
+            crypto.as_ref(),
+            org_id,
+            pipeline.project_id,
+            repository,
+            effective_ref,
+            scm_path,
+            credentials_path,
+        )
+        .await?;
+        ir
+    } else {
+        let yaml = serde_yaml::to_string(&pipeline.definition).map_err(|e| {
+            ApiError::bad_request(format!("pipeline definition is not representable as YAML: {e}"))
         })?;
+
+        let wf_provider = DatabaseWorkflowProvider::new(state.db().clone(), org_id.as_uuid());
+        let mut parser = PipelineParser::new(&wf_provider);
+        parser
+            .parse(&yaml)
+            .await
+            .map_err(|diags| {
+                ApiError::bad_request(format!(
+                    "invalid pipeline definition: {}",
+                    diags
+                        .iter()
+                        .map(|d| d.message.clone())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ))
+            })?
+    };
 
     pipeline_ir.id = pipeline.id;
     pipeline_ir.project_id = Some(pipeline.project_id);
@@ -306,6 +579,8 @@ async fn trigger_pipeline(
         .acquire_owned()
         .await
         .map_err(|_| ApiError::unavailable("engine shutdown"))?;
+
+    let _req_variables = req.variables;
 
     tokio::spawn(async move {
         let _run_capacity = permit;

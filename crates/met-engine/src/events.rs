@@ -18,8 +18,10 @@ pub mod subjects {
         format!("met.runs.{}", pipeline_id.as_uuid())
     }
 
+    /// Must **not** use `met.jobs.events.*`: the `JOBS` stream owns `met.jobs.>` (controller), and
+    /// JetStream rejects overlapping stream subjects (error 10065).
     pub fn job_events(pipeline_id: PipelineId) -> String {
-        format!("met.jobs.events.{}", pipeline_id.as_uuid())
+        format!("met.events.jobs.{}", pipeline_id.as_uuid())
     }
 
     pub fn step_events(pipeline_id: PipelineId) -> String {
@@ -51,7 +53,7 @@ impl EventBroadcaster {
             name: subjects::EVENTS_STREAM.to_string(),
             subjects: vec![
                 "met.runs.>".to_string(),
-                "met.jobs.events.>".to_string(),
+                "met.events.jobs.>".to_string(),
                 "met.steps.events.>".to_string(),
             ],
             retention: jetstream::stream::RetentionPolicy::Limits,
@@ -62,7 +64,11 @@ impl EventBroadcaster {
 
         match self.jetstream.get_stream(subjects::EVENTS_STREAM).await {
             Ok(_) => {
-                debug!("events stream already exists");
+                self.jetstream
+                    .update_stream(&config)
+                    .await
+                    .map_err(|e| crate::error::EngineError::Nats(e.to_string()))?;
+                debug!("updated events stream config");
             }
             Err(_) => {
                 self.jetstream

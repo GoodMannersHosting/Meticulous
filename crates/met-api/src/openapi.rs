@@ -17,8 +17,9 @@ use crate::routes::{
     health::{CheckStatus, HealthResponse, ReadyChecks, ReadyResponse},
     orgs::{CreateOrgRequest, OrgResponse, UpdateOrgRequest},
     pipelines::{
-        CreatePipelineRequest, PipelineResponse, TriggerPipelineRequest, TriggerPipelineResponse,
-        UpdatePipelineRequest, ValidatePipelineRequest, ValidatePipelineResponse,
+        CreatePipelineRequest, ImportPipelineGitRequest, PipelineResponse, SyncPipelineGitRequest,
+        TriggerPipelineRequest, TriggerPipelineResponse, UpdatePipelineRequest,
+        ValidatePipelineRequest, ValidatePipelineResponse,
     },
     projects::{CreateProjectRequest, ProjectResponse, UpdateProjectRequest},
     runs::{
@@ -99,6 +100,8 @@ use crate::routes::{
         crate::routes::pipelines::delete_pipeline,
         crate::routes::pipelines::trigger_pipeline,
         crate::routes::pipelines::validate_pipeline,
+        crate::routes::pipelines::import_pipeline_git,
+        crate::routes::pipelines::sync_pipeline_from_git,
         // Runs
         crate::routes::runs::list_runs,
         crate::routes::runs::get_run,
@@ -177,6 +180,7 @@ use crate::routes::{
             ProjectResponse, CreateProjectRequest, UpdateProjectRequest,
             // Pipelines
             PipelineResponse, CreatePipelineRequest, UpdatePipelineRequest,
+            ImportPipelineGitRequest, SyncPipelineGitRequest,
             TriggerPipelineRequest, TriggerPipelineResponse,
             ValidatePipelineRequest, ValidatePipelineResponse,
             // Runs

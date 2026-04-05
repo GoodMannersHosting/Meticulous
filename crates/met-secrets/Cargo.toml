@@ -33,6 +33,9 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+rand = "0.8"
+wiremock = "0.6"
 
 [lints]
 workspace = true

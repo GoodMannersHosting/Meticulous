@@ -4,7 +4,7 @@
 	import { Button, Card, Badge, Tabs, Dialog, Alert, StatusBadge, CopyButton } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Pipeline, Run, StoredSecret } from '$api/types';
+	import type { Pipeline, PipelineJob, Run, StoredSecret } from '$api/types';
 	import { formatRelativeTime, formatDurationMs, truncateId } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -31,9 +31,18 @@
 	let error = $state<string | null>(null);
 	let activeTab = $state('runs');
 	let triggerLoading = $state(false);
+	let syncGitLoading = $state(false);
 	let pipelineSecrets = $state<StoredSecret[]>([]);
 	let secretsLoading = $state(false);
 	let secretsError = $state<string | null>(null);
+
+	function definitionJobs(def: Pipeline['definition']): PipelineJob[] {
+		if (def && typeof def === 'object' && 'jobs' in def) {
+			const j = (def as { jobs: unknown }).jobs;
+			if (Array.isArray(j)) return j as PipelineJob[];
+		}
+		return [];
+	}
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
@@ -103,6 +112,20 @@
 			error = e instanceof Error ? e.message : 'Failed to trigger pipeline';
 		} finally {
 			triggerLoading = false;
+		}
+	}
+
+	async function syncFromGit() {
+		if (!pipeline) return;
+		syncGitLoading = true;
+		error = null;
+		try {
+			const updated = await apiMethods.pipelines.syncFromGit(pipeline.id, {});
+			pipeline = updated;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to sync from Git';
+		} finally {
+			syncGitLoading = false;
 		}
 	}
 
@@ -197,7 +220,13 @@
 				</div>
 			</div>
 
-			<div class="flex items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2">
+				{#if pipeline.scm_provider === 'github'}
+					<Button variant="outline" size="sm" onclick={syncFromGit} loading={syncGitLoading}>
+						<GitCommit class="h-4 w-4" />
+						Sync from Git
+					</Button>
+				{/if}
 				<Button variant="outline" size="sm">
 					<Edit class="h-4 w-4" />
 					Edit
@@ -383,10 +412,10 @@
 				</div>
 			</Card>
 
-			{#if pipeline.definition.jobs && pipeline.definition.jobs.length > 0}
+			{#if definitionJobs(pipeline.definition).length > 0}
 				<Card>
 					<h3 class="mb-4 font-medium text-[var(--text-primary)]">Job Graph</h3>
-					<DagViewer jobs={pipeline.definition.jobs} />
+					<DagViewer jobs={definitionJobs(pipeline.definition)} />
 				</Card>
 			{/if}
 		{/if}

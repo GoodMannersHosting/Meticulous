@@ -81,6 +81,9 @@ pub fn parse_workflow_ref(
             return Err(ParseError::new(
                 ErrorCode::E3002,
                 format!("invalid workflow scope '{}': expected 'global' or 'project'", other),
+            )
+            .with_hint(
+                "workflow must be 'project/<workflow>' or 'global/<workflow>' (file stem under .stable/workflows/). It is not a GitHub owner/repo — put owner/repo in vars and pass it via inputs.",
             ));
         }
     };

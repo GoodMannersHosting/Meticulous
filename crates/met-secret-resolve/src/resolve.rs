@@ -6,7 +6,9 @@ use indexmap::IndexMap;
 use met_core::ids::{JobRunId, OrganizationId, PipelineId, ProjectId};
 use met_parser::{PipelineParser, SecretRef};
 use met_parser::WorkflowProvider;
-use met_secrets::BuiltinStoredCrypto;
+use met_secrets::{
+    parse_github_app_credentials, installation_access_token, BuiltinStoredCrypto,
+};
 use met_store::repos::{BuiltinSecretsRepo, JobRunPipelineContext, JobRunRepo};
 use met_store::PgPool;
 
@@ -18,8 +20,9 @@ use crate::error::{parse_errors, ResolveError};
 #[must_use]
 pub fn materialization_for_kind(kind: &str) -> i32 {
     match kind {
-        "ssh_private_key" | "github_app" | "x509_bundle" => 2, // WORKSPACE_FILE_PATH
-        _ => 1,                                               // ENV_INLINE
+        "github_app" => 1, // installation token is always env-inline at job time
+        "ssh_private_key" | "x509_bundle" => 2, // WORKSPACE_FILE_PATH
+        _ => 1, // ENV_INLINE
     }
 }
 
@@ -123,8 +126,21 @@ pub async fn resolve_stored_secret_map(
                 let s = String::from_utf8(pt.to_vec())
                     .map_err(|e| ResolveError::Crypto(format!("utf8: {e}")))?;
 
-                let mat = materialization_for_kind(&row.kind);
-                out.insert(env_name.clone(), (s, row.kind, mat));
+                if row.kind == "github_app" {
+                    let creds = parse_github_app_credentials(&s).map_err(|e| {
+                        ResolveError::Crypto(e.to_string())
+                    })?;
+                    let token = installation_access_token(&creds)
+                        .await
+                        .map_err(|e| ResolveError::Crypto(e.to_string()))?;
+                    out.insert(
+                        env_name.clone(),
+                        (token, "github_app".to_string(), 1),
+                    );
+                } else {
+                    let mat = materialization_for_kind(&row.kind);
+                    out.insert(env_name.clone(), (s, row.kind, mat));
+                }
             }
             SecretRef::Aws { .. } | SecretRef::Vault { .. } => {
                 return Err(ResolveError::ExternalNotConfigured(env_name.clone()));

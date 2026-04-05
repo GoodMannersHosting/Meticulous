@@ -12,6 +12,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod github_scm;
 pub mod extractors;
 pub mod middleware;
 pub mod openapi;

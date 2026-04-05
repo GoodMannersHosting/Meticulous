@@ -266,10 +266,10 @@ version: "1.0"
 "#;
         
         let mut parser = SpannedYamlParser::with_file("test.yaml");
-        let result: Result<serde_yaml::Value, _> = parser.parse(yaml);
-        
+        let result = parser.parse::<serde_yaml::Value>(yaml);
+
         assert!(result.is_ok());
-        
+
         let tracker = parser.tracker();
         assert!(tracker.get_span("name").is_some());
         assert!(tracker.get_span("id").is_some());

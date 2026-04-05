@@ -101,11 +101,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let stored_secret_crypto = std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
-        .map(std::sync::Arc::new);
+    let stored_secret_crypto = match std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY") {
+        Err(_) => None,
+        Ok(s) if s.trim().is_empty() => None,
+        Ok(k) => {
+            let trimmed = k.trim();
+            let r = met_secrets::BuiltinStoredCrypto::from_master_key_b64(trimmed, None);
+            if let Err(ref e) = r {
+                tracing::warn!(
+                    error = %e,
+                    "MET_BUILTIN_SECRETS_MASTER_KEY is set but could not be loaded; stored secrets API disabled. Expect standard base64 encoding with at least 16 bytes after decode (e.g. openssl rand -base64 32)."
+                );
+            }
+            r.ok().map(std::sync::Arc::new)
+        }
+    };
 
     let nats_ops =
         match met_controller::nats::NatsDispatcher::connect(&met_config.nats.url, None).await {
@@ -119,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-    let engine = match met_engine::Engine::new(met_engine::EngineConfig {
+    let (engine, engine_init_error) = match met_engine::Engine::new(met_engine::EngineConfig {
         nats_url: met_config.nats.url.clone(),
         pool: db.clone(),
         executor: Default::default(),
@@ -130,13 +140,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await
     {
-        Ok(e) => Some(Arc::new(e)),
+        Ok(e) => (Some(Arc::new(e)), None),
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 "met-engine failed to initialize (is NATS up?); pipeline trigger returns 503 until fixed"
             );
-            None
+            // #region agent log
+            {
+                use std::io::Write;
+                const AGENT_DEBUG_LOG: &str =
+                    "/home/dan/code/gmh/meticulous/.cursor/debug-79bb16.log";
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let line = serde_json::json!({
+                    "sessionId": "79bb16",
+                    "timestamp": ts,
+                    "hypothesisId": "H1",
+                    "location": "crates/met-api/src/main.rs:engine_init",
+                    "message": "met-engine init failed",
+                    "data": { "err": e.to_string() }
+                });
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(AGENT_DEBUG_LOG)
+                {
+                    let _ = writeln!(f, "{}", line);
+                }
+            }
+            // #endregion agent log
+            (None, Some(e.to_string()))
         }
     };
 
@@ -146,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_config.clone(),
         stored_secret_crypto,
         engine,
+        engine_init_error,
         api_config.max_concurrent_engine_runs,
         nats_ops,
     );

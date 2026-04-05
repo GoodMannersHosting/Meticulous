@@ -24,6 +24,9 @@ use utoipa::ToSchema;
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;
 
+/// Returned when `AppState::stored_secret_crypto` is unset or the master key could not be loaded.
+pub const STORED_SECRETS_UNAVAILABLE: &str = "Stored secrets are not available: set MET_BUILTIN_SECRETS_MASTER_KEY to a standard base64-encoded master key (decoded length must be at least 16 bytes). For example: openssl rand -base64 32";
+
 /// API error with status code and JSON body.
 #[derive(Debug)]
 pub struct ApiError {
