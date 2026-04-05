@@ -94,10 +94,11 @@
 				Network (destination IP / port)
 			</h3>
 			<div class="overflow-x-auto">
-				<table class="w-full min-w-[32rem] text-left text-xs">
+				<table class="w-full min-w-[48rem] text-left text-xs">
 					<thead>
 						<tr class="border-b border-[var(--border-secondary)] text-[var(--text-tertiary)]">
 							<th class="pb-2 pr-3 font-medium">Job</th>
+							<th class="pb-2 pr-3 font-medium">Executable</th>
 							<th class="pb-2 pr-3 font-medium">Destination</th>
 							<th class="pb-2 pr-3 font-medium">Protocol</th>
 							<th class="pb-2 pr-3 font-medium">Direction</th>
@@ -105,9 +106,22 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each data.network_connections as row (`${row.connected_at}-${row.dst_ip}-${row.dst_port}`)}
+						{#each data.network_connections as row (`${row.connected_at}-${row.dst_ip}-${row.dst_port}-${row.binary_sha256 ?? ''}`)}
 							<tr class="border-b border-[var(--border-secondary)]/80 align-top text-[var(--text-primary)]">
 								<td class="py-2 pr-3">{row.job_name ?? '—'}</td>
+								<td class="py-2 pr-3 align-top font-mono text-xs">
+									{#if row.binary_path}
+										<div class="break-all">{row.binary_path}</div>
+										{#if row.binary_sha256}
+											<div class="mt-1 flex flex-wrap items-center gap-1">
+												<span class="break-all text-[var(--text-secondary)]">{row.binary_sha256}</span>
+												<CopyButton text={row.binary_sha256} size="sm" />
+											</div>
+										{/if}
+									{:else}
+										<span class="text-[var(--text-tertiary)]">—</span>
+									{/if}
+								</td>
 								<td class="py-2 pr-3 font-mono">
 									{row.dst_ip}:{row.dst_port}
 									<div class="mt-0.5 font-sans text-[var(--text-tertiary)]">

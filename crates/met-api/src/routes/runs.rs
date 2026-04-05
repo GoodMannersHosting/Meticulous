@@ -924,6 +924,10 @@ pub struct FootprintNetworkRow {
     pub protocol: String,
     pub direction: String,
     pub connected_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -953,6 +957,39 @@ pub struct RunFootprintResponse {
     pub filesystem_more_directory_count: Option<u32>,
 }
 
+fn format_footprint_parent_dir(binary_path: &str) -> String {
+    let p = std::path::Path::new(binary_path.trim());
+    let Some(parent) = p.parent() else {
+        return ".".to_string();
+    };
+    let s = parent.to_string_lossy();
+    if s.is_empty() {
+        return ".".to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut prev_slash = false;
+    for ch in s.chars() {
+        let ch = if ch == '\\' { '/' } else { ch };
+        if ch == '/' {
+            if !prev_slash {
+                out.push('/');
+                prev_slash = true;
+            }
+        } else {
+            out.push(ch);
+            prev_slash = false;
+        }
+    }
+    while out.ends_with('/') && out.len() > 1 {
+        out.pop();
+    }
+    if out.is_empty() {
+        ".".to_string()
+    } else {
+        out
+    }
+}
+
 fn build_footprint_filesystem(
     binaries: &[FootprintBinaryRow],
 ) -> (
@@ -964,17 +1001,7 @@ fn build_footprint_filesystem(
         BTreeMap::new();
 
     for b in binaries {
-        let parent = std::path::Path::new(&b.binary_path)
-            .parent()
-            .map(|p| {
-                let s = p.to_string_lossy();
-                if s.is_empty() {
-                    "/".to_string()
-                } else {
-                    s.into_owned()
-                }
-            })
-            .unwrap_or_else(|| "/".to_string());
+        let parent = format_footprint_parent_dir(&b.binary_path);
 
         dir_map
             .entry(parent)
@@ -1074,6 +1101,8 @@ async fn get_run_footprint(
             protocol: n.protocol,
             direction: n.direction,
             connected_at: n.connected_at.to_rfc3339(),
+            binary_path: n.binary_path,
+            binary_sha256: n.binary_sha256,
         })
         .collect();
 

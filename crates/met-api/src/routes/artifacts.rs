@@ -8,7 +8,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use met_core::ids::{ArtifactId, RunId};
 use met_store::repos::RunRepo;
+use met_store::StoreError;
 use serde::Serialize;
+use sqlx::FromRow;
 use tracing::instrument;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -154,6 +156,53 @@ pub struct SbomResponse {
     pub sbom: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, FromRow)]
+struct ArtifactSbomProbeRow {
+    name: String,
+    storage_path: String,
+    content_type: Option<String>,
+    #[sqlx(json)]
+    metadata: serde_json::Value,
+}
+
+fn artifact_might_be_sbom(name: &str, storage_path: &str, content_type: Option<&str>) -> bool {
+    let n = name.to_lowercase();
+    let p = storage_path.to_lowercase();
+    if n.contains("spdx")
+        || n.contains("cyclonedx")
+        || n.contains("sbom")
+        || p.contains("spdx")
+        || p.contains("cyclonedx")
+        || p.contains("sbom")
+    {
+        return true;
+    }
+    matches!(
+        content_type,
+        Some("application/spdx+json") | Some("application/vnd.cyclonedx+json")
+    )
+}
+
+fn sbom_format_from_document(doc: &serde_json::Value) -> &'static str {
+    if doc.get("bomFormat").and_then(|v| v.as_str()).is_some() {
+        return "cyclonedx";
+    }
+    if doc.get("spdxVersion").and_then(|v| v.as_str()).is_some() {
+        return "spdx";
+    }
+    "json"
+}
+
+fn inline_sbom_from_metadata(meta: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(v) = meta.get("sbom_json").filter(|v| v.is_object()) {
+        return Some(v.clone());
+    }
+    if let Some(v) = meta.get("sbom").filter(|v| v.is_object()) {
+        return Some(v.clone());
+    }
+    None
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/runs/{run_id}/sbom",
@@ -170,6 +219,45 @@ async fn get_run_sbom(
     Path(run_id): Path<RunId>,
 ) -> ApiResult<Json<SbomResponse>> {
     RunRepo::new(state.db()).get(run_id).await?;
+
+    let rows = sqlx::query_as::<_, ArtifactSbomProbeRow>(
+        r#"
+        SELECT name, storage_path, content_type, COALESCE(metadata, '{}'::jsonb) AS metadata
+        FROM artifacts
+        WHERE run_id = $1
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(run_id.as_uuid())
+    .fetch_all(state.db())
+    .await
+    .map_err(StoreError::from)?;
+
+    let mut saw_sbom_artifact = false;
+    for row in &rows {
+        if !artifact_might_be_sbom(&row.name, &row.storage_path, row.content_type.as_deref()) {
+            continue;
+        }
+        saw_sbom_artifact = true;
+        if let Some(doc) = inline_sbom_from_metadata(&row.metadata) {
+            let format = sbom_format_from_document(&doc).to_string();
+            return Ok(Json(SbomResponse {
+                run_id,
+                format,
+                status: "inline".to_string(),
+                sbom: Some(doc),
+            }));
+        }
+    }
+
+    if saw_sbom_artifact {
+        return Ok(Json(SbomResponse {
+            run_id,
+            format: "spdx".to_string(),
+            status: "artifact_registered".to_string(),
+            sbom: None,
+        }));
+    }
 
     Ok(Json(SbomResponse {
         run_id,

@@ -553,6 +553,21 @@
 					</Alert>
 				{:else if sbomRes?.sbom}
 					<SbomViewer rawDocument={sbomRes.sbom} />
+				{:else if sbomRes?.status === 'artifact_registered'}
+					<div class="space-y-2 p-4 text-sm text-[var(--text-secondary)]">
+						<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
+						<p>
+							The run has an artifact whose name or path looks like an SBOM (e.g.
+							<span class="font-mono text-xs">sbom.spdx.json</span>), but the API does not yet stream the blob
+							into this view. Download it from the run&apos;s artifact list, or store the document under
+							<span class="font-mono text-xs">metadata.sbom_json</span> on the artifact row for an inline preview.
+						</p>
+						<p class="text-xs text-[var(--text-tertiary)]">
+							Trivy: <span class="font-mono">trivy fs --format spdx-json --output sbom.spdx.json .</span> then
+							upload <span class="font-mono">sbom.spdx.json</span> as a run artifact. Object-store layout (when
+							enabled) follows <span class="font-mono">runs/&lt;run_id&gt;/sbom/spdx.json</span>.
+						</p>
+					</div>
 				{:else}
 					<SbomViewer empty />
 				{/if}

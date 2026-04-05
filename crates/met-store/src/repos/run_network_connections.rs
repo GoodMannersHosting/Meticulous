@@ -15,6 +15,8 @@ pub struct RunNetworkConnectionRow {
     pub protocol: String,
     pub direction: String,
     pub connected_at: DateTime<Utc>,
+    pub binary_path: Option<String>,
+    pub binary_sha256: Option<String>,
 }
 
 pub struct RunNetworkConnectionRepo<'a> {
@@ -37,7 +39,9 @@ impl<'a> RunNetworkConnectionRepo<'a> {
                 n.dst_port,
                 n.protocol,
                 n.direction,
-                n.connected_at
+                n.connected_at,
+                n.binary_path,
+                n.binary_sha256
             FROM run_network_connections n
             LEFT JOIN job_runs jr ON jr.id = n.job_run_id
             WHERE n.run_id = $1

@@ -972,7 +972,10 @@ impl AgentService for AgentServiceImpl {
                 .unwrap_or_else(Utc::now);
 
             match log_stream {
-                LogStream::ExecBinary | LogStream::Syscall | LogStream::RuntimeScript => {
+                LogStream::ExecBinary
+                | LogStream::Syscall
+                | LogStream::RuntimeScript
+                | LogStream::NetworkFlow => {
                     if let Err(e) = ingest_telemetry_log_chunk(
                         self.pool.as_ref(),
                         run_id,
@@ -989,6 +992,7 @@ impl AgentService for AgentServiceImpl {
                         LogStream::ExecBinary => "exec.binary",
                         LogStream::Syscall => "exec.syscall",
                         LogStream::RuntimeScript => "exec.runtime_script",
+                        LogStream::NetworkFlow => "net.flow",
                         _ => "exec.chunk",
                     };
                     let payload_parse =
@@ -1364,6 +1368,71 @@ async fn ingest_telemetry_log_chunk(
             .bind(byte_length)
             .bind(truncated)
             .bind(object_key.as_deref())
+            .execute(pool)
+            .await?;
+        }
+        LogStream::NetworkFlow => {
+            let v: serde_json::Value =
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}));
+            let src_ip = v
+                .get("src_ip")
+                .and_then(|x| x.as_str())
+                .unwrap_or("0.0.0.0");
+            let src_port = v
+                .get("src_port")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(0_i32);
+            let dst_ip = v
+                .get("dst_ip")
+                .and_then(|x| x.as_str())
+                .unwrap_or("0.0.0.0");
+            let dst_port = v
+                .get("dst_port")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(0_i32);
+            let protocol = v
+                .get("protocol")
+                .and_then(|x| x.as_str())
+                .unwrap_or("tcp");
+            let direction = v
+                .get("direction")
+                .and_then(|x| x.as_str())
+                .unwrap_or("observed");
+            let pid = v
+                .get("pid")
+                .and_then(|x| x.as_i64())
+                .and_then(|i| i32::try_from(i).ok());
+            let binary_path = v
+                .get("binary_path")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| redact_exec_path_for_storage(s));
+            let binary_sha256 = v
+                .get("binary_sha256")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            sqlx::query(
+                r#"
+                INSERT INTO run_network_connections
+                    (run_id, job_run_id, src_ip, src_port, dst_ip, dst_port,
+                     protocol, direction, pid, binary_path, binary_sha256)
+                VALUES ($1, $2, $3::inet, $4, $5::inet, $6, $7, $8, $9, $10, $11)
+                "#,
+            )
+            .bind(run_id.as_uuid())
+            .bind(job_run_id.as_uuid())
+            .bind(src_ip)
+            .bind(src_port)
+            .bind(dst_ip)
+            .bind(dst_port)
+            .bind(protocol)
+            .bind(direction)
+            .bind(pid)
+            .bind(binary_path.as_deref())
+            .bind(binary_sha256.as_deref())
             .execute(pool)
             .await?;
         }

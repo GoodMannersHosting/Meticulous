@@ -233,6 +233,8 @@ export interface FootprintNetworkRow {
 	protocol: string;
 	direction: string;
 	connected_at: string;
+	binary_path?: string | null;
+	binary_sha256?: string | null;
 }
 
 export interface FootprintDirectoryEntry {

@@ -77,6 +77,7 @@ pub(crate) async fn poll_watcher_emit_telemetry(
             runtime_seen,
         )
         .await?;
+        crate::telemetry::emit_new_network_flows(pipe, step.step_sequence, watcher).await?;
     }
     Ok(())
 }

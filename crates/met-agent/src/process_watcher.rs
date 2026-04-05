@@ -5,7 +5,7 @@
 //! - Compute SHA256 checksums of executed binaries
 //! - Report execution metadata for security auditing
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -100,6 +100,8 @@ pub struct ProcessWatcher {
     /// Polling interval (reserved for future eBPF-based implementation).
     #[allow(dead_code)]
     poll_interval: Duration,
+    /// Dedupe keys for Linux `/proc/net/tcp*` flow telemetry (per watched step).
+    net_flow_seen: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ProcessWatcher {
@@ -112,6 +114,7 @@ impl ProcessWatcher {
             current_step_id: Arc::new(RwLock::new(None)),
             active: Arc::new(RwLock::new(false)),
             poll_interval: Duration::from_millis(100),
+            net_flow_seen: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -120,6 +123,7 @@ impl ProcessWatcher {
         self.root_pid = Some(pid);
         *self.current_step_id.write().await = Some(step_id.to_string());
         *self.active.write().await = true;
+        self.net_flow_seen.write().await.clear();
 
         debug!(pid, step_id, "started process watching");
 
@@ -131,7 +135,33 @@ impl ProcessWatcher {
         *self.active.write().await = false;
         *self.current_step_id.write().await = None;
         self.root_pid = None;
+        self.net_flow_seen.write().await.clear();
         debug!("stopped process watching");
+    }
+
+    /// Pid → executable path + SHA-256 for processes tracked in the current step.
+    pub(crate) async fn tracked_pid_exe_map(&self) -> HashMap<u32, (PathBuf, String)> {
+        let tracked = self.tracked_processes.read().await;
+        tracked
+            .iter()
+            .map(|p| (p.pid, (p.exe_path.clone(), p.exe_sha256.clone())))
+            .collect()
+    }
+
+    /// Returns `true` if this dedupe key was newly inserted (caller should emit telemetry).
+    pub(crate) async fn net_flow_key_insert_if_new(&self, key: String) -> bool {
+        self.net_flow_seen.write().await.insert(key)
+    }
+
+    #[inline]
+    pub(crate) async fn is_watching_active(&self) -> bool {
+        *self.active.read().await
+    }
+
+    /// Root PID passed to [`Self::start_watching`], if any (used for `/proc` correlation).
+    #[inline]
+    pub(crate) fn watch_root_pid(&self) -> Option<u32> {
+        self.root_pid
     }
 
     /// Poll for new child processes and track them.
@@ -268,6 +298,7 @@ impl ProcessWatcher {
         self.root_pid = None;
         *self.active.write().await = false;
         *self.current_step_id.write().await = None;
+        self.net_flow_seen.write().await.clear();
     }
 
     /// Compute SHA-256 checksum, using cache if available.

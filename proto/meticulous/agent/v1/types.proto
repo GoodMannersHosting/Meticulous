@@ -144,6 +144,8 @@ enum LogStream {
     LOG_STREAM_SYSCALL = 4;
     // Bounded runtime script evidence (audit + truncation metadata in JSON).
     LOG_STREAM_RUNTIME_SCRIPT = 5;
+    // UTF-8 JSON network flow: src/dst IP+port, protocol, direction, pid, optional binary_path + binary_sha256 (best-effort association).
+    LOG_STREAM_NETWORK_FLOW = 6;
 }
 
 // Job status update from agent.
