@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton } from '$components/ui';
@@ -83,6 +84,21 @@
 		loadRun();
 	});
 
+	async function refreshRunAndJobsQuietly(runId: string) {
+		try {
+			const r = await apiMethods.runs.get(runId);
+			run = r;
+			jobRuns = await apiMethods.runs.jobs(runId);
+			if (selectedJobRunId && !jobRuns.find((j) => j.id === selectedJobRunId)) {
+				selectedJobRunId = jobRuns.length > 0 ? jobRuns[0].id : null;
+			} else if (jobRuns.length > 0 && !selectedJobRunId) {
+				selectedJobRunId = jobRuns[0].id;
+			}
+		} catch {
+			/* keep current data on transient poll failures */
+		}
+	}
+
 	async function loadRun() {
 		loading = true;
 		error = null;
@@ -131,6 +147,18 @@
 	const isTerminal = $derived(
 		run?.status && ['succeeded', 'failed', 'cancelled', 'timed_out'].includes(run.status)
 	);
+
+	$effect(() => {
+		if (!browser) return;
+		const runId = $page.params.id;
+		if (!runId || !run || isTerminal) return;
+
+		const interval = setInterval(() => {
+			void refreshRunAndJobsQuietly(runId);
+		}, 2500);
+
+		return () => clearInterval(interval);
+	});
 
 	function jobsFromPipelineDef(def: Pipeline['definition'] | undefined): PipelineJob[] {
 		if (!def || typeof def !== 'object' || !('jobs' in def)) return [];

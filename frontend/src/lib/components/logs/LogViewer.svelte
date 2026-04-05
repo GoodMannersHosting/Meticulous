@@ -9,11 +9,11 @@
 </script>
 
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { apiMethods, getWebSocketManager } from '$api';
 	import type { LogLinePayload } from '$api';
-	import { Skeleton } from '$components/data';
-	import { Button, CopyButton } from '$components/ui';
-	import { Download, Terminal, ArrowDown, Search, X } from 'lucide-svelte';
+	import { Button } from '$components/ui';
+	import { Download, Terminal, ArrowDown, Search, X, Maximize2, Minimize2 } from 'lucide-svelte';
 
 	let { runId, jobRunId, jobStatus = '', class: className = '' }: LogViewerProps = $props();
 
@@ -24,7 +24,63 @@
 	let searchQuery = $state('');
 	let showSearch = $state(false);
 	let logContainer: HTMLElement;
+	let logFullWindow = $state(false);
 	let wsUnsubscribe: (() => void) | null = null;
+
+	/** Git and many CLIs use `\r` to redraw a line; normalize so the log viewer shows separate lines. */
+	function normalizeLogDisplayText(raw: string): string {
+		return raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+	}
+
+	/** Leading `!` excludes lines matching the pattern; `*` is a wildcard (any substring). */
+	function parseSearchQuery(q: string): { exclude: boolean; pattern: string } | null {
+		const t = q.trim();
+		if (!t) return null;
+		if (t.startsWith('!')) {
+			const p = t.slice(1).trim();
+			if (!p) return null;
+			return { exclude: true, pattern: p };
+		}
+		return { exclude: false, pattern: t };
+	}
+
+	function globToRegex(pattern: string): RegExp {
+		const escaped = pattern
+			.split('*')
+			.map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
+			.join('.*');
+		return new RegExp(escaped, 'i');
+	}
+
+	function lineMatchesSearch(normalizedLine: string, q: string): boolean {
+		const parsed = parseSearchQuery(q);
+		if (!parsed) return true;
+		try {
+			const re = globToRegex(parsed.pattern);
+			const matches = re.test(normalizedLine);
+			return parsed.exclude ? !matches : matches;
+		} catch {
+			return true;
+		}
+	}
+
+	function toggleLogFullWindow() {
+		logFullWindow = !logFullWindow;
+	}
+
+	$effect(() => {
+		if (!browser || !logFullWindow) return;
+		const prevOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') logFullWindow = false;
+		};
+		window.addEventListener('keydown', onKey);
+		return () => {
+			document.body.style.overflow = prevOverflow;
+			window.removeEventListener('keydown', onKey);
+		};
+	});
 
 	function normalizeLogResponse(
 		data: {
@@ -120,7 +176,9 @@
 	}
 
 	function downloadLogs() {
-		const content = lines.map((l) => `${l.timestamp} [${l.level}] ${l.line}`).join('\n');
+		const content = lines
+			.map((l) => `${l.timestamp} [${l.level}] ${normalizeLogDisplayText(l.line)}`)
+			.join('\n');
 		const blob = new Blob([content], { type: 'text/plain' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
@@ -131,33 +189,51 @@
 	}
 
 	function copyAllLogs() {
-		const content = lines.map((l) => l.line).join('\n');
+		const content = lines.map((l) => normalizeLogDisplayText(l.line)).join('\n');
 		navigator.clipboard.writeText(content);
 	}
 
+	const indexedLines = $derived(
+		lines.map((line, i) => ({
+			line,
+			lineNo: i + 1
+		}))
+	);
+
 	const filteredLines = $derived(
-		searchQuery
-			? lines.filter((l) => l.line.toLowerCase().includes(searchQuery.toLowerCase()))
-			: lines
+		searchQuery.trim()
+			? indexedLines.filter(({ line }) =>
+					lineMatchesSearch(normalizeLogDisplayText(line.line), searchQuery)
+				)
+			: indexedLines
 	);
 
 	function getLevelClass(level: string): string {
 		switch (level) {
 			case 'stderr':
-				return 'text-error-500';
+				return 'text-rose-300';
 			case 'system':
-				return 'text-primary-500';
+				return 'text-sky-300';
 			default:
-				return 'text-[var(--text-primary)]';
+				return 'text-zinc-200';
 		}
 	}
 </script>
 
-<div class="flex h-full flex-col {className}">
-	<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-3 py-2">
+<div
+	class="
+		flex min-h-0 flex-col bg-zinc-950 {className}
+		{logFullWindow
+		? 'fixed inset-0 z-50 h-dvh max-h-dvh w-full shadow-2xl'
+		: 'h-full'}
+	"
+>
+	<div
+		class="flex shrink-0 items-center justify-between border-b border-zinc-700/80 bg-zinc-900/90 px-3 py-2"
+	>
 		<div class="flex items-center gap-2">
-			<Terminal class="h-4 w-4 text-[var(--text-secondary)]" />
-			<span class="text-sm text-[var(--text-secondary)]">
+			<Terminal class="h-4 w-4 text-zinc-400" />
+			<span class="text-sm text-zinc-300">
 				{lines.length} lines
 			</span>
 		</div>
@@ -167,17 +243,17 @@
 				<div class="relative">
 					<input
 						type="text"
-						placeholder="Search logs..."
+						placeholder="Pattern or !exclude — * wildcards"
 						bind:value={searchQuery}
 						class="
-							h-7 w-48 rounded border border-[var(--border-primary)]
-							bg-[var(--bg-tertiary)] px-2 text-sm
-							focus:outline-none focus:ring-1 focus:ring-primary-500
+							h-7 w-56 rounded border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100
+							placeholder:text-zinc-500
+							focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40
 						"
 					/>
 					<button
 						type="button"
-						class="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+						class="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 text-zinc-500 hover:text-zinc-300"
 						onclick={() => { showSearch = false; searchQuery = ''; }}
 					>
 						<X class="h-3.5 w-3.5" />
@@ -188,6 +264,18 @@
 					<Search class="h-4 w-4" />
 				</Button>
 			{/if}
+			<Button
+				variant="ghost"
+				size="sm"
+				onclick={toggleLogFullWindow}
+				title={logFullWindow ? 'Exit full window' : 'Full window'}
+			>
+				{#if logFullWindow}
+					<Minimize2 class="h-4 w-4" />
+				{:else}
+					<Maximize2 class="h-4 w-4" />
+				{/if}
+			</Button>
 			<Button variant="ghost" size="sm" onclick={copyAllLogs}>
 				Copy
 			</Button>
@@ -205,29 +293,33 @@
 	<div
 		bind:this={logContainer}
 		onscroll={handleScroll}
-		class="flex-1 overflow-auto bg-secondary-950 font-mono text-xs"
+		class="min-h-0 flex-1 overflow-auto bg-zinc-950 font-mono text-xs"
 	>
 		{#if loading}
 			<div class="space-y-1 p-4">
 				{#each Array(20) as _, i (i)}
-					<div class="h-4 animate-pulse rounded bg-secondary-800" style="width: {50 + Math.random() * 50}%"></div>
+					<div class="h-4 animate-pulse rounded bg-zinc-800" style="width: {50 + Math.random() * 50}%"></div>
 				{/each}
 			</div>
 		{:else if error}
-			<div class="p-4 text-error-500">{error}</div>
+			<div class="p-4 text-rose-400">{error}</div>
 		{:else if filteredLines.length === 0}
-			<div class="flex h-full items-center justify-center text-secondary-500">
-				{searchQuery ? 'No matching lines' : 'No logs available'}
+			<div class="flex h-full items-center justify-center text-zinc-500">
+				{searchQuery.trim() ? 'No matching lines' : 'No logs available'}
 			</div>
 		{:else}
 			<div class="p-2">
-				{#each filteredLines as line, index (index)}
-					<div class="group flex hover:bg-secondary-900/50">
-						<span class="w-12 flex-shrink-0 select-none pr-2 text-right text-secondary-600">
-							{index + 1}
+				{#each filteredLines as row (row.lineNo)}
+					<div class="group flex min-h-0 hover:bg-zinc-900/70">
+						<span
+							class="w-14 flex-shrink-0 select-none pr-2 text-right tabular-nums text-zinc-500 group-hover:text-zinc-400"
+						>
+							{row.lineNo}
 						</span>
-						<span class="flex-1 whitespace-pre-wrap break-all {getLevelClass(line.level)}">
-							{line.line}
+						<span
+							class="min-w-0 flex-1 whitespace-pre-wrap break-words {getLevelClass(row.line.level)}"
+						>
+							{normalizeLogDisplayText(row.line.line)}
 						</span>
 					</div>
 				{/each}

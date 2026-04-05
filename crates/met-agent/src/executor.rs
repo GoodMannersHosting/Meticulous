@@ -378,28 +378,6 @@ impl JobExecutor {
                         None,
                     )
                     .await;
-                // #region agent log
-                {
-                    use std::io::Write;
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0);
-                    let payload = serde_json::json!({
-                        "sessionId": "f94486",
-                        "hypothesisId": "UX",
-                        "location": "executor.rs:run_job_dispatch",
-                        "message": "agent_reported_job_failed",
-                        "data": { "job_run_id": job_run_id },
-                        "timestamp": ts,
-                    });
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/home/dan/code/gmh/meticulous/.cursor/debug-f94486.log")
-                        .and_then(|mut f| writeln!(f, "{}", payload));
-                }
-                // #endregion
                 Ok(())
             }
         }
