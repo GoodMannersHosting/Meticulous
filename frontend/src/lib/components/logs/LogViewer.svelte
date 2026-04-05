@@ -2,19 +2,20 @@
 	export interface LogViewerProps {
 		runId: string;
 		jobRunId: string;
+		/** When running/queued, logs are polled periodically (live WebSocket hub is not wired yet). */
+		jobStatus?: string;
 		class?: string;
 	}
 </script>
 
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
 	import { apiMethods, getWebSocketManager } from '$api';
 	import type { LogLinePayload } from '$api';
 	import { Skeleton } from '$components/data';
 	import { Button, CopyButton } from '$components/ui';
 	import { Download, Terminal, ArrowDown, Search, X } from 'lucide-svelte';
 
-	let { runId, jobRunId, class: className = '' }: LogViewerProps = $props();
+	let { runId, jobRunId, jobStatus = '', class: className = '' }: LogViewerProps = $props();
 
 	let lines = $state<LogLinePayload[]>([]);
 	let loading = $state(true);
@@ -25,28 +26,66 @@
 	let logContainer: HTMLElement;
 	let wsUnsubscribe: (() => void) | null = null;
 
+	function normalizeLogResponse(
+		data: {
+			lines?: LogLinePayload[];
+			content?: string;
+		},
+		jobRun: string,
+		run: string
+	): LogLinePayload[] {
+		if (data.lines && data.lines.length > 0) {
+			return data.lines;
+		}
+		const raw = data.content?.trim();
+		if (!raw) return [];
+		const ts = new Date().toISOString();
+		return raw.split('\n').map((line) => ({
+			run_id: run,
+			job_run_id: jobRun,
+			line,
+			level: 'stdout' as const,
+			timestamp: ts
+		}));
+	}
+
 	$effect(() => {
-		loadLogs();
+		let poll: ReturnType<typeof setInterval> | null = null;
+		const active =
+			jobStatus === 'running' ||
+			jobStatus === 'queued' ||
+			jobStatus === 'pending';
+
+		void loadLogs(false);
 		subscribeToLogs();
+
+		if (active) {
+			poll = setInterval(() => void loadLogs(true), 2000);
+		}
 
 		return () => {
 			if (wsUnsubscribe) {
 				wsUnsubscribe();
 			}
+			if (poll) clearInterval(poll);
 		};
 	});
 
-	async function loadLogs() {
-		loading = true;
-		error = null;
+	async function loadLogs(silent: boolean) {
+		if (!silent) {
+			loading = true;
+			error = null;
+		}
 		try {
 			const response = await apiMethods.runs.logs(runId, jobRunId);
-			lines = response.lines ?? [];
+			lines = normalizeLogResponse(response, jobRunId, runId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load logs';
-			lines = [];
+			if (!silent) {
+				error = e instanceof Error ? e.message : 'Failed to load logs';
+				lines = [];
+			}
 		} finally {
-			loading = false;
+			if (!silent) loading = false;
 		}
 	}
 

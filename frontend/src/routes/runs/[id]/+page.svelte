@@ -307,6 +307,14 @@
 											{selectedJobRun.scheduling_note}
 										</p>
 									{/if}
+									{#if selectedJobRun.error_message}
+										<p
+											class="mt-2 text-sm rounded-md border border-[var(--border-primary)] bg-[var(--surface-elevated)] px-3 py-2 text-[var(--color-error-700)] whitespace-pre-wrap break-words"
+											role="alert"
+										>
+											{selectedJobRun.error_message}
+										</p>
+									{/if}
 								</div>
 								<div class="text-sm text-[var(--text-secondary)]">
 									{#if selectedJobRun.agent_id}
@@ -315,7 +323,7 @@
 								</div>
 							</div>
 							<div class="h-96">
-								<LogViewer runId={run.id} jobRunId={selectedJobRun.id} />
+								<LogViewer runId={run.id} jobRunId={selectedJobRun.id} jobStatus={selectedJobRun.status} />
 							</div>
 						</Card>
 					{:else}

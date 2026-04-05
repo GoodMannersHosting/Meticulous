@@ -25,7 +25,9 @@ mod run_logs;
 mod log_cache;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
-pub use agent_join_registration::register_agent_with_join_token;
+pub use agent_join_registration::{
+    register_agent_with_join_token, reenroll_agent_with_exhausted_join_token,
+};
 pub use agents::AgentRepo;
 pub use api_tokens::ApiTokenRepo;
 pub use audit_log::{AuditLogRepo, AuditLogRow, AuditLogFilter, CreateAuditLog};

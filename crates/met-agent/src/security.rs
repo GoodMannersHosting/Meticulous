@@ -415,19 +415,15 @@ impl JobPki {
     /// Decrypt a secret value using X25519 + AES-256-GCM hybrid decryption.
     ///
     /// Expects `encrypted` to be a serialized `EncryptedEnvelope` (ephemeral public
-    /// key || nonce || HMAC || ciphertext length || ciphertext). The `hmac_key` is
-    /// the shared HMAC key used for plaintext integrity verification.
-    pub fn decrypt(
-        &self,
-        encrypted: &[u8],
-        hmac_key: &[u8],
-    ) -> Result<Zeroizing<Vec<u8>>, String> {
+    /// key || nonce || HMAC || ciphertext length || ciphertext). Plaintext HMAC is
+    /// verified using a key derived from ECDH (same as controller-side encrypt).
+    pub fn decrypt(&self, encrypted: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
         let envelope = EncryptedEnvelope::from_bytes(encrypted)
             .map_err(|e| format!("failed to parse encrypted envelope: {e}"))?;
 
         let private_key_bytes = self.x25519_secret.to_bytes();
 
-        HybridDecryption::decrypt(&private_key_bytes, &envelope, hmac_key)
+        HybridDecryption::decrypt(&private_key_bytes, &envelope)
             .map_err(|e| format!("hybrid decryption failed: {e}"))
     }
 }

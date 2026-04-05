@@ -28,7 +28,7 @@ use tracing::{error, info, warn};
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
 #[command(
-    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential."
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones)."
 )]
 #[command(version)]
 struct Args {
@@ -77,6 +77,10 @@ struct Args {
     /// Do not write `~/.met/agentconfig.toml` after successful registration (when enrollment used a CLI/env/interactive token).
     #[arg(long = "no-save-config", env = "MET_AGENT_NO_SAVE_CONFIG")]
     no_save_config: bool,
+
+    /// Run pipeline steps on the host (`native`), in Docker/Podman (`container`), or `auto` (Linux: use container CLI if present). Overrides config / `MET_EXECUTION_RUNTIME`.
+    #[arg(long = "execution-runtime", value_name = "MODE")]
+    execution_runtime: Option<String>,
 }
 
 #[tokio::main]
@@ -110,6 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.pool.clone(),
         args.tags.clone(),
     )?;
+
+    if let Some(raw) = args.execution_runtime.as_ref() {
+        config.execution_runtime = raw.parse().map_err(|e: String| {
+            AgentError::Config(format!("invalid --execution-runtime: {e}"))
+        })?;
+    }
 
     let force_register = args.force_register
         || std::env::var("MET_FORCE_REGISTER")
@@ -208,9 +218,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Create execution backend
-    let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(backend::default_backend().await);
-    info!(backend = backend.name(), "using execution backend");
+    // Create execution backend (default: native / host processes — see `execution_runtime` in config)
+    let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(
+        backend::create_execution_backend(config.execution_runtime).await,
+    );
+    info!(
+        backend = backend.name(),
+        runtime = ?config.execution_runtime,
+        "using execution backend"
+    );
 
     // Create heartbeat state
     let heartbeat_state = Arc::new(RwLock::new(HeartbeatState::default()));

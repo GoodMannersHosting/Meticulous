@@ -92,14 +92,12 @@ async fn pki_multiple_agents_distinct_serials() {
 fn hybrid_encryption_roundtrip() {
     let recipient_secret = StaticSecret::random_from_rng(OsRng);
     let recipient_public = X25519PublicKey::from(&recipient_secret);
-    let hmac_key = b"integration-test-hmac-key-value!";
 
     let plaintext = b"database-password=hunter2";
 
     let envelope = HybridEncryption::encrypt(
         &recipient_public.to_bytes(),
         plaintext,
-        hmac_key,
     )
     .expect("encryption must succeed");
 
@@ -108,7 +106,7 @@ fn hybrid_encryption_roundtrip() {
     let restored = EncryptedEnvelope::from_bytes(&bytes).expect("deserialization must succeed");
 
     let decrypted =
-        HybridDecryption::decrypt(&recipient_secret.to_bytes(), &restored, hmac_key)
+        HybridDecryption::decrypt(&recipient_secret.to_bytes(), &restored)
             .expect("decryption must succeed");
 
     assert_eq!(&*decrypted, plaintext);
@@ -119,13 +117,12 @@ fn hybrid_encryption_wrong_key_rejected() {
     let real_secret = StaticSecret::random_from_rng(OsRng);
     let real_public = X25519PublicKey::from(&real_secret);
     let wrong_secret = StaticSecret::random_from_rng(OsRng);
-    let hmac_key = b"integration-test-hmac-key-value!";
 
     let envelope =
-        HybridEncryption::encrypt(&real_public.to_bytes(), b"secret-data", hmac_key).unwrap();
+        HybridEncryption::encrypt(&real_public.to_bytes(), b"secret-data").unwrap();
 
     let result =
-        HybridDecryption::decrypt(&wrong_secret.to_bytes(), &envelope, hmac_key);
+        HybridDecryption::decrypt(&wrong_secret.to_bytes(), &envelope);
     assert!(result.is_err(), "decryption with wrong key must fail");
 }
 
@@ -133,30 +130,15 @@ fn hybrid_encryption_wrong_key_rejected() {
 fn hybrid_encryption_tampered_hmac_rejected() {
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = X25519PublicKey::from(&secret);
-    let hmac_key = b"integration-test-hmac-key-value!";
 
     let mut envelope =
-        HybridEncryption::encrypt(&public.to_bytes(), b"secret", hmac_key).unwrap();
+        HybridEncryption::encrypt(&public.to_bytes(), b"secret").unwrap();
 
     // Tamper with the HMAC
     envelope.plaintext_hmac[0] ^= 0xff;
 
-    let result = HybridDecryption::decrypt(&secret.to_bytes(), &envelope, hmac_key);
+    let result = HybridDecryption::decrypt(&secret.to_bytes(), &envelope);
     assert!(result.is_err(), "tampered HMAC must be rejected");
-}
-
-#[test]
-fn hybrid_encryption_wrong_hmac_key_rejected() {
-    let secret = StaticSecret::random_from_rng(OsRng);
-    let public = X25519PublicKey::from(&secret);
-    let hmac_key = b"correct-hmac-key-for-encrypt!!!!";
-    let wrong_hmac = b"wrong---hmac-key-for-decrypt!!!!";
-
-    let envelope =
-        HybridEncryption::encrypt(&public.to_bytes(), b"payload", hmac_key).unwrap();
-
-    let result = HybridDecryption::decrypt(&secret.to_bytes(), &envelope, wrong_hmac);
-    assert!(result.is_err(), "wrong HMAC key must be rejected");
 }
 
 #[test]
@@ -169,14 +151,13 @@ fn hybrid_encryption_envelope_too_short() {
 fn hybrid_encryption_large_payload() {
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = X25519PublicKey::from(&secret);
-    let hmac_key = b"integration-test-hmac-key-value!";
 
     let plaintext = vec![0xAB_u8; 1024 * 1024]; // 1 MiB
 
     let envelope =
-        HybridEncryption::encrypt(&public.to_bytes(), &plaintext, hmac_key).unwrap();
+        HybridEncryption::encrypt(&public.to_bytes(), &plaintext).unwrap();
     let decrypted =
-        HybridDecryption::decrypt(&secret.to_bytes(), &envelope, hmac_key).unwrap();
+        HybridDecryption::decrypt(&secret.to_bytes(), &envelope).unwrap();
 
     assert_eq!(&*decrypted, &plaintext);
 }
@@ -630,7 +611,6 @@ fn secret_value_redacted_debug() {
 #[test]
 fn combined_encrypt_then_mask() {
     let secret_value = "production-db-password-XyZ789!@#";
-    let hmac_key = b"combined-test-hmac-key-32-bytes!";
 
     let recipient = StaticSecret::random_from_rng(OsRng);
     let recipient_pub = X25519PublicKey::from(&recipient);
@@ -638,12 +618,11 @@ fn combined_encrypt_then_mask() {
     let envelope = HybridEncryption::encrypt(
         &recipient_pub.to_bytes(),
         secret_value.as_bytes(),
-        hmac_key,
     )
     .unwrap();
 
     let decrypted =
-        HybridDecryption::decrypt(&recipient.to_bytes(), &envelope, hmac_key).unwrap();
+        HybridDecryption::decrypt(&recipient.to_bytes(), &envelope).unwrap();
     let decrypted_str = std::str::from_utf8(&decrypted).unwrap();
     assert_eq!(decrypted_str, secret_value);
 

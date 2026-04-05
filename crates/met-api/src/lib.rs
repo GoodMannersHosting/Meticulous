@@ -16,6 +16,7 @@ pub mod extractors;
 pub mod github_scm;
 pub mod middleware;
 pub mod openapi;
+pub mod pipeline_execution;
 pub mod routes;
 pub mod scheduling_hints;
 pub mod state;

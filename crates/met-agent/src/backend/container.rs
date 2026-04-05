@@ -96,13 +96,17 @@ impl ContainerBackend {
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
                 cmd.arg("run")
                     .arg("--rm")
-                    .arg("--network=none") // Isolated by default
+                    // Default bridge network (outbound NAT) — required for git clone, curl, etc.
+                    // Opt-in isolation can be added later via pipeline/step settings.
                     .arg("-w")
                     .arg("/workspace");
 
                 // Mount workspace
                 cmd.arg("-v")
                     .arg(format!("{}:/workspace", workspace.display()));
+
+                // Non-interactive git/SSH in CI (avoid credential-helper prompts blocking forever).
+                cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
 
                 // Set environment variables
                 for (key, value) in &step.environment {
@@ -184,15 +188,23 @@ impl ExecutionBackend for ContainerBackend {
         let mut runtime_budget = crate::telemetry::MAX_RUNTIME_SCRIPT_BYTES_PER_STEP;
         let mut runtime_seen = HashSet::new();
 
-        debug!(
+        info!(
             runtime = ?self.runtime,
+            step = %step.name,
             image = %step.image,
-            command = %step.command,
-            "executing step in container"
+            "container backend: begin (pull if needed, then run)"
         );
 
-        // Pull image first (ignore errors - it might already exist)
-        let _ = self.pull_image(&step.image).await;
+        let pull_start = Instant::now();
+        let pull_res = self.pull_image(&step.image).await;
+        info!(
+            step = %step.name,
+            image = %step.image,
+            elapsed = ?pull_start.elapsed(),
+            pull_ok = pull_res.is_ok(),
+            "container backend: image pull attempt finished"
+        );
+
 
         // Build and run command
         let mut cmd = self.build_run_command(step, workspace);

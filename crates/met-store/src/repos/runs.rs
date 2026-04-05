@@ -218,7 +218,7 @@ impl<'a> RunRepo<'a> {
         let job_runs = sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -358,7 +358,7 @@ impl<'a> JobRunRepo<'a> {
             INSERT INTO job_runs (id, run_id, job_id, job_name, status, attempt, created_at)
             VALUES ($1, $2, $3, $4, 'pending', 1, $5)
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -377,7 +377,7 @@ impl<'a> JobRunRepo<'a> {
         sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             FROM job_runs
             WHERE id = $1
             "#,
@@ -480,7 +480,7 @@ impl<'a> JobRunRepo<'a> {
         let job_runs = sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                   error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                   error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -491,6 +491,267 @@ impl<'a> JobRunRepo<'a> {
         .await?;
 
         Ok(job_runs)
+    }
+
+    /// When a run is already terminal but `job_runs` / `step_runs` were never updated (missed
+    /// controller ack, crash, etc.), move non-terminal rows to a consistent terminal status.
+    ///
+    /// Returns `(steps_updated, jobs_updated)`.
+    pub async fn reconcile_stale_jobs_and_steps_for_terminal_run(
+        &self,
+        run_id: RunId,
+        run_status: RunStatus,
+        run_finished_at: Option<DateTime<Utc>>,
+    ) -> Result<(u64, u64)> {
+        if !run_status.is_terminal() {
+            return Ok((0, 0));
+        }
+
+        let ts = run_finished_at.unwrap_or_else(Utc::now);
+        let mut steps_total: u64 = 0;
+        let mut jobs_total: u64 = 0;
+
+        // step_runs
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'cancelled',
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run cancelled')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'cancelled'
+  AND sr.status IN ('pending', 'queued', 'running')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'timed_out',
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run timed out')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'timed_out'
+  AND sr.status IN ('pending', 'queued', 'running')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'failed',
+    exit_code = COALESCE(sr.exit_code, 1),
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run ended while step was running')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'failed'
+  AND sr.status = 'running'
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'cancelled',
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run failed before this step executed')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'failed'
+  AND sr.status IN ('pending', 'queued')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'failed',
+    exit_code = COALESCE(sr.exit_code, 1),
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run was marked succeeded while step was still running')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'succeeded'
+  AND sr.status = 'running'
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        steps_total += sqlx::query(
+            r#"
+UPDATE step_runs sr
+SET status = 'skipped',
+    finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(sr.error_message, 'Run completed; step was not executed')
+FROM job_runs jr
+JOIN runs r ON r.id = jr.run_id
+WHERE sr.job_run_id = jr.id
+  AND jr.run_id = $1
+  AND r.status = 'succeeded'
+  AND sr.status IN ('pending', 'queued')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        // job_runs
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'cancelled',
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run cancelled')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'cancelled'
+  AND jr.status IN ('pending', 'queued', 'running')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'timed_out',
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run timed out')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'timed_out'
+  AND jr.status IN ('pending', 'queued', 'running')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'failed',
+    exit_code = COALESCE(jr.exit_code, 1),
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run ended while job was running')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'failed'
+  AND jr.status = 'running'
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'cancelled',
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run failed before this job executed')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'failed'
+  AND jr.status IN ('pending', 'queued')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'failed',
+    exit_code = COALESCE(jr.exit_code, 1),
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run was marked succeeded while job was still running')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'succeeded'
+  AND jr.status = 'running'
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        jobs_total += sqlx::query(
+            r#"
+UPDATE job_runs jr
+SET status = 'skipped',
+    finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
+    error_message = COALESCE(jr.error_message, 'Run completed; job was not executed')
+FROM runs r
+WHERE jr.run_id = r.id
+  AND jr.run_id = $1
+  AND r.status = 'succeeded'
+  AND jr.status IN ('pending', 'queued')
+"#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(ts)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        Ok((steps_total, jobs_total))
     }
 
     /// Update job run status to queued.
@@ -508,7 +769,7 @@ impl<'a> JobRunRepo<'a> {
             SET status = 'running', agent_id = $2, started_at = $3
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -538,7 +799,7 @@ impl<'a> JobRunRepo<'a> {
             SET status = $2, exit_code = $3, error_message = $4, outputs = COALESCE($5, outputs), finished_at = $6
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -559,8 +820,14 @@ impl<'a> JobRunRepo<'a> {
     }
 
     /// Mark job as cancelled.
-    pub async fn mark_cancelled(&self, id: JobRunId) -> Result<JobRun> {
-        self.update_status(id, JobStatus::Cancelled, None, Some("Cancelled by user")).await
+    pub async fn mark_cancelled(&self, id: JobRunId, reason: Option<&str>) -> Result<JobRun> {
+        self.update_status(
+            id,
+            JobStatus::Cancelled,
+            None,
+            Some(reason.unwrap_or("Cancelled by user")),
+        )
+        .await
     }
 
     /// Mark job as timed out.
@@ -576,7 +843,7 @@ impl<'a> JobRunRepo<'a> {
             SET cache_hit = true, cache_key = $2
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -596,7 +863,7 @@ impl<'a> JobRunRepo<'a> {
                 started_at = NULL, finished_at = NULL, exit_code = NULL, error_message = NULL
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -650,7 +917,7 @@ impl<'a> JobRunRepo<'a> {
                 finished_at = CASE WHEN $5 THEN $6 ELSE finished_at END
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
-                      error_message, cache_hit, cache_key, outputs, started_at, finished_at, created_at
+                      error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -809,6 +1076,28 @@ impl<'a> StepRunRepo<'a> {
             r#"
             UPDATE step_runs
             SET status = 'skipped', error_message = $2, finished_at = $3
+            WHERE id = $1
+            RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
+                      log_path, outputs, started_at, finished_at, created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(reason)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(step_run)
+    }
+
+    /// Mark step as cancelled (e.g. agent stopped mid-step).
+    pub async fn mark_cancelled(&self, id: StepRunId, reason: Option<&str>) -> Result<StepRun> {
+        let now = Utc::now();
+
+        let step_run = sqlx::query_as::<_, StepRun>(
+            r#"
+            UPDATE step_runs
+            SET status = 'cancelled', error_message = $2, finished_at = $3
             WHERE id = $1
             RETURNING id, job_run_id, step_id, step_name, status, exit_code, error_message, 
                       log_path, outputs, started_at, finished_at, created_at

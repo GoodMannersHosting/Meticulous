@@ -116,6 +116,44 @@ impl<'a> WorkflowRepo<'a> {
         Ok(workflow)
     }
 
+    /// Insert or update a project-scoped workflow (same `org_id`, `project_id`, `name`, `version`).
+    pub async fn upsert_project(
+        &self,
+        org_id: OrganizationId,
+        project_id: ProjectId,
+        input: &CreateWorkflow,
+    ) -> Result<ReusableWorkflow> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let workflow = sqlx::query_as::<_, ReusableWorkflow>(
+            r#"
+            INSERT INTO reusable_workflows (id, org_id, project_id, scope, name, version, definition, description, tags, created_at, updated_at)
+            VALUES ($1, $2, $3, 'project', $4, $5, $6, $7, $8, $9, $9)
+            ON CONFLICT (org_id, project_id, name, version) DO UPDATE
+            SET definition = EXCLUDED.definition,
+                description = COALESCE(EXCLUDED.description, reusable_workflows.description),
+                tags = EXCLUDED.tags,
+                deprecated = false,
+                updated_at = EXCLUDED.updated_at
+            RETURNING id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(org_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .bind(&input.name)
+        .bind(&input.version)
+        .bind(&input.definition)
+        .bind(&input.description)
+        .bind(&input.tags)
+        .bind(now)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(workflow)
+    }
+
     /// Get a workflow by scope, name, and version.
     pub async fn get(
         &self,

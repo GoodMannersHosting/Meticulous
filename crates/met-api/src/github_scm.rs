@@ -11,9 +11,10 @@ use met_parser::{
     PipelineParser,
 };
 use met_secrets::{BuiltinStoredCrypto, installation_access_token, parse_github_app_credentials};
+use met_store::StoreError;
 use met_store::PgPool;
 use met_store::repos::BuiltinSecretCipherRow;
-use met_store::repos::{BuiltinSecretsRepo, StoredSecretKind};
+use met_store::repos::{BuiltinSecretsRepo, CreateWorkflow, StoredSecretKind, WorkflowRepo};
 use serde::Deserialize;
 use tracing::instrument;
 
@@ -361,6 +362,94 @@ fn yaml_file_to_json_value(yaml: &str) -> ApiResult<serde_json::Value> {
     serde_json::to_value(&v).map_err(|e| ApiError::bad_request(format!("JSON: {e}")))
 }
 
+fn json_workflow_version(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    v.as_u64().map(|n| n.to_string())
+        .or_else(|| v.as_f64().map(|n| n.to_string()))
+}
+
+/// Copy `.stable/workflows/*.{yaml,yml}` from a Git checkout into `reusable_workflows` (project scope).
+///
+/// Trigger / import / sync-from-git already resolve `project/...` via [`GitWorkflowProvider`] on disk.
+/// Scheduling hints and other DB-only parses use [`crate::scheduling_hints::try_parse_pipeline_ir`],
+/// which only sees the database—this keeps both paths aligned.
+pub async fn sync_project_workflows_from_stable_dir(
+    pool: &PgPool,
+    org_id: OrganizationId,
+    project_id: ProjectId,
+    repo_root: &Path,
+) -> Result<(), StoreError> {
+    let dir = repo_root.join(".stable/workflows");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    let repo = WorkflowRepo::new(pool);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "yaml" && ext != "yml" {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("workflow");
+        let yaml_text = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skipping unreadable workflow file");
+                continue;
+            }
+        };
+        let def = match yaml_file_to_json_value(&yaml_text) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skipping invalid workflow YAML");
+                continue;
+            }
+        };
+        let name = def
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(stem)
+            .to_string();
+        let version = def
+            .get("version")
+            .and_then(json_workflow_version)
+            .unwrap_or_else(|| "0.0.0".to_string());
+        let description = def
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        repo.upsert_project(
+            org_id,
+            project_id,
+            &CreateWorkflow {
+                name,
+                version,
+                definition: def,
+                description,
+                tags: Vec::new(),
+            },
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 /// Parse pipeline IR from a GitHub tarball (global DB workflows + `project/` files on disk).
 pub async fn parse_pipeline_from_github_checkout(
     pool: &PgPool,
@@ -403,7 +492,7 @@ pub async fn parse_pipeline_from_github_checkout(
     let def = yaml_file_to_json_value(&yaml_text)?;
 
     let db = DatabaseWorkflowProvider::new(pool.clone(), org_id.as_uuid());
-    let git = GitWorkflowProvider::new(repo_root, None);
+    let git = GitWorkflowProvider::new(&repo_root, None);
     let composite = CompositeWorkflowProvider::new()
         .with_database(db)
         .with_git(git);
@@ -418,6 +507,15 @@ pub async fn parse_pipeline_from_github_checkout(
                 .join("; ")
         ))
     })?;
+
+    if let Err(e) =
+        sync_project_workflows_from_stable_dir(pool, org_id, project_id, &repo_root).await
+    {
+        tracing::warn!(
+            error = %e,
+            "failed to sync .stable/workflows to reusable_workflows (run sync-from-git or trigger again after fix)"
+        );
+    }
 
     Ok((ir, commit_sha, def))
 }

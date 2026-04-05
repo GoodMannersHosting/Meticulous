@@ -98,17 +98,21 @@ impl<'a> LogCacheRepo<'a> {
     }
 
     /// Fetch lines for a job run (ordered by sequence).
+    ///
+    /// When `stream` is `Some`, only lines for that stream (e.g. `stdout`) are returned.
     pub async fn list_for_job_run(
         &self,
         job_run_id: JobRunId,
         limit: i64,
         offset: i64,
+        stream: Option<&str>,
     ) -> Result<Vec<LogCacheEntry>> {
         let rows = sqlx::query_as::<_, LogCacheEntry>(
             r#"
             SELECT job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at
             FROM log_cache
             WHERE job_run_id = $1
+              AND ($4::text IS NULL OR stream = $4)
             ORDER BY sequence ASC
             LIMIT $2 OFFSET $3
             "#,
@@ -116,6 +120,7 @@ impl<'a> LogCacheRepo<'a> {
         .bind(job_run_id.as_uuid())
         .bind(limit)
         .bind(offset)
+        .bind(stream)
         .fetch_all(self.pool)
         .await?;
 

@@ -147,12 +147,6 @@ impl Scheduler {
         let variables = ctx.variables().await;
         let steps = self.prepare_steps(ctx, job).await?;
 
-        for s in &steps {
-            self.persistence
-                .create_step_run(s.step_run_id, job_run_id, s.step_id, &s.name)
-                .await?;
-        }
-
         let pool_tag = job
             .pool_selector
             .pool_name
@@ -174,12 +168,19 @@ impl Scheduler {
         let candidates = repo
             .list_available_for_dispatch(ctx.org_id(), &pool_tag, &required_tags)
             .await?;
+
         let Some(chosen) = candidates.first() else {
             return Err(EngineError::NoAvailableAgents {
                 job: job.name.clone(),
                 tags: required_tags.clone(),
             });
         };
+
+        for s in &steps {
+            self.persistence
+                .create_step_run(s.step_run_id, job_run_id, s.step_id, &s.name)
+                .await?;
+        }
 
         let message = self.build_dispatch_message(
             ctx,
@@ -461,6 +462,11 @@ impl Scheduler {
             .values()
             .filter(|j| j.run_id == run_id)
             .count()
+    }
+
+    /// Drop scheduler bookkeeping for a job run (e.g. DB reconciliation already shows terminal).
+    pub async fn forget_active_job(&self, job_run_id: JobRunId) {
+        self.active_jobs.write().await.remove(&job_run_id);
     }
 }
 

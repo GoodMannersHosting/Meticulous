@@ -25,8 +25,8 @@ use met_secrets::pki::encryption::HybridEncryption;
 use met_secrets::BuiltinStoredCrypto;
 use met_objstore::ObjectStore;
 use met_store::repos::{
-    register_agent_with_join_token, AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo,
-    LogCacheRepo, StepRunRepo,
+    reenroll_agent_with_exhausted_join_token, register_agent_with_join_token, AgentHeartbeatRepo,
+    AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, StepRunRepo,
 };
 use met_store::PgPool;
 use sha2::{Digest, Sha256};
@@ -77,8 +77,6 @@ pub struct AgentServiceImpl {
     registry: AgentRegistry,
     jwt: JwtManager,
     nats: NatsDispatcher,
-    /// HMAC key for secret envelope verification
-    secrets_hmac_key: Vec<u8>,
     /// Optional object store for log archival (SeaweedFS / S3).
     object_store: Option<Arc<dyn ObjectStore + Send + Sync>>,
     /// Decrypts `builtin_secrets` ciphertext for job key exchange.
@@ -101,19 +99,12 @@ impl AgentServiceImpl {
             config.jwt_renewable,
         );
 
-        // Derive HMAC key from JWT secret for secret envelope verification
-        let mut hasher = Sha256::new();
-        hasher.update(config.jwt_secret.as_bytes());
-        hasher.update(b"meticulous-secrets-hmac-v1");
-        let secrets_hmac_key = hasher.finalize().to_vec();
-
         Self {
             config,
             pool,
             registry,
             jwt,
             nats,
-            secrets_hmac_key,
             object_store,
             stored_secret_crypto,
         }
@@ -248,11 +239,37 @@ impl AgentService for AgentServiceImpl {
 
         let join_repo = JoinTokenRepo::new(&self.pool);
         let token_hash = hash_join_token(&req.join_token);
-        let join_record = join_repo
-            .validate_token(&token_hash)
+        let token_row = join_repo
+            .get_by_token_hash(&token_hash)
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::unauthenticated("invalid or unknown join token"))?;
+
+        if token_row.revoked {
+            return Err(Status::unauthenticated(
+                "join token is expired, revoked, or has reached max uses",
+            ));
+        }
+        if let Some(exp) = token_row.expires_at
+            && exp < Utc::now()
+        {
+            return Err(Status::unauthenticated(
+                "join token is expired, revoked, or has reached max uses",
+            ));
+        }
+
+        let allow_fresh_registration = token_row.current_uses < token_row.max_uses;
+        let reenroll_with_exhausted_token = !allow_fresh_registration
+            && token_row.max_uses > 0
+            && token_row.consumed_by_agent_id.is_some();
+
+        if !allow_fresh_registration && !reenroll_with_exhausted_token {
+            return Err(Status::unauthenticated(
+                "join token is expired, revoked, or has reached max uses",
+            ));
+        }
+
+        let join_record = token_row;
 
         let org_id = match join_record.scope {
             JoinTokenScope::Tenant => {
@@ -307,19 +324,45 @@ impl AgentService for AgentServiceImpl {
         self.validate_security_bundle(bundle)
             .map_err(|e| Status::from(e))?;
 
-        // Create agent record
-        let agent_id = AgentId::new();
+        if reenroll_with_exhausted_token && bundle.machine_id.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "machine_id is required to re-register with an exhausted join token",
+            ));
+        }
+
         let caps = req.capabilities.as_ref();
 
-        let mut agent = Agent::new(
-            org_id,
-            &bundle.hostname,
-            caps.map(|c| c.os.as_str()).unwrap_or(&bundle.os),
-            caps.map(|c| c.arch.as_str()).unwrap_or(&bundle.arch),
-            env!("CARGO_PKG_VERSION"),
-        );
+        let mut agent = if reenroll_with_exhausted_token {
+            let consumed_id = join_record.consumed_by_agent_id.ok_or_else(|| {
+                Status::failed_precondition("join token missing consuming agent")
+            })?;
+            AgentRepo::new(&self.pool)
+                .get(consumed_id)
+                .await
+                .map_err(|_| Status::unauthenticated("invalid or unknown join token"))?
+        } else {
+            let agent_id = AgentId::new();
+            let mut a = Agent::new(
+                org_id,
+                &bundle.hostname,
+                caps.map(|c| c.os.as_str()).unwrap_or(&bundle.os),
+                caps.map(|c| c.arch.as_str()).unwrap_or(&bundle.arch),
+                env!("CARGO_PKG_VERSION"),
+            );
+            a.id = agent_id;
+            a
+        };
 
-        agent.id = agent_id;
+        let agent_id = agent.id;
+        agent.org_id = org_id;
+        agent.name = bundle.hostname.clone();
+        agent.os = caps
+            .map(|c| c.os.clone())
+            .unwrap_or_else(|| bundle.os.clone());
+        agent.arch = caps
+            .map(|c| c.arch.clone())
+            .unwrap_or_else(|| bundle.arch.clone());
+        agent.version = env!("CARGO_PKG_VERSION").to_string();
         agent.status = AgentStatus::Online;
         agent.tags = labels.clone();
         // Match `runs-on.tags` in pipelines: scheduler requires `key=value` strings on this column
@@ -377,18 +420,34 @@ impl AgentService for AgentServiceImpl {
             (String::new(), String::new())
         };
 
-        // Save to database and consume join token atomically
-        let (agent, _) = register_agent_with_join_token(&self.pool, &token_hash, &agent)
-            .await
-            .map_err(|e| match e {
-                StoreError::NotFound { .. } => {
-                    Status::unauthenticated("invalid or unknown join token")
-                }
-                StoreError::Constraint(_) => Status::unauthenticated(
-                    "join token is expired, revoked, or has reached max uses",
-                ),
-                _ => Status::internal(e.to_string()),
-            })?;
+        let agent = if reenroll_with_exhausted_token {
+            let (updated, _) =
+                reenroll_agent_with_exhausted_join_token(&self.pool, &token_hash, &bundle.machine_id, &agent)
+                    .await
+                    .map_err(|e| match e {
+                        StoreError::NotFound { .. } => {
+                            Status::unauthenticated("invalid or unknown join token")
+                        }
+                        StoreError::Constraint(_) => {
+                            Status::unauthenticated("invalid or unknown join token")
+                        }
+                        _ => Status::internal(e.to_string()),
+                    })?;
+            updated
+        } else {
+            let (registered, _) = register_agent_with_join_token(&self.pool, &token_hash, &agent)
+                .await
+                .map_err(|e| match e {
+                    StoreError::NotFound { .. } => {
+                        Status::unauthenticated("invalid or unknown join token")
+                    }
+                    StoreError::Constraint(_) => Status::unauthenticated(
+                        "join token is expired, revoked, or has reached max uses",
+                    ),
+                    _ => Status::internal(e.to_string()),
+                })?;
+            registered
+        };
 
         // Add to registry
         let state = AgentState {
@@ -402,7 +461,7 @@ impl AgentService for AgentServiceImpl {
             pool_tags: pool_tags.clone(),
             labels,
             max_jobs: agent.max_jobs,
-            running_jobs: 0,
+            running_jobs: agent.running_jobs,
             current_job: None,
             jwt_expires_at,
             resources: None,
@@ -682,7 +741,11 @@ impl AgentService for AgentServiceImpl {
                         None,
                     )
                     .await,
-                JobStatus::Cancelled => job_run_repo.mark_cancelled(job_run_id).await,
+                JobStatus::Cancelled => {
+                    job_run_repo
+                        .mark_cancelled(job_run_id, error_msg.or(Some("Cancelled")))
+                        .await
+                }
                 JobStatus::TimedOut => job_run_repo.mark_timed_out(job_run_id).await,
                 JobStatus::Skipped => job_run_repo
                     .mark_skipped(job_run_id, error_msg)
@@ -837,6 +900,9 @@ impl AgentService for AgentServiceImpl {
                     .await,
                 JobStatus::Skipped => step_run_repo
                     .mark_skipped(step_run_id, error_msg)
+                    .await,
+                JobStatus::Cancelled => step_run_repo
+                    .mark_cancelled(step_run_id, error_msg.or(Some("Cancelled")))
                     .await,
                 _ => step_run_repo.get(step_run_id).await,
             };
@@ -1064,7 +1130,7 @@ impl AgentService for AgentServiceImpl {
                 1 => SecretMaterialKind::EnvInline as i32,
                 _ => SecretMaterialKind::Unspecified as i32,
             };
-            match HybridEncryption::encrypt(&agent_public_key, value.as_bytes(), &self.secrets_hmac_key) {
+            match HybridEncryption::encrypt(&agent_public_key, value.as_bytes()) {
                 Ok(envelope) => {
                     // Compute SHA-256 checksum of plaintext for verification
                     let mut hasher = Sha256::new();

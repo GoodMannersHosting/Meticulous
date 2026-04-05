@@ -11,7 +11,6 @@ use met_core::{
 };
 use met_store::repos::{PipelineRepo, ProjectRepo};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tracing::instrument;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -20,6 +19,7 @@ use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
     extractors::{Auth, PaginatedResponse, Pagination},
     github_scm,
+    pipeline_execution,
     state::AppState,
 };
 
@@ -485,19 +485,7 @@ async fn trigger_pipeline(
     Path(id): Path<PipelineId>,
     Json(req): Json<TriggerPipelineRequest>,
 ) -> ApiResult<Json<TriggerPipelineResponse>> {
-    use met_core::ids::RunId;
-    use met_parser::{DatabaseWorkflowProvider, PipelineParser};
     use met_store::repos::RunRepo;
-
-    let Some(engine) = state.engine.as_ref().map(Arc::clone) else {
-        let detail = state
-            .engine_init_error
-            .as_deref()
-            .unwrap_or("NATS or JetStream initialization failed (see API logs)");
-        return Err(ApiError::unavailable(format!(
-            "pipeline engine is not available: {detail}"
-        )));
-    };
 
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
@@ -511,91 +499,31 @@ async fn trigger_pipeline(
         .await?;
     let org_id = project.org_id;
 
-    let effective_ref = req
-        .commit_sha
-        .as_deref()
-        .or(req.branch.as_deref())
-        .or(pipeline.scm_ref.as_deref())
-        .unwrap_or("main");
-
-    let mut pipeline_ir = if pipeline.scm_provider.as_deref() == Some("github") {
-        let Some(crypto) = state.stored_secret_crypto.as_ref() else {
-            return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
-        };
-        let repository = pipeline
-            .scm_repository
-            .as_deref()
-            .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_repository"))?;
-        let credentials_path =
-            pipeline
-                .scm_credentials_secret_path
-                .as_deref()
-                .ok_or_else(|| {
-                    ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
-                })?;
-        let scm_path = pipeline
-            .scm_path
-            .as_deref()
-            .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_path"))?;
-
-        let (ir, _, _) = github_scm::parse_pipeline_from_github_checkout(
-            state.db(),
-            crypto.as_ref(),
-            org_id,
-            pipeline.project_id,
-            repository,
-            effective_ref,
-            scm_path,
-            credentials_path,
-        )
-        .await?;
-        ir
-    } else {
-        let yaml = serde_yaml::to_string(&pipeline.definition).map_err(|e| {
-            ApiError::bad_request(format!(
-                "pipeline definition is not representable as YAML: {e}"
-            ))
-        })?;
-
-        let wf_provider = DatabaseWorkflowProvider::new(state.db().clone(), org_id.as_uuid());
-        let mut parser = PipelineParser::new(&wf_provider);
-        parser.parse(&yaml).await.map_err(|diags| {
-            ApiError::bad_request(format!(
-                "invalid pipeline definition: {}",
-                diags
-                    .iter()
-                    .map(|d| d.message.clone())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ))
-        })?
-    };
-
-    pipeline_ir.id = pipeline.id;
-    pipeline_ir.project_id = Some(pipeline.project_id);
-
-    let run_repo = RunRepo::new(state.db());
-    let run = run_repo.create(id, None, &user.email).await?;
-    let run_id: RunId = run.id;
-
-    let permit = state
-        .engine_run_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| ApiError::unavailable("engine shutdown"))?;
+    let pipeline_ir = pipeline_execution::load_pipeline_ir_for_execution(
+        &state,
+        &pipeline,
+        org_id,
+        req.commit_sha.as_deref(),
+        req.branch.as_deref(),
+    )
+    .await?;
 
     let _req_variables = req.variables;
 
-    tokio::spawn(async move {
-        let _run_capacity = permit;
-        if let Err(e) = engine
-            .execute_with_existing_run(run_id, org_id, pipeline_ir, "api")
-            .await
-        {
-            tracing::error!(%run_id, error = %e, "pipeline engine run failed");
-        }
-    });
+    let run_repo = RunRepo::new(state.db());
+    let run = run_repo.create(id, None, &user.email).await?;
+    let run_id = run.id;
+
+    pipeline_execution::start_engine_for_existing_run_from_state(
+        &state,
+        org_id,
+        run_id,
+        pipeline_ir,
+        pipeline.id,
+        pipeline.project_id,
+        "api",
+    )
+    .await?;
 
     Ok(Json(TriggerPipelineResponse {
         run_id,

@@ -27,6 +27,42 @@ use met_core::{JobId, PipelineId, StepId};
 use std::collections::HashSet;
 use tracing::{debug, instrument};
 
+/// Map a pipeline `secrets:` block to [`SecretRef`] values without resolving workflows or building IR.
+///
+/// Used by the controller to load secret names for job key exchange; workflow providers are not
+/// required because secrets are declared only on the pipeline root.
+#[must_use]
+pub fn secret_refs_from_raw_secrets(secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
+    secrets
+        .iter()
+        .filter_map(|(name, raw)| {
+            let secret_ref = if let Some(aws) = &raw.aws {
+                SecretRef::Aws {
+                    arn: aws.arn.clone(),
+                    key: aws.key.clone(),
+                }
+            } else if let Some(vault) = &raw.vault {
+                SecretRef::Vault {
+                    path: vault.path.clone(),
+                    key: vault.key.clone(),
+                    mount: vault.mount.clone(),
+                }
+            } else if let Some(stored) = &raw.stored {
+                SecretRef::Stored {
+                    name: stored.name.clone(),
+                }
+            } else if let Some(builtin) = &raw.builtin {
+                SecretRef::Builtin {
+                    name: builtin.name.clone(),
+                }
+            } else {
+                return None;
+            };
+            Some((name.clone(), secret_ref))
+        })
+        .collect()
+}
+
 /// Parser configuration.
 #[derive(Debug, Clone)]
 pub struct ParserConfig {
@@ -474,7 +510,9 @@ impl<'a> PipelineParser<'a> {
 
         let jobs: Vec<JobIR> = workflows
             .into_iter()
-            .flat_map(|w| self.expand_workflow_to_jobs(w, default_pool.clone()))
+            .flat_map(|w| {
+                self.expand_workflow_to_jobs(w, default_pool.clone(), pipeline)
+            })
             .collect();
 
         PipelineIR {
@@ -542,34 +580,7 @@ impl<'a> PipelineParser<'a> {
 
     /// Convert raw secrets to IR.
     fn convert_secrets(&self, secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
-        secrets
-            .iter()
-            .filter_map(|(name, raw)| {
-                let secret_ref = if let Some(aws) = &raw.aws {
-                    SecretRef::Aws {
-                        arn: aws.arn.clone(),
-                        key: aws.key.clone(),
-                    }
-                } else if let Some(vault) = &raw.vault {
-                    SecretRef::Vault {
-                        path: vault.path.clone(),
-                        key: vault.key.clone(),
-                        mount: vault.mount.clone(),
-                    }
-                } else if let Some(stored) = &raw.stored {
-                    SecretRef::Stored {
-                        name: stored.name.clone(),
-                    }
-                } else if let Some(builtin) = &raw.builtin {
-                    SecretRef::Builtin {
-                        name: builtin.name.clone(),
-                    }
-                } else {
-                    return None;
-                };
-                Some((name.clone(), secret_ref))
-            })
-            .collect()
+        secret_refs_from_raw_secrets(secrets)
     }
 
     /// Convert pool selector.
@@ -599,8 +610,13 @@ impl<'a> PipelineParser<'a> {
         &self,
         workflow: ResolvedWorkflow,
         default_pool: Option<PoolSelector>,
+        pipeline: &RawPipeline,
     ) -> Vec<JobIR> {
         let workflow_prefix = &workflow.invocation.id;
+        let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
+        let resolved_inputs = Self::resolve_workflow_invocation_inputs(pipeline, &workflow);
+        let full_ctx = VariableContext::new(pipeline.vars.clone(), secrets)
+            .with_inputs(resolved_inputs.clone());
 
         workflow
             .definition
@@ -619,7 +635,15 @@ impl<'a> PipelineParser<'a> {
                     .steps
                     .iter()
                     .enumerate()
-                    .map(|(idx, step)| self.convert_step(step, idx))
+                    .map(|(idx, step)| {
+                        self.convert_step_with_interpolation(
+                            step,
+                            idx,
+                            &pipeline.vars,
+                            &resolved_inputs,
+                            &full_ctx,
+                        )
+                    })
                     .collect();
 
                 let services: Vec<ServiceDef> = job
@@ -746,6 +770,58 @@ impl<'a> PipelineParser<'a> {
             timeout: step.timeout.unwrap_or(defaults::STEP_TIMEOUT),
             continue_on_error: step.continue_on_error,
         }
+    }
+
+    fn resolve_workflow_invocation_inputs(
+        pipeline: &RawPipeline,
+        workflow: &ResolvedWorkflow,
+    ) -> IndexMap<String, String> {
+        let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
+        let base_ctx = VariableContext::new(pipeline.vars.clone(), secrets);
+        workflow
+            .invocation
+            .inputs
+            .iter()
+            .map(|(k, v)| {
+                let raw = Self::invocation_yaml_to_string(v);
+                let resolved = crate::variable::interpolate(&raw, &base_ctx);
+                (k.clone(), resolved)
+            })
+            .collect()
+    }
+
+    fn invocation_yaml_to_string(v: &serde_yaml::Value) -> String {
+        match v {
+            serde_yaml::Value::String(s) => s.clone(),
+            serde_yaml::Value::Number(n) => n.to_string(),
+            serde_yaml::Value::Bool(b) => b.to_string(),
+            serde_yaml::Value::Null => String::new(),
+            other => serde_yaml::to_string(other)
+                .unwrap_or_default()
+                .trim_matches('\n')
+                .to_string(),
+        }
+    }
+
+    fn convert_step_with_interpolation(
+        &self,
+        step: &RawStep,
+        idx: usize,
+        pipeline_vars: &IndexMap<String, String>,
+        resolved_inputs: &IndexMap<String, String>,
+        full_ctx: &VariableContext,
+    ) -> StepIR {
+        let mut step_ir = self.convert_step(step, idx);
+        if let StepCommand::Run { script, .. } = &mut step_ir.command {
+            let raw = std::mem::take(script);
+            let after_templates = crate::variable::interpolate_workflow_templates(
+                &raw,
+                pipeline_vars,
+                resolved_inputs,
+            );
+            *script = crate::variable::interpolate(&after_templates, full_ctx);
+        }
+        step_ir
     }
 
     /// Convert a raw service to IR.
@@ -918,6 +994,32 @@ mod tests {
                 timeout: None,
                 retry: None,
             }],
+        }
+    }
+
+    /// Controller job key exchange must resolve secrets without a workflow provider; pipeline
+    /// `secrets:` live on the root document only.
+    #[test]
+    fn secret_refs_extracted_without_resolving_workflows() {
+        let yaml = r#"
+name: demo
+triggers:
+  manual: {}
+secrets:
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+workflows:
+  - name: X
+    id: x
+    workflow: project/not-fetched-for-secret-extraction
+"#;
+        let raw: RawPipeline = serde_yaml::from_str(yaml).expect("yaml");
+        let refs = secret_refs_from_raw_secrets(&raw.secrets);
+        assert_eq!(refs.len(), 1);
+        match refs.get("GITHUB_TOKEN") {
+            Some(SecretRef::Stored { name }) => assert_eq!(name, "meticulous-ci"),
+            o => panic!("unexpected ref: {o:?}"),
         }
     }
 

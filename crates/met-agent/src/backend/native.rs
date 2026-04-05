@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -61,6 +61,46 @@ impl NativeBackend {
 impl Default for NativeBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Names from `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated). Copied from the agent process into
+/// the child only when the job dispatch did not already set that variable.
+fn native_inherit_env_keys() -> Vec<String> {
+    std::env::var("MET_AGENT_NATIVE_INHERIT_ENV")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Read process output line-by-line (including a final line without a trailing `\n`) and ship to logs.
+async fn forward_project_output<B: AsyncBufRead + Unpin>(
+    mut reader: B,
+    pipe: Option<StepLogPipe>,
+    stderr: bool,
+) {
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        match reader.read_line(&mut buf).await {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = buf.trim_end_matches(['\r', '\n']);
+                if let Some(ref p) = pipe {
+                    let send = if stderr {
+                        p.send_stderr_line(line).await
+                    } else {
+                        p.send_stdout_line(line).await
+                    };
+                    if send.is_err() {
+                        break;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
     }
 }
 
@@ -127,6 +167,15 @@ impl ExecutionBackend for NativeBackend {
             command.env("TEMP", std::env::var("TEMP").unwrap_or_default());
         }
 
+        for key in native_inherit_env_keys() {
+            if step.environment.contains_key(&key) {
+                continue;
+            }
+            if let Ok(v) = std::env::var(&key) {
+                command.env(&key, v);
+            }
+        }
+
         // Add step-specific environment
         for (key, value) in &step.environment {
             command.env(key, value);
@@ -148,47 +197,23 @@ impl ExecutionBackend for NativeBackend {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Read child output: optional live+spool via `logs`, otherwise discard (never log to agent console).
+        // Read child output: `read_line` captures the last fragment even without a trailing newline (common for shell errors).
         let stdout_handle = if let Some(stdout) = stdout {
-            if let Some(pipe) = logs.cloned() {
-                Some(tokio::spawn(async move {
-                    let reader = BufReader::new(stdout);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        if pipe.send_stdout_line(&line).await.is_err() {
-                            break;
-                        }
-                    }
-                }))
-            } else {
-                Some(tokio::spawn(async move {
-                    let reader = BufReader::new(stdout);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(_line)) = lines.next_line().await {}
-                }))
-            }
+            let pipe = logs.cloned();
+            Some(tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                forward_project_output(reader, pipe, false).await;
+            }))
         } else {
             None
         };
 
         let stderr_handle = if let Some(stderr) = stderr {
-            if let Some(pipe) = logs.cloned() {
-                Some(tokio::spawn(async move {
-                    let reader = BufReader::new(stderr);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        if pipe.send_stderr_line(&line).await.is_err() {
-                            break;
-                        }
-                    }
-                }))
-            } else {
-                Some(tokio::spawn(async move {
-                    let reader = BufReader::new(stderr);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(_line)) = lines.next_line().await {}
-                }))
-            }
+            let pipe = logs.cloned();
+            Some(tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                forward_project_output(reader, pipe, true).await;
+            }))
         } else {
             None
         };

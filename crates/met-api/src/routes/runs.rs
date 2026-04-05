@@ -7,10 +7,13 @@ use axum::{
     routing::{get, post},
 };
 use met_core::{
-    ids::{PipelineId, RunId},
+    ids::{JobRunId, PipelineId, RunId},
     models::{Run, RunStatus},
 };
-use met_store::repos::{JobRunRepo, PipelineRepo, RunRepo, StepRunRepo};
+use met_store::{
+    PgPool,
+    repos::{JobRunRepo, LogCacheRepo, PipelineRepo, ProjectRepo, RunRepo, StepRunRepo},
+};
 
 use crate::scheduling_hints;
 use serde::{Deserialize, Serialize};
@@ -20,8 +23,28 @@ use utoipa::ToSchema;
 use crate::{
     error::{ApiError, ApiResult},
     extractors::{Auth, PaginatedResponse, Pagination},
+    pipeline_execution,
     state::AppState,
 };
+
+/// Backfill non-terminal `job_runs` / `step_runs` when the parent run is already terminal.
+async fn reconcile_terminal_run_children(db: &PgPool, run: &Run) -> Result<(), met_store::StoreError> {
+    if !run.status.is_terminal() {
+        return Ok(());
+    }
+    let (steps, jobs) = JobRunRepo::new(db)
+        .reconcile_stale_jobs_and_steps_for_terminal_run(run.id, run.status, run.finished_at)
+        .await?;
+    if steps > 0 || jobs > 0 {
+        tracing::debug!(
+            run_id = %run.id,
+            steps_updated = steps,
+            jobs_updated = jobs,
+            "reconciled stale job/step rows for terminal run"
+        );
+    }
+    Ok(())
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -190,9 +213,9 @@ async fn retry_run(
     Auth(user): Auth,
     Path(id): Path<RunId>,
 ) -> ApiResult<Json<RetryRunResponse>> {
-    let repo = RunRepo::new(state.db());
+    let run_repo = RunRepo::new(state.db());
 
-    let original_run = repo.get(id).await?;
+    let original_run = run_repo.get(id).await?;
 
     if !original_run.status.is_terminal() {
         return Err(ApiError::conflict(format!(
@@ -201,13 +224,52 @@ async fn retry_run(
         )));
     }
 
-    let new_run = repo
-        .create(
+    let pipeline_repo = PipelineRepo::new(state.db());
+    let pipeline = pipeline_repo
+        .get(original_run.pipeline_id)
+        .await?;
+
+    if !user.can_access_project(pipeline.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = ProjectRepo::new(state.db())
+        .get(pipeline.project_id)
+        .await?;
+    let org_id = project.org_id;
+
+    let pipeline_ir = pipeline_execution::load_pipeline_ir_for_execution(
+        &state,
+        &pipeline,
+        org_id,
+        original_run.commit_sha.as_deref(),
+        original_run.branch.as_deref(),
+    )
+    .await?;
+
+    let new_run = run_repo
+        .create_full(
             original_run.pipeline_id,
+            org_id,
             original_run.trigger_id,
             &user.email,
+            None,
+            original_run.commit_sha.as_deref(),
+            original_run.branch.as_deref(),
+            None,
         )
         .await?;
+
+    pipeline_execution::start_engine_for_existing_run_from_state(
+        &state,
+        org_id,
+        new_run.id,
+        pipeline_ir,
+        pipeline.id,
+        pipeline.project_id,
+        "retry",
+    )
+    .await?;
 
     Ok(Json(RetryRunResponse {
         original_run_id: id,
@@ -264,6 +326,7 @@ async fn get_run_jobs(
     Path(id): Path<RunId>,
 ) -> ApiResult<Json<Vec<JobRunResponse>>> {
     let run = RunRepo::new(state.db()).get(id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
     let pipeline = PipelineRepo::new(state.db()).get(run.pipeline_id).await?;
 
     let job_repo = JobRunRepo::new(state.db());
@@ -341,6 +404,14 @@ async fn get_job_steps(
     Auth(_user): Auth,
     Path((run_id, job_run_id)): Path<(RunId, met_core::ids::JobRunId)>,
 ) -> ApiResult<Json<Vec<StepRunResponse>>> {
+    let run = RunRepo::new(state.db()).get(run_id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
+
+    let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
+    if jr.run_id != run_id {
+        return Err(ApiError::not_found("job run not found for this pipeline run"));
+    }
+
     let step_repo = StepRunRepo::new(state.db());
     let step_runs = step_repo.list_by_job_run(job_run_id).await?;
 
@@ -374,8 +445,19 @@ pub struct LogsQuery {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct JobLogLine {
+    pub run_id: String,
+    pub job_run_id: String,
+    pub step_run_id: Option<String>,
+    pub line: String,
+    pub level: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LogsResponse {
     pub content: String,
+    pub lines: Vec<JobLogLine>,
     pub offset: u64,
     pub has_more: bool,
 }
@@ -400,39 +482,58 @@ pub struct LogsResponse {
 async fn get_job_logs(
     State(state): State<AppState>,
     Auth(_user): Auth,
-    Path((_run_id, job_run_id)): Path<(RunId, met_core::ids::JobRunId)>,
+    Path((run_id, job_run_id)): Path<(RunId, JobRunId)>,
     Query(query): Query<LogsQuery>,
 ) -> ApiResult<Json<LogsResponse>> {
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(10000);
 
-    let rows: Vec<(String,)> = sqlx::query_as(
-        r#"
-        SELECT content
-        FROM run_logs
-        WHERE job_run_id = $1
-        ORDER BY sequence ASC
-        OFFSET $2
-        LIMIT $3
-        "#,
-    )
-    .bind(job_run_id.as_uuid())
-    .bind(offset as i64)
-    .bind(limit as i64 + 1)
-    .fetch_all(state.db())
-    .await
-    .map_err(met_store::StoreError::from)?;
+    let run = RunRepo::new(state.db()).get(run_id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
 
-    let has_more = rows.len() > limit as usize;
-    let content = rows
-        .into_iter()
-        .take(limit as usize)
-        .map(|(c,)| c)
+    let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
+    if jr.run_id != run_id {
+        return Err(ApiError::not_found("job run not found for this pipeline run"));
+    }
+
+    let repo = LogCacheRepo::new(state.db());
+    let fetch_limit = (limit as i64).saturating_add(1);
+    let entries = repo
+        .list_for_job_run(
+            job_run_id,
+            fetch_limit,
+            offset as i64,
+            query.stream.as_deref(),
+        )
+        .await?;
+
+    let has_more = entries.len() > limit as usize;
+    let taken: Vec<_> = entries.into_iter().take(limit as usize).collect();
+    let content = taken
+        .iter()
+        .map(|e| e.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
 
+    let lines: Vec<JobLogLine> = taken
+        .iter()
+        .map(|e| JobLogLine {
+            run_id: e.run_id.to_string(),
+            job_run_id: e.job_run_id.to_string(),
+            step_run_id: e.step_run_id.map(|s| s.to_string()),
+            line: e.content.clone(),
+            level: if e.stream == "stderr" {
+                "stderr".to_string()
+            } else {
+                "stdout".to_string()
+            },
+            timestamp: e.timestamp.to_rfc3339(),
+        })
+        .collect();
+
     Ok(Json(LogsResponse {
         content,
+        lines,
         offset,
         has_more,
     }))
@@ -469,7 +570,8 @@ async fn get_run_dag(
     Auth(_user): Auth,
     Path(id): Path<RunId>,
 ) -> ApiResult<Json<RunDagResponse>> {
-    let _run = RunRepo::new(state.db()).get(id).await?;
+    let run = RunRepo::new(state.db()).get(id).await?;
+    reconcile_terminal_run_children(state.db(), &run).await?;
     let job_repo = JobRunRepo::new(state.db());
     let job_runs = job_repo.list_by_run(id).await?;
 

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/schema-catalog.json",
+  "version": 1,
+  "schemas": [
+    {
+      "name": "Meticulous pipeline",
+      "description": "Inline pipeline YAML (crates/met-parser RawPipeline).",
+      "fileMatch": [
+        "**/pipelines/**/*.yml",
+        "**/pipelines/**/*.yaml",
+        "**/*meticulous*pipeline*.yml",
+        "**/*meticulous*pipeline*.yaml"
+      ],
+      "url": "https://github.com/gmh/meticulous/raw/main/schemas/meticulous-pipeline.schema.json"
+    },
+    {
+      "name": "Meticulous workflow",
+      "description": "Reusable workflow YAML (crates/met-parser RawWorkflowDef).",
+      "fileMatch": [
+        "**/workflows/**/*.yml",
+        "**/workflows/**/*.yaml",
+        "**/.stable/workflows/**/*.yml",
+        "**/.stable/workflows/**/*.yaml"
+      ],
+      "url": "https://github.com/gmh/meticulous/raw/main/schemas/meticulous-workflow.schema.json"
+    }
+  ]
+}

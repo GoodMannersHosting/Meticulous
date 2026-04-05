@@ -28,6 +28,8 @@ fn new_hmac(key: &[u8]) -> Result<HmacSha256, SecretsError> {
 }
 
 const HKDF_INFO: &[u8] = b"meticulous-pki-hybrid-encryption-v1";
+/// Separate HKDF context for the plaintext HMAC key so both sides derive it from ECDH without a server-only secret.
+const HKDF_PLAINTEXT_HMAC_INFO: &[u8] = b"meticulous-pki-hybrid-plaintext-hmac-v1";
 const NONCE_SIZE: usize = 12;
 
 /// An encrypted envelope containing a single secret.
@@ -97,10 +99,10 @@ pub struct HybridEncryption;
 
 impl HybridEncryption {
     /// Encrypt a secret for a recipient identified by their X25519 public key.
+    /// Plaintext HMAC uses a key derived from the ECDH shared secret (same derivation as [`HybridDecryption::decrypt`]).
     pub fn encrypt(
         recipient_public_key: &[u8; 32],
         plaintext: &[u8],
-        hmac_key: &[u8],
     ) -> Result<EncryptedEnvelope, SecretsError> {
         let recipient_pk = PublicKey::from(*recipient_public_key);
 
@@ -110,6 +112,7 @@ impl HybridEncryption {
         let shared_secret = sender_secret.diffie_hellman(&recipient_pk);
 
         let aes_key = derive_aes_key(shared_secret.as_bytes())?;
+        let hmac_key = derive_plaintext_hmac_key(shared_secret.as_bytes())?;
 
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         OsRng.fill_bytes(&mut nonce_bytes);
@@ -121,7 +124,7 @@ impl HybridEncryption {
             .encrypt(nonce, plaintext)
             .map_err(|e| SecretsError::Crypto(format!("AES-GCM encryption failed: {e}")))?;
 
-        let mut mac = new_hmac(hmac_key)?;
+        let mut mac = new_hmac(&hmac_key)?;
         mac.update(plaintext);
         let hmac_result = mac.finalize().into_bytes();
         let mut plaintext_hmac = [0u8; 32];
@@ -144,13 +147,13 @@ impl HybridDecryption {
     pub fn decrypt(
         recipient_private_key: &[u8; 32],
         envelope: &EncryptedEnvelope,
-        hmac_key: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>, SecretsError> {
         let recipient_secret = StaticSecret::from(*recipient_private_key);
         let sender_pk = PublicKey::from(envelope.ephemeral_public_key);
 
         let shared_secret = recipient_secret.diffie_hellman(&sender_pk);
         let aes_key = derive_aes_key(shared_secret.as_bytes())?;
+        let hmac_key = derive_plaintext_hmac_key(shared_secret.as_bytes())?;
 
         let nonce = Nonce::from_slice(&envelope.nonce);
         let cipher = Aes256Gcm::new_from_slice(&aes_key)
@@ -160,7 +163,7 @@ impl HybridDecryption {
             .decrypt(nonce, envelope.ciphertext.as_ref())
             .map_err(|e| SecretsError::Crypto(format!("AES-GCM decryption failed: {e}")))?;
 
-        let mut mac = new_hmac(hmac_key)?;
+        let mut mac = new_hmac(&hmac_key)?;
         mac.update(&plaintext);
         mac.verify_slice(&envelope.plaintext_hmac)
             .map_err(|_| SecretsError::Crypto("HMAC verification failed: secret integrity compromised".into()))?;
@@ -177,6 +180,14 @@ fn derive_aes_key(shared_secret: &[u8]) -> Result<[u8; 32], SecretsError> {
     Ok(key)
 }
 
+fn derive_plaintext_hmac_key(shared_secret: &[u8]) -> Result<[u8; 32], SecretsError> {
+    let hk = Hkdf::<Sha256>::new(None, shared_secret);
+    let mut key = [0u8; 32];
+    hk.expand(HKDF_PLAINTEXT_HMAC_INFO, &mut key)
+        .map_err(|e| SecretsError::Crypto(format!("HKDF expand plaintext HMAC key failed: {e}")))?;
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,21 +196,16 @@ mod tests {
     fn test_encrypt_decrypt_roundtrip() {
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
-        let hmac_key = b"test-hmac-key-for-verification!!";
 
         let plaintext = b"super-secret-api-key-12345";
 
         let envelope = HybridEncryption::encrypt(
             &recipient_public.to_bytes(),
             plaintext,
-            hmac_key,
         ).unwrap();
 
-        let decrypted = HybridDecryption::decrypt(
-            &recipient_secret.to_bytes(),
-            &envelope,
-            hmac_key,
-        ).unwrap();
+        let decrypted =
+            HybridDecryption::decrypt(&recipient_secret.to_bytes(), &envelope).unwrap();
 
         assert_eq!(&*decrypted, plaintext);
     }
@@ -209,19 +215,13 @@ mod tests {
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
         let wrong_secret = StaticSecret::random_from_rng(OsRng);
-        let hmac_key = b"test-hmac-key-for-verification!!";
 
         let envelope = HybridEncryption::encrypt(
             &recipient_public.to_bytes(),
             b"secret",
-            hmac_key,
         ).unwrap();
 
-        let result = HybridDecryption::decrypt(
-            &wrong_secret.to_bytes(),
-            &envelope,
-            hmac_key,
-        );
+        let result = HybridDecryption::decrypt(&wrong_secret.to_bytes(), &envelope);
         assert!(result.is_err());
     }
 
@@ -229,22 +229,17 @@ mod tests {
     fn test_envelope_serialization_roundtrip() {
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
-        let hmac_key = b"test-hmac-key-for-verification!!";
 
         let envelope = HybridEncryption::encrypt(
             &recipient_public.to_bytes(),
             b"another-secret",
-            hmac_key,
         ).unwrap();
 
         let bytes = envelope.to_bytes();
         let restored = EncryptedEnvelope::from_bytes(&bytes).unwrap();
 
-        let decrypted = HybridDecryption::decrypt(
-            &recipient_secret.to_bytes(),
-            &restored,
-            hmac_key,
-        ).unwrap();
+        let decrypted =
+            HybridDecryption::decrypt(&recipient_secret.to_bytes(), &restored).unwrap();
 
         assert_eq!(&*decrypted, b"another-secret");
     }
@@ -253,21 +248,15 @@ mod tests {
     fn test_tampered_hmac_fails() {
         let recipient_secret = StaticSecret::random_from_rng(OsRng);
         let recipient_public = PublicKey::from(&recipient_secret);
-        let hmac_key = b"test-hmac-key-for-verification!!";
 
         let mut envelope = HybridEncryption::encrypt(
             &recipient_public.to_bytes(),
             b"secret",
-            hmac_key,
         ).unwrap();
 
         envelope.plaintext_hmac[0] ^= 0xff;
 
-        let result = HybridDecryption::decrypt(
-            &recipient_secret.to_bytes(),
-            &envelope,
-            hmac_key,
-        );
+        let result = HybridDecryption::decrypt(&recipient_secret.to_bytes(), &envelope);
         assert!(result.is_err());
     }
 }

@@ -13,6 +13,7 @@ use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
 use met_parser::{JobIR, PipelineIR};
 use met_secrets::BuiltinStoredCrypto;
+use met_store::repos::JobRunRepo;
 use secrecy::SecretString;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -168,6 +169,10 @@ impl<C: CacheBackend> Executor<C> {
             }
         }
 
+        if ctx.pipeline().jobs.is_empty() {
+            return Err(EngineError::EmptyPipeline);
+        }
+
         let run_state = RunState::new(run_id);
         run_state.set_status(RunStatus::Running).await;
 
@@ -181,12 +186,26 @@ impl<C: CacheBackend> Executor<C> {
 
         self.initialize_job_states(&ctx, &run_state).await?;
 
+        self.persistence
+            .update_run_status(run_id, RunStatus::Running)
+            .await?;
+
+        let completion_horizon_ts = (Utc::now() - chrono::Duration::seconds(120)).timestamp();
+        let completion_horizon = time::OffsetDateTime::from_unix_timestamp(completion_horizon_ts)
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+
         let (completion_tx, completion_rx) = mpsc::channel::<JobCompletionNotification>(64);
         let comp_task = {
             let js = self.jetstream.clone();
             let org_id = ctx.org_id();
             let run_id = ctx.run_id();
-            tokio::spawn(run_completion_pull_task(js, org_id, run_id, completion_tx))
+            tokio::spawn(run_completion_pull_task(
+                js,
+                org_id,
+                run_id,
+                completion_tx,
+                completion_horizon,
+            ))
         };
 
         let exec_result = self
@@ -195,12 +214,25 @@ impl<C: CacheBackend> Executor<C> {
         comp_task.abort();
 
         let final_status = match &exec_result {
-            Ok(_) => run_state.compute_final_status().await,
+            Ok(()) => run_state.compute_final_status().await,
             Err(EngineError::RunCancelled { .. }) => RunStatus::Cancelled,
             Err(_) => RunStatus::Failed,
         };
 
+        let persist_err_msg: Option<String> = match &exec_result {
+            Ok(()) | Err(EngineError::RunCancelled { .. }) => None,
+            Err(e) => Some(e.to_string()),
+        };
+
         run_state.set_status(final_status).await;
+
+        if let Err(e) = self
+            .persistence
+            .complete_run(run_id, final_status, persist_err_msg.as_deref())
+            .await
+        {
+            warn!(error = %e, %run_id, "failed to persist run completion");
+        }
 
         let end_time = Utc::now();
         let duration_ms = (end_time - start_time).num_milliseconds() as u64;
@@ -233,14 +265,25 @@ impl<C: CacheBackend> Executor<C> {
             "pipeline execution completed"
         );
 
-        Ok(ExecutionResult {
-            run_id,
-            status: final_status,
-            duration_ms,
-            jobs_succeeded,
-            jobs_failed,
-            jobs_skipped,
-        })
+        match exec_result {
+            Ok(()) => Ok(ExecutionResult {
+                run_id,
+                status: final_status,
+                duration_ms,
+                jobs_succeeded,
+                jobs_failed,
+                jobs_skipped,
+            }),
+            Err(EngineError::RunCancelled { .. }) => Ok(ExecutionResult {
+                run_id,
+                status: final_status,
+                duration_ms,
+                jobs_succeeded,
+                jobs_failed,
+                jobs_skipped,
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     async fn initialize_job_states(&self, ctx: &ExecutionContext, run_state: &RunState) -> Result<()> {
@@ -269,6 +312,10 @@ impl<C: CacheBackend> Executor<C> {
                 _ = poll_interval.tick() => {
                     if run_state.is_cancellation_requested().await {
                         return Err(EngineError::RunCancelled { run_id: ctx.run_id() });
+                    }
+
+                    if let Err(e) = self.reconcile_terminal_jobs_from_db(ctx, run_state).await {
+                        warn!(error = %e, "failed to reconcile job runs from database");
                     }
 
                     let elapsed = Utc::now() - run_start;
@@ -426,9 +473,82 @@ impl<C: CacheBackend> Executor<C> {
         let job_state = run_state.get_job(&job.id).await
             .ok_or_else(|| EngineError::JobNotFound(job.id))?;
 
-        self.scheduler
+        match self
+            .scheduler
             .dispatch_job(ctx, run_state, job, job_state.job_run_id)
-            .await?;
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(EngineError::NoAvailableAgents { job: j, tags }) => {
+                info!(
+                    job = %j,
+                    ?tags,
+                    "no eligible agent yet; job stays pending until one is available (retrying on next poll)"
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// When the controller updates `job_runs` but a JetStream completion is missed (`DeliverPolicy::New`,
+    /// publish failure, etc.), engine `RunState` would never reach `is_complete`. Sync terminal rows from PG.
+    async fn reconcile_terminal_jobs_from_db(
+        &self,
+        ctx: &ExecutionContext,
+        run_state: &RunState,
+    ) -> Result<()> {
+        let repo = JobRunRepo::new(&self.pool);
+        let rows = repo.list_by_run(ctx.run_id()).await?;
+
+        for jr in rows {
+            if !jr.status.is_terminal() {
+                continue;
+            }
+            let Some(js) = run_state.get_job_by_run_id(jr.id).await else {
+                continue;
+            };
+            if run_state.is_job_complete(&js.job_id).await {
+                continue;
+            }
+
+            self.scheduler.forget_active_job(jr.id).await;
+
+            match jr.status {
+                JobStatus::Succeeded => {
+                    run_state
+                        .mark_job_completed(
+                            &js.job_id,
+                            true,
+                            jr.exit_code,
+                            jr.error_message.clone(),
+                        )
+                        .await;
+                }
+                JobStatus::Failed => {
+                    run_state
+                        .mark_job_completed(
+                            &js.job_id,
+                            false,
+                            jr.exit_code,
+                            jr.error_message.clone(),
+                        )
+                        .await;
+                }
+                JobStatus::Cancelled => {
+                    run_state.mark_job_cancelled(&js.job_id).await;
+                }
+                JobStatus::TimedOut => {
+                    run_state.mark_job_timed_out(&js.job_id).await;
+                }
+                JobStatus::Skipped => {
+                    run_state
+                        .mark_job_skipped(&js.job_id, jr.error_message.clone())
+                        .await;
+                }
+                JobStatus::Pending | JobStatus::Queued | JobStatus::Running => {}
+            }
+        }
 
         Ok(())
     }
@@ -470,6 +590,7 @@ async fn run_completion_pull_task(
     org_id: OrganizationId,
     run_id_filter: RunId,
     tx: mpsc::Sender<JobCompletionNotification>,
+    completion_horizon: time::OffsetDateTime,
 ) {
     use async_nats::jetstream::consumer::pull::Config;
 
@@ -485,7 +606,9 @@ async fn run_completion_pull_task(
         let filter_subject = format!("met.completions.{}", org_id.as_uuid());
         let config = Config {
             name: Some(format!("engine-{}", uuid::Uuid::new_v4())),
-            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::New,
+            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::ByStartTime {
+                start_time: completion_horizon,
+            },
             filter_subject,
             ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
             ..Default::default()

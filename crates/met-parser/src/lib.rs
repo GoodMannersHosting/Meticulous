@@ -55,7 +55,7 @@ pub use ir::{
     RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
     TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
 };
-pub use parser::{ParserConfig, PipelineParser};
+pub use parser::{secret_refs_from_raw_secrets, ParserConfig, PipelineParser};
 #[cfg(feature = "database")]
 pub use providers::{CompositeWorkflowProvider, DatabaseWorkflowProvider};
 pub use providers::GitWorkflowProvider;

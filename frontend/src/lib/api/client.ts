@@ -307,7 +307,12 @@ export const apiMethods = {
 		retry: (id: string) => api.post<{ original_run_id: string; new_run_id: string; run_number: number }>(`/api/v1/runs/${id}/retry`),
 		jobs: (runId: string) => api.get<import('./types').JobRun[]>(`/api/v1/runs/${runId}/jobs`),
 		logs: (runId: string, jobRunId: string) =>
-			api.get<{ lines: import('./types').LogLinePayload[] }>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`)
+			api.get<{
+				content?: string;
+				lines?: import('./types').LogLinePayload[];
+				offset?: number;
+				has_more?: boolean;
+			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`)
 	},
 
 	// Agents

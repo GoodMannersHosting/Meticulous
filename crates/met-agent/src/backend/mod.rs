@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::config::ExecutionRuntime;
 use crate::error::Result;
 use crate::process_watcher::{ExecutedBinaryRecord, ProcessWatcher};
 use crate::step_log::StepLogPipe;
+use tracing::warn;
 
 #[cfg(target_os = "linux")]
 mod container;
@@ -107,17 +109,45 @@ pub trait ExecutionBackend: Send + Sync {
     async fn is_available(&self) -> bool;
 }
 
-/// Create the default execution backend for the current platform.
-pub async fn default_backend() -> Box<dyn ExecutionBackend> {
+/// Build an execution backend from config / explicit [`ExecutionRuntime`].
+pub async fn create_execution_backend(runtime: ExecutionRuntime) -> Box<dyn ExecutionBackend> {
+    match runtime {
+        ExecutionRuntime::Native => Box::new(NativeBackend::new()),
+        ExecutionRuntime::Container => container_backend_or_warn_and_native().await,
+        ExecutionRuntime::Auto => auto_detect_backend().await,
+    }
+}
+
+async fn auto_detect_backend() -> Box<dyn ExecutionBackend> {
     #[cfg(target_os = "linux")]
     {
-        // Try container backend first
         let container = ContainerBackend::new();
         if container.is_available().await {
             return Box::new(container);
         }
     }
 
-    // Fall back to native backend
     Box::new(NativeBackend::new())
+}
+
+async fn container_backend_or_warn_and_native() -> Box<dyn ExecutionBackend> {
+    #[cfg(target_os = "linux")]
+    {
+        let container = ContainerBackend::new();
+        if container.is_available().await {
+            return Box::new(container);
+        }
+        warn!(
+            "execution_runtime=container requested but no Docker/Podman-style CLI is available; \
+             using native (host) execution"
+        );
+        return Box::new(NativeBackend::new());
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        warn!(
+            "execution_runtime=container is only supported on Linux; using native (host) execution"
+        );
+        Box::new(NativeBackend::new())
+    }
 }

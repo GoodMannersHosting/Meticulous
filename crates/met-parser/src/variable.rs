@@ -254,6 +254,32 @@ fn validate_expression(
     }
 }
 
+/// Replace `${{ inputs.KEY }}` and `${{ vars.KEY }}` using workflow invocation inputs and pipeline vars.
+///
+/// Leaves other `${{ ... }}` blocks unchanged (e.g. `${{ secrets.X }}` for runtime / env).
+pub fn interpolate_workflow_templates(
+    s: &str,
+    pipeline_vars: &IndexMap<String, String>,
+    workflow_inputs: &IndexMap<String, String>,
+) -> String {
+    let extraction = extract_vars(s);
+    let mut result = s.to_string();
+    for expr in extraction.expressions.iter().rev() {
+        let trimmed = expr.expr.trim();
+        let replacement = if let Some(key) = trimmed.strip_prefix("inputs.") {
+            workflow_inputs.get(key)
+        } else if let Some(key) = trimmed.strip_prefix("vars.") {
+            pipeline_vars.get(key)
+        } else {
+            None
+        };
+        if let Some(rep) = replacement {
+            result.replace_range(expr.start..expr.end, rep);
+        }
+    }
+    result
+}
+
 /// Interpolate variables in a string with known values.
 /// Leaves unresolvable references (secrets, builtins) as-is.
 pub fn interpolate(s: &str, ctx: &VariableContext) -> String {
@@ -327,6 +353,21 @@ mod tests {
 
         let result = interpolate("Hello ${NAME} v${VERSION}", &ctx);
         assert_eq!(result, "Hello World v1.0");
+    }
+
+    #[test]
+    fn test_interpolate_workflow_templates() {
+        let mut vars = IndexMap::new();
+        vars.insert("TAG".to_string(), "v2".to_string());
+        let mut inputs = IndexMap::new();
+        inputs.insert("image".to_string(), "app:latest".to_string());
+
+        let s = "pull ${{ inputs.image }} rel ${{ vars.TAG }} keep ${{ secrets.TOKEN }}";
+        let out = interpolate_workflow_templates(s, &vars, &inputs);
+        assert_eq!(
+            out,
+            "pull app:latest rel v2 keep ${{ secrets.TOKEN }}"
+        );
     }
 
     #[test]

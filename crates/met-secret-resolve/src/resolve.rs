@@ -4,8 +4,8 @@ use std::str::FromStr;
 
 use indexmap::IndexMap;
 use met_core::ids::{JobRunId, OrganizationId, PipelineId, ProjectId};
-use met_parser::{PipelineParser, SecretRef};
-use met_parser::WorkflowProvider;
+use met_parser::{secret_refs_from_raw_secrets, SecretRef};
+use met_parser::RawPipeline;
 use met_secrets::{
     parse_github_app_credentials, installation_access_token, BuiltinStoredCrypto,
 };
@@ -14,7 +14,7 @@ use met_store::PgPool;
 
 use crate::hints::SecretResolutionHints;
 
-use crate::error::{parse_errors, ResolveError};
+use crate::error::ResolveError;
 
 /// Map DB `kind` to agent materialization (matches `agent.v1.SecretMaterialKind` protobuf).
 #[must_use]
@@ -33,18 +33,14 @@ fn definition_to_yaml(def: &serde_json::Value) -> Result<String, ResolveError> {
     serde_yaml::to_string(def).map_err(|e| ResolveError::Parse(e.to_string()))
 }
 
-/// Load pipeline IR secret refs from stored `pipelines.definition` JSON.
-pub async fn load_secret_refs_from_definition(
-    def: &serde_json::Value,
-    workflows: &dyn WorkflowProvider,
-) -> Result<IndexMap<String, SecretRef>, ResolveError> {
+/// Load pipeline secret refs from stored `pipelines.definition` JSON (root `secrets:` only).
+///
+/// Does not resolve reusable workflows — the same names the executor uses come from the pipeline
+/// document alone, and full workflow resolution requires a real [`WorkflowProvider`].
+pub fn load_secret_refs_from_definition(def: &serde_json::Value) -> Result<IndexMap<String, SecretRef>, ResolveError> {
     let yaml = definition_to_yaml(def)?;
-    let mut parser = PipelineParser::new(workflows);
-    let ir = parser
-        .parse(&yaml)
-        .await
-        .map_err(parse_errors)?;
-    Ok(ir.secret_refs)
+    let raw_pipeline: RawPipeline = serde_yaml::from_str(&yaml).map_err(|e| ResolveError::Parse(e.to_string()))?;
+    Ok(secret_refs_from_raw_secrets(&raw_pipeline.secrets))
 }
 
 /// Ensure every `SecretRef` in the map is satisfiable.
@@ -156,9 +152,8 @@ pub async fn resolve_for_job_run_context(
     pool: &PgPool,
     crypto: &BuiltinStoredCrypto,
     ctx: &JobRunPipelineContext,
-    workflows: &dyn WorkflowProvider,
 ) -> Result<IndexMap<String, (String, String, i32)>, ResolveError> {
-    let refs = load_secret_refs_from_definition(&ctx.definition, workflows).await?;
+    let refs = load_secret_refs_from_definition(&ctx.definition)?;
     let org_id = OrganizationId::from_uuid(ctx.org_id);
     let project_id = ProjectId::from_uuid(ctx.project_id);
     let pipeline_id = PipelineId::from_uuid(ctx.pipeline_id);
@@ -185,8 +180,7 @@ pub async fn resolve_job_secrets_for_exchange(
 ) -> Result<Vec<(String, String, i32)>, ResolveError> {
     if let Ok(jrid) = JobRunId::from_str(job_run_id.trim()) {
         if let Some(ctx) = JobRunRepo::new(pool).get_pipeline_context(jrid).await? {
-            let wp = met_parser::MockWorkflowProvider::default();
-            let map = resolve_for_job_run_context(pool, crypto, &ctx, &wp).await?;
+            let map = resolve_for_job_run_context(pool, crypto, &ctx).await?;
             return Ok(map
                 .into_iter()
                 .map(|(k, (v, _kind, mat))| (k, v, mat))

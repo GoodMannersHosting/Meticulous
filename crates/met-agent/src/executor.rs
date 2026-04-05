@@ -15,6 +15,7 @@ use met_proto::agent::v1::{
 };
 use met_proto::common::v1::{RunStatus, Timestamp};
 use prost::Message;
+use sha2::{Digest, Sha256};
 use tokio::sync::{watch, RwLock};
 use tokio_stream;
 use tonic::transport::Channel;
@@ -29,6 +30,13 @@ use crate::process_watcher::{merge_execution_metadata, JobExecutionMetadata, Pro
 use crate::security::JobPki;
 use crate::step_log::{step_log_spool_path, StepLogSession};
 
+/// In-flight job identity for operator interrupt → controller cancellation.
+#[derive(Clone)]
+struct ActiveJobTrace {
+    job_run_id: String,
+    step_run_id: Option<String>,
+}
+
 /// Job executor that pulls jobs from NATS and executes them.
 pub struct JobExecutor {
     config: AgentConfig,
@@ -39,9 +47,29 @@ pub struct JobExecutor {
     shutdown_rx: watch::Receiver<bool>,
     /// When true, stop pulling new jobs from NATS (controller requested drain).
     job_pause_rx: watch::Receiver<bool>,
+    /// Updated while a job is active (after Running is reported) for SIGINT cancellation.
+    active_trace: Arc<RwLock<Option<ActiveJobTrace>>>,
+    /// Step log `StreamLogs` flushes; must finish before workspace cleanup deletes spool files.
+    pending_log_flushes: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl JobExecutor {
+    /// Wait until `rx` becomes `true` (process shutdown requested).
+    async fn wait_shutdown(rx: &watch::Receiver<bool>) {
+        let mut r = rx.clone();
+        if *r.borrow() {
+            return;
+        }
+        loop {
+            if r.changed().await.is_err() {
+                return;
+            }
+            if *r.borrow() {
+                return;
+            }
+        }
+    }
+
     /// Create a new job executor.
     pub fn new(
         config: AgentConfig,
@@ -60,6 +88,16 @@ impl JobExecutor {
             heartbeat_state,
             shutdown_rx,
             job_pause_rx,
+            active_trace: Arc::new(RwLock::new(None)),
+            pending_log_flushes: Vec::new(),
+        }
+    }
+
+    async fn join_pending_log_flushes(&mut self) {
+        for h in self.pending_log_flushes.drain(..) {
+            if let Err(e) = h.await {
+                warn!(error = %e, "step log flush task panicked or was cancelled");
+            }
         }
     }
 
@@ -91,7 +129,13 @@ impl JobExecutor {
                         error = %e,
                         "job pull session failed; retrying after delay (controller may be reconciling JetStream consumers)"
                     );
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+                        _ = Self::wait_shutdown(&self.shutdown_rx) => {
+                            info!("executor shutting down during NATS retry backoff");
+                            return Ok(());
+                        }
+                    }
                 }
             }
 
@@ -161,18 +205,33 @@ impl JobExecutor {
                             match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref())
                             {
                                 Ok(job) => {
-                                    let exec = self.execute_job(job).await;
-                                    match exec {
-                                        Ok(()) => {
-                                            if let Err(e) = message.ack().await {
-                                                warn!(error = %e, "failed to ack message after job success");
+                                    let job_run_id = job.job_run_id.clone();
+                                    let shutdown_watcher = self.shutdown_rx.clone();
+                                    tokio::select! {
+                                        exec_res = self.execute_job(job) => {
+                                            match exec_res {
+                                                Ok(()) => {
+                                                    if let Err(e) = message.ack().await {
+                                                        warn!(error = %e, "failed to ack message after job success");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "job execution failed; NAK for redelivery");
+                                                    let _ = message
+                                                        .ack_with(AckKind::Nak(None))
+                                                        .await;
+                                                }
                                             }
                                         }
-                                        Err(e) => {
-                                            error!(error = %e, "job execution failed; NAK for redelivery");
-                                            let _ = message
-                                                .ack_with(AckKind::Nak(None))
+                                        _ = Self::wait_shutdown(&shutdown_watcher) => {
+                                            self.report_interrupted_job_to_controller(&job_run_id)
                                                 .await;
+                                            info!(
+                                                job_run_id = %job_run_id,
+                                                "agent shutdown: dropping in-flight job (child processes use kill_on_drop)"
+                                            );
+                                            let _ = message.ack_with(AckKind::Nak(None)).await;
+                                            return Ok(());
                                         }
                                     }
                                 }
@@ -207,9 +266,74 @@ impl JobExecutor {
         }
     }
 
+    /// Report job (and current step, if any) cancelled when the operator stops the agent.
+    async fn report_interrupted_job_to_controller(&mut self, job_run_id: &str) {
+        const MSG: &str = "Agent shut down by operator (SIGINT)";
+        let step_run_id = {
+            let trace = self.active_trace.read().await;
+            trace.as_ref().and_then(|t| {
+                if t.job_run_id == job_run_id {
+                    t.step_run_id.clone()
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(ref sid) = step_run_id {
+            let _ = self
+                .report_step_status(
+                    sid,
+                    job_run_id,
+                    RunStatus::Cancelled,
+                    None,
+                    Some(MSG.to_string()),
+                )
+                .await;
+        }
+        let _ = self
+            .report_job_status(
+                job_run_id,
+                RunStatus::Cancelled,
+                None,
+                Some(MSG.to_string()),
+                None,
+            )
+            .await;
+
+        self.release_job_heartbeat_slot().await;
+
+        *self.active_trace.write().await = None;
+    }
+
+    async fn clear_step_trace_slot(&self, job_run_id: &str) {
+        let mut g = self.active_trace.write().await;
+        if let Some(t) = g.as_mut() {
+            if t.job_run_id == job_run_id {
+                t.step_run_id = None;
+            }
+        }
+    }
+
+    /// Clear busy heartbeat after a job slot was claimed (matches increment in `run_job_dispatch`).
+    async fn release_job_heartbeat_slot(&self) {
+        let mut state = self.heartbeat_state.write().await;
+        state.running_jobs = state.running_jobs.saturating_sub(1);
+        state.current_job_id = None;
+        if state.running_jobs == 0 {
+            state.status = met_proto::AgentStatus::Online;
+        }
+    }
+
     /// Execute a single job.
     #[instrument(skip(self, job), fields(job_run_id = %job.job_run_id))]
     async fn execute_job(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+        let out = self.run_job_dispatch(job).await;
+        *self.active_trace.write().await = None;
+        out
+    }
+
+    async fn run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
         info!(
             job_name = %job.job_name,
             pipeline = %job.pipeline_name,
@@ -225,7 +349,7 @@ impl JobExecutor {
             return Ok(());
         }
 
-        // Update heartbeat state
+        // Update heartbeat state — any early error must still clear this (see `release_job_heartbeat_slot` below).
         {
             let mut state = self.heartbeat_state.write().await;
             state.running_jobs += 1;
@@ -233,9 +357,71 @@ impl JobExecutor {
             state.status = met_proto::AgentStatus::Busy;
         }
 
+        let job_run_id = job.job_run_id.clone();
+        let res = self.do_run_job_dispatch(job).await;
+        self.release_job_heartbeat_slot().await;
+        match res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = format!("{e}");
+                error!(
+                    job_run_id = %job_run_id,
+                    error = %msg,
+                    "job aborted before completion; reporting failed to controller"
+                );
+                let _ = self
+                    .report_job_status(
+                        &job_run_id,
+                        RunStatus::Failed,
+                        Some(1),
+                        Some(msg),
+                        None,
+                    )
+                    .await;
+                // #region agent log
+                {
+                    use std::io::Write;
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    let payload = serde_json::json!({
+                        "sessionId": "f94486",
+                        "hypothesisId": "UX",
+                        "location": "executor.rs:run_job_dispatch",
+                        "message": "agent_reported_job_failed",
+                        "data": { "job_run_id": job_run_id },
+                        "timestamp": ts,
+                    });
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/home/dan/code/gmh/meticulous/.cursor/debug-f94486.log")
+                        .and_then(|mut f| writeln!(f, "{}", payload));
+                }
+                // #endregion
+                Ok(())
+            }
+        }
+    }
+
+    async fn do_run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+        if !self.pending_log_flushes.is_empty() {
+            warn!(
+                count = self.pending_log_flushes.len(),
+                "draining leftover step log flush handle(s) before starting job"
+            );
+            self.join_pending_log_flushes().await;
+        }
+
         // Report job accepted
         self.report_job_status(&job.job_run_id, RunStatus::Running, None, None, None)
             .await?;
+
+        *self.active_trace.write().await = Some(ActiveJobTrace {
+            job_run_id: job.job_run_id.clone(),
+            step_run_id: None,
+        });
 
         // Create workspace
         let workspace = self.create_workspace(&job.job_run_id).await?;
@@ -340,18 +526,10 @@ impl JobExecutor {
             }
         }
 
+        self.join_pending_log_flushes().await;
+
         // Cleanup workspace
         self.cleanup_workspace(&workspace).await?;
-
-        // Update heartbeat state
-        {
-            let mut state = self.heartbeat_state.write().await;
-            state.running_jobs -= 1;
-            state.current_job_id = None;
-            if state.running_jobs == 0 {
-                state.status = met_proto::AgentStatus::Online;
-            }
-        }
 
         info!(
             job_run_id = %job.job_run_id,
@@ -389,10 +567,21 @@ impl JobExecutor {
         let log_pipe = log_session
             .pipe()
             .ok_or_else(|| AgentError::Internal("step log pipe not initialized".to_string()))?;
+        info!(step = %step.name, "step log stream pipeline started");
 
         // Report step started
         self.report_step_status(step_run_id, job_run_id, RunStatus::Running, None, None)
             .await?;
+        info!(step = %step.name, "reported step Running to controller");
+
+        {
+            let mut g = self.active_trace.write().await;
+            if let Some(t) = g.as_mut() {
+                if t.job_run_id == job_run_id {
+                    t.step_run_id = Some(step.step_run_id.clone());
+                }
+            }
+        }
 
         // Build environment
         let mut env = step.environment.clone();
@@ -416,6 +605,12 @@ impl JobExecutor {
         // Create a process watcher for this step
         let mut watcher = ProcessWatcher::new();
 
+        info!(
+            step = %step.name,
+            image = %backend_step.image,
+            "invoking execution backend (container/native)"
+        );
+
         // Execute with process watching and live log shipping
         let result = self
             .backend
@@ -427,22 +622,9 @@ impl JobExecutor {
             )
             .await;
 
-        let log_finish = log_session.finish().await;
-        if let Err(log_err) = log_finish {
-            if result.is_ok() {
-                self.report_step_status(
-                    step_run_id,
-                    job_run_id,
-                    RunStatus::Failed,
-                    None,
-                    Some(log_err.to_string()),
-                )
-                .await?;
-            }
-            return Err(log_err);
-        }
-
-        match result {
+        // Report terminal step status before awaiting log drain: `finish()` waits on `stream_logs`
+        // and must not delay controller updates or heartbeat release.
+        match &result {
             Ok(step_result) => {
                 let exit_code = step_result.exit_code;
                 let status = if exit_code == 0 {
@@ -458,15 +640,6 @@ impl JobExecutor {
                     None,
                 )
                 .await?;
-
-                // Create metadata from step result
-                let metadata = JobExecutionMetadata {
-                    executed_binaries: step_result.executed_binaries,
-                    total_processes_spawned: step_result.processes_spawned,
-                    execution_tree_depth: step_result.execution_tree_depth,
-                };
-
-                Ok((exit_code, Some(metadata)))
             }
             Err(e) => {
                 self.report_step_status(
@@ -477,8 +650,33 @@ impl JobExecutor {
                     Some(e.to_string()),
                 )
                 .await?;
-                Err(e)
             }
+        }
+        self.clear_step_trace_slot(job_run_id).await;
+
+        // Flush logs in the background; `join_pending_log_flushes` runs before workspace deletion.
+        let step_run_for_log = step.step_run_id.clone();
+        let flush = tokio::spawn(async move {
+            if let Err(log_err) = log_session.finish().await {
+                warn!(
+                    error = %log_err,
+                    step_run_id = %step_run_for_log,
+                    "step log pipeline flush failed after status was reported to controller"
+                );
+            }
+        });
+        self.pending_log_flushes.push(flush);
+
+        match result {
+            Ok(step_result) => {
+                let metadata = JobExecutionMetadata {
+                    executed_binaries: step_result.executed_binaries,
+                    total_processes_spawned: step_result.processes_spawned,
+                    execution_tree_depth: step_result.execution_tree_depth,
+                };
+                Ok((step_result.exit_code, Some(metadata)))
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -527,18 +725,10 @@ impl JobExecutor {
 
         let response = self.client.exchange_job_keys(request).await?.into_inner();
 
-        // Derive HMAC key from agent identity for secret verification
-        // This must match the key derivation in the controller
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.identity.jwt_token.as_bytes());
-        hasher.update(b"meticulous-secrets-hmac-v1");
-        let hmac_key = hasher.finalize();
-
-        // Decrypt secrets using X25519 + AES-256-GCM hybrid decryption
+        // Decrypt secrets using X25519 + AES-256-GCM; plaintext HMAC key is ECDH-derived (see met_secrets).
         let mut secrets = HashMap::new();
         for secret in response.secrets {
-            match pki.decrypt(&secret.encrypted_value, &hmac_key) {
+            match pki.decrypt(&secret.encrypted_value) {
                 Ok(plaintext) => {
                     // Verify SHA-256 checksum
                     let mut checksum_hasher = Sha256::new();

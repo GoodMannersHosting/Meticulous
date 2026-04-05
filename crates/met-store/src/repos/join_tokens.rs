@@ -276,6 +276,21 @@ impl<'a> JoinTokenRepo<'a> {
         Ok(result.rows_affected())
     }
 
+    /// Load a join token row by hash, including revoked / expired / exhausted tokens.
+    pub async fn get_by_token_hash(&self, token_hash: &str) -> Result<Option<JoinToken>> {
+        let row = sqlx::query_as::<_, JoinToken>(&format!(
+            r#"
+            SELECT {JOIN_TOKEN_ROW}
+            FROM join_tokens
+            WHERE token_hash = $1
+            "#,
+        ))
+        .bind(token_hash)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Check if a token hash exists and is valid.
     pub async fn validate_token(&self, token_hash: &str) -> Result<Option<JoinToken>> {
         let token = sqlx::query_as::<_, JoinToken>(&format!(
