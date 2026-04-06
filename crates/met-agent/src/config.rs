@@ -84,6 +84,9 @@ pub struct AgentConfig {
     /// Upper bound on jobs this agent will accept over its lifetime (optional; ephemeral runners).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_jobs: Option<i32>,
+    /// After this many **successful** jobs, the process requests graceful shutdown (exit 0). Kubernetes operators may set `MET_AGENT_EXIT_AFTER_JOBS=1` for one-shot runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_after_jobs: Option<u32>,
     /// Workspace directory for job execution.
     pub workspace_dir: PathBuf,
     /// Log level.
@@ -114,6 +117,7 @@ impl Default for AgentConfig {
             labels: Vec::new(),
             concurrency: 1,
             max_jobs: None,
+            exit_after_jobs: None,
             workspace_dir,
             log_level: "info".to_string(),
             execution_runtime: ExecutionRuntime::Native,
@@ -378,6 +382,13 @@ impl AgentConfig {
         if let Ok(m) = std::env::var("MET_AGENT_MAX_JOBS") {
             if let Ok(v) = m.parse::<i32>() {
                 self.max_jobs = Some(v.max(1));
+            }
+        }
+        if let Ok(m) = std::env::var("MET_AGENT_EXIT_AFTER_JOBS") {
+            if let Ok(v) = m.parse::<u32>() {
+                if v >= 1 {
+                    self.exit_after_jobs = Some(v);
+                }
             }
         }
         if let Ok(workspace) = std::env::var("MET_WORKSPACE_DIR") {

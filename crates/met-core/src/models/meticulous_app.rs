@@ -11,6 +11,8 @@ pub mod app_permissions {
     pub const JOIN_TOKENS_CREATE: &str = "join_tokens:create";
     /// Revoke join tokens in the installation scope.
     pub const JOIN_TOKENS_REVOKE: &str = "join_tokens:revoke";
+    /// Soft-delete agents registered in the installation org (e.g. Kubernetes operator cleanup).
+    pub const AGENTS_DELETE: &str = "agents:delete";
 }
 
 /// DB row: registered app.

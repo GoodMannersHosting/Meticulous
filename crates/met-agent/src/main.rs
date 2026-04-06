@@ -28,7 +28,7 @@ use tracing::{error, info, warn};
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
 #[command(
-    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones)."
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones).\n\nEphemeral runners: set `MET_AGENT_EXIT_AFTER_JOBS` to a positive integer to shut down gracefully after that many **successful** jobs (exit 0)."
 )]
 #[command(version)]
 struct Args {
@@ -273,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_rx.clone(),
         job_pause_rx,
         heartbeat_transition_wake,
+        shutdown_tx.clone(),
     );
 
     // Start executor in background
@@ -283,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Wait for shutdown; DRAIN only pauses NATS pulls (handled in heartbeat + executor), not process exit.
+    let mut shutdown_notify = shutdown_rx.clone();
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
@@ -303,6 +305,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Some(_) => {}
                     None => break,
+                }
+            }
+            _ = shutdown_notify.changed() => {
+                if *shutdown_notify.borrow() {
+                    info!("shutdown requested (e.g. MET_AGENT_EXIT_AFTER_JOBS reached)");
+                    break;
                 }
             }
         }

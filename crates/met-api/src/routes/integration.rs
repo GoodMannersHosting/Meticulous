@@ -3,16 +3,17 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{Duration, Utc};
-use met_core::ids::JoinTokenId;
+use met_core::ids::{AgentId, JoinTokenId};
 use met_core::models::{
     JoinToken, JoinTokenScope, app_permissions, generate_join_token,
 };
 use met_controller::nats::subjects;
-use met_store::repos::{JoinTokenRepo, MeticulousAppRepo};
-use serde::Serialize;
+use met_store::repos::{AgentRepo, JoinTokenRepo, MeticulousAppRepo, ProjectRepo};
+use met_store::StoreError;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::auth::app_jwt::integration_jwt_audience_for_ingress;
@@ -36,6 +37,11 @@ pub fn router() -> Router<AppState> {
             "/integration/join-tokens/{id}/revoke",
             post(integration_revoke_join_token),
         )
+        .route(
+            "/integration/agents/cleanup-by-kubernetes-pod",
+            post(integration_cleanup_agent_by_kubernetes_pod),
+        )
+        .route("/integration/agents/{id}", delete(integration_delete_agent))
 }
 
 /// Unauthenticated bootstrap: JWT `aud` for integration clients and job-queue identifiers.
@@ -179,4 +185,97 @@ async fn integration_revoke_join_token(
 
     repo.revoke(token_id).await?;
     Ok(Json(serde_json::json!({ "message": "join token revoked" })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CleanupAgentByKubernetesPodRequest {
+    pub kubernetes_pod_uid: String,
+}
+
+#[instrument(skip(state, auth))]
+async fn integration_cleanup_agent_by_kubernetes_pod(
+    State(state): State<AppState>,
+    auth: AppInstallationAuth,
+    Json(req): Json<CleanupAgentByKubernetesPodRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let principal = &auth.0;
+    if !principal.permissions.iter().any(|p| {
+        p == "*"
+            || p == app_permissions::AGENTS_DELETE
+    }) {
+        return Err(ApiError::forbidden(
+            "installation does not grant agents:delete",
+        ));
+    }
+
+    let pod_uid = req.kubernetes_pod_uid.trim();
+    if pod_uid.is_empty() {
+        return Err(ApiError::bad_request("kubernetes_pod_uid is required"));
+    }
+
+    let org_id = ProjectRepo::new(state.db())
+        .get(principal.project_id)
+        .await?
+        .org_id;
+
+    let repo = AgentRepo::new(state.db());
+    let Some(agent_id) = repo
+        .find_active_id_by_kubernetes_pod_uid(org_id, pod_uid)
+        .await?
+    else {
+        return Ok(Json(serde_json::json!({
+            "message": "no matching agent",
+            "agent_id": serde_json::Value::Null
+        })));
+    };
+
+    match repo.soft_delete(org_id, agent_id).await {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "message": "agent removed",
+            "agent_id": agent_id.to_string()
+        }))),
+        Err(StoreError::Constraint(msg)) => Err(ApiError::conflict(msg)),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[instrument(skip(state, auth))]
+async fn integration_delete_agent(
+    State(state): State<AppState>,
+    auth: AppInstallationAuth,
+    Path(agent_id): Path<AgentId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let principal = &auth.0;
+    if !principal.permissions.iter().any(|p| {
+        p == "*"
+            || p == app_permissions::AGENTS_DELETE
+    }) {
+        return Err(ApiError::forbidden(
+            "installation does not grant agents:delete",
+        ));
+    }
+
+    let org_id = ProjectRepo::new(state.db())
+        .get(principal.project_id)
+        .await?
+        .org_id;
+
+    let repo = AgentRepo::new(state.db());
+    let agent = repo.get(agent_id).await?;
+    if agent.org_id != org_id {
+        return Err(ApiError::forbidden("agent is outside this installation org"));
+    }
+
+    match repo.soft_delete(org_id, agent_id).await {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "message": "agent removed",
+            "agent_id": agent_id.to_string()
+        }))),
+        Err(StoreError::NotFound { .. }) => Ok(Json(serde_json::json!({
+            "message": "agent already removed",
+            "agent_id": agent_id.to_string()
+        }))),
+        Err(StoreError::Constraint(msg)) => Err(ApiError::conflict(msg)),
+        Err(e) => Err(e.into()),
+    }
 }

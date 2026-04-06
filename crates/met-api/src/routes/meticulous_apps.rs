@@ -233,7 +233,12 @@ pub struct CreateInstallationBody {
 }
 
 fn normalize_install_permissions(perms: &[String]) -> ApiResult<Vec<String>> {
-    const ALLOWED: &[&str] = &["join_tokens:create", "join_tokens:revoke", "*"];
+    const ALLOWED: &[&str] = &[
+        "join_tokens:create",
+        "join_tokens:revoke",
+        "agents:delete",
+        "*",
+    ];
     let mut out: Vec<String> = Vec::new();
     for p in perms {
         let p = p.trim();
@@ -242,7 +247,7 @@ fn normalize_install_permissions(perms: &[String]) -> ApiResult<Vec<String>> {
         }
         if !ALLOWED.contains(&p) {
             return Err(ApiError::bad_request(format!(
-                "unknown permission '{p}', allowed: join_tokens:create, join_tokens:revoke, *"
+                "unknown permission '{p}', allowed: join_tokens:create, join_tokens:revoke, agents:delete, *"
             )));
         }
         if !out.contains(&p.to_string()) {

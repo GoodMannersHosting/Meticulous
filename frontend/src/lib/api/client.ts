@@ -339,7 +339,7 @@ export const apiMethods = {
 			),
 		syncFromGit: (id: string, data?: { git_ref?: string }) =>
 			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/sync-from-git`, data ?? {}),
-		update: (id: string, data: Partial<import('./types').Pipeline>) =>
+		update: (id: string, data: import('./types').UpdatePipelineInput) =>
 			api.put<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>

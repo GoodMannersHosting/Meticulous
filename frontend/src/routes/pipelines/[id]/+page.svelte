@@ -4,7 +4,14 @@
 	import { Button, Card, Badge, Tabs, Dialog, Alert, CopyButton, Select, Input } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Pipeline, PipelineJob, ProjectVariable, Run, StoredSecret } from '$api/types';
+	import type {
+		Pipeline,
+		PipelineJob,
+		ProjectVariable,
+		Run,
+		StoredSecret,
+		UpdatePipelineInput
+	} from '$api/types';
 	import { formatRelativeTime, truncateId } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -103,6 +110,16 @@
 	let deleteVariableTarget = $state<ProjectVariable | null>(null);
 	let showDeleteVariableDialog = $state(false);
 
+	let showEditPipelineDialog = $state(false);
+	let editPipelineLoading = $state(false);
+	let epName = $state('');
+	let epDescription = $state('');
+	let epEnabled = $state(true);
+	let epScmRepository = $state('');
+	let epScmRef = $state('');
+	let epScmPath = $state('');
+	let epScmCredsPath = $state('');
+
 	const pipelineVariablesRelevant = $derived.by(() => {
 		const p = pipeline;
 		if (!p) return [];
@@ -154,6 +171,51 @@
 		const s = sha?.trim();
 		if (!s) return null;
 		return s.length > 12 ? `${s.slice(0, 7)}…` : s;
+	}
+
+	function openEditPipeline() {
+		const p = pipeline;
+		if (!p) return;
+		epName = p.name;
+		epDescription = p.description ?? '';
+		epEnabled = p.enabled;
+		epScmRepository = p.scm_repository?.trim() ?? '';
+		epScmRef = p.scm_ref?.trim() ?? '';
+		epScmPath = p.scm_path?.trim() ?? '';
+		epScmCredsPath = p.scm_credentials_secret_path?.trim() ?? '';
+		showEditPipelineDialog = true;
+	}
+
+	async function submitEditPipeline() {
+		const p = pipeline;
+		if (!p) return;
+		const name = epName.trim();
+		if (!name) {
+			error = 'Name is required';
+			return;
+		}
+		editPipelineLoading = true;
+		error = null;
+		try {
+			const body: UpdatePipelineInput = {
+				name,
+				description: epDescription.trim(),
+				enabled: epEnabled
+			};
+			if (p.scm_provider) {
+				body.scm_repository = epScmRepository.trim();
+				body.scm_ref = epScmRef.trim();
+				body.scm_path = epScmPath.trim();
+				body.scm_credentials_secret_path = epScmCredsPath.trim();
+			}
+			const updated = await apiMethods.pipelines.update(p.id, body);
+			pipeline = updated;
+			showEditPipelineDialog = false;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to update pipeline';
+		} finally {
+			editPipelineLoading = false;
+		}
 	}
 
 	const pipelineSourceRows = $derived(pipeline ? collectPipelineSourceRows(pipeline) : []);
@@ -662,7 +724,7 @@
 						Sync from Git
 					</Button>
 				{/if}
-				<Button variant="outline" size="sm">
+				<Button variant="outline" size="sm" onclick={openEditPipeline}>
 					<Edit class="h-4 w-4" />
 					Edit
 				</Button>
@@ -1131,6 +1193,88 @@
 		{/if}
 	{/if}
 </div>
+
+<Dialog
+	bind:open={showEditPipelineDialog}
+	title="Edit pipeline"
+	class="max-w-lg"
+	onclose={() => {
+		editPipelineLoading = false;
+	}}
+>
+	{#if pipeline}
+		<div class="space-y-4">
+			<p class="text-sm text-[var(--text-secondary)]">
+				<strong>Owners and groups</strong> apply to the whole project, not individual pipelines. Manage them on the
+				<Button variant="ghost" size="sm" class="h-auto px-1 py-0 text-primary-600" href="/projects/{pipeline.project_id}">
+					project page
+				</Button>
+				.
+			</p>
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="ep-name">Name</label>
+				<Input id="ep-name" bind:value={epName} placeholder="Pipeline display name" />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="ep-slug">Slug</label>
+				<Input id="ep-slug" value={pipeline.slug} readonly class="bg-[var(--bg-tertiary)]" />
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">Slug is fixed after creation (used in URLs and APIs).</p>
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="ep-desc">Description</label>
+				<textarea
+					id="ep-desc"
+					bind:value={epDescription}
+					rows="3"
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					placeholder="Optional summary shown on the pipeline page"
+				></textarea>
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={epEnabled} class="rounded border-[var(--border-primary)]" />
+				Enabled (allow new runs)
+			</label>
+			{#if pipeline.scm_provider}
+				<div class="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<p class="text-xs font-medium text-[var(--text-secondary)]">
+						Git source ({pipeline.scm_provider})
+					</p>
+					<p class="text-xs text-[var(--text-tertiary)]">
+						Last synced revision is not edited here — use &quot;Sync from Git&quot; after changing ref or path.
+					</p>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="ep-scm-repo">Repository</label>
+						<Input id="ep-scm-repo" bind:value={epScmRepository} placeholder="owner/repo" />
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="ep-scm-ref">Git ref</label>
+						<Input id="ep-scm-ref" bind:value={epScmRef} placeholder="branch, tag, or SHA" />
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="ep-scm-path">Path to pipeline YAML</label>
+						<Input id="ep-scm-path" bind:value={epScmPath} placeholder=".stable/pipeline.yaml" />
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium" for="ep-scm-creds"
+							>Credentials secret path</label
+						>
+						<Input
+							id="ep-scm-creds"
+							bind:value={epScmCredsPath}
+							placeholder="builtin_secrets path for github_app"
+						/>
+					</div>
+				</div>
+			{/if}
+			<div class="flex justify-end gap-2 pt-2">
+				<Button variant="outline" onclick={() => (showEditPipelineDialog = false)}>Cancel</Button>
+				<Button variant="primary" onclick={submitEditPipeline} loading={editPipelineLoading} disabled={!epName.trim()}>
+					Save
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Dialog>
 
 <Dialog bind:open={showCreateVariable} title="Add environment variable">
 	<div class="space-y-4">

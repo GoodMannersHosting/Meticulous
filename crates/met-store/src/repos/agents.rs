@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use met_core::ids::{AgentId, OrganizationId};
 use met_core::models::{Agent, AgentStatus};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
 
@@ -475,6 +476,40 @@ impl<'a> AgentRepo<'a> {
         }
 
         Ok(())
+    }
+
+    /// Find at most one active agent whose last security bundle lists this Kubernetes pod UID.
+    ///
+    /// Returns [`StoreError::Constraint`] if more than one row matches (data integrity issue).
+    pub async fn find_active_id_by_kubernetes_pod_uid(
+        &self,
+        org_id: OrganizationId,
+        pod_uid: &str,
+    ) -> Result<Option<AgentId>> {
+        if pod_uid.is_empty() {
+            return Ok(None);
+        }
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            r#"
+            SELECT id FROM agents
+            WHERE org_id = $1
+              AND deregistered_at IS NULL
+              AND (last_security_bundle->>'kubernetes_pod_uid') = $2
+            LIMIT 2
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(pod_uid)
+        .fetch_all(self.pool)
+        .await?;
+
+        if rows.len() > 1 {
+            return Err(StoreError::Constraint(
+                "multiple agents match kubernetes_pod_uid for this organization".to_string(),
+            ));
+        }
+
+        Ok(rows.into_iter().next().map(|(id,)| AgentId::from(id)))
     }
 
     /// Soft-delete an agent (removed from listings; heartbeats ignored).

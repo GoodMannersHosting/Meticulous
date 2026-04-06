@@ -27,6 +27,7 @@
 	let installProjectId = $state('');
 	let permCreate = $state(true);
 	let permRevoke = $state(false);
+	let permAgentsDelete = $state(false);
 	let installing = $state(false);
 	let actionError = $state<string | null>(null);
 
@@ -71,6 +72,7 @@
 		const p: string[] = [];
 		if (permCreate) p.push('join_tokens:create');
 		if (permRevoke) p.push('join_tokens:revoke');
+		if (permAgentsDelete) p.push('agents:delete');
 		return p.length ? p : ['join_tokens:create'];
 	}
 
@@ -191,7 +193,7 @@
 			<h3 class="font-medium text-[var(--text-primary)]">Installations</h3>
 			<p class="text-sm text-[var(--text-secondary)]">
 				Each installation binds this app to one project and defines what the integration may do (for example, create join tokens for that project).
-				For the Kubernetes operator, also enable <code class="text-xs">join_tokens:revoke</code> so agents can revoke tokens on delete.
+				For the Kubernetes operator, enable <code class="text-xs">join_tokens:revoke</code> and <code class="text-xs">agents:delete</code> so the controller can revoke tokens and remove agent rows when workloads are torn down.
 			</p>
 
 			<div class="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4">
@@ -216,6 +218,10 @@
 					<label class="flex items-center gap-2">
 						<input type="checkbox" bind:checked={permRevoke} />
 						<span>join_tokens:revoke</span>
+					</label>
+					<label class="flex items-center gap-2">
+						<input type="checkbox" bind:checked={permAgentsDelete} />
+						<span>agents:delete</span>
 					</label>
 				</fieldset>
 				<button

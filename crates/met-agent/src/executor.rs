@@ -55,6 +55,10 @@ pub struct JobExecutor {
     pending_log_flushes: Vec<tokio::task::JoinHandle<()>>,
     /// Footprint / blast-radius metadata from finished steps (for cancel and early-abort reporting).
     footprint_accumulator: Arc<RwLock<Vec<(String, JobExecutionMetadata)>>>,
+    /// Signals the main loop to exit after graceful teardown (e.g. `MET_AGENT_EXIT_AFTER_JOBS`).
+    shutdown_tx: watch::Sender<bool>,
+    /// Successful jobs completed in this process (for `exit_after_jobs`).
+    jobs_completed: u32,
 }
 
 impl JobExecutor {
@@ -84,6 +88,7 @@ impl JobExecutor {
         shutdown_rx: watch::Receiver<bool>,
         job_pause_rx: watch::Receiver<bool>,
         heartbeat_transition_wake: mpsc::UnboundedSender<()>,
+        shutdown_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             config,
@@ -97,6 +102,8 @@ impl JobExecutor {
             active_trace: Arc::new(RwLock::new(None)),
             pending_log_flushes: Vec::new(),
             footprint_accumulator: Arc::new(RwLock::new(Vec::new())),
+            shutdown_tx,
+            jobs_completed: 0,
         }
     }
 
@@ -239,6 +246,16 @@ impl JobExecutor {
                                                 Ok(()) => {
                                                     if let Err(e) = message.ack().await {
                                                         warn!(error = %e, "failed to ack message after job success");
+                                                    } else if let Some(limit) = self.config.exit_after_jobs {
+                                                        self.jobs_completed = self.jobs_completed.saturating_add(1);
+                                                        if self.jobs_completed >= limit {
+                                                            info!(
+                                                                jobs_completed = self.jobs_completed,
+                                                                limit,
+                                                                "exit_after_jobs reached; requesting graceful shutdown"
+                                                            );
+                                                            let _ = self.shutdown_tx.send(true);
+                                                        }
                                                     }
                                                 }
                                                 Err(e) => {

@@ -152,6 +152,20 @@ export interface ImportPipelineGitInput {
 	credentials_path: string;
 }
 
+/** Body for PUT /api/v1/pipelines/{id} — omit fields you do not want to change */
+export interface UpdatePipelineInput {
+	name?: string;
+	description?: string;
+	enabled?: boolean;
+	definition?: PipelineDefinition | Record<string, unknown>;
+	scm_provider?: string | null;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_credentials_secret_path?: string | null;
+	scm_revision?: string | null;
+}
+
 /** Project or pipeline-scoped environment variable (non-secret config). */
 export interface ProjectVariable {
 	id: string;
