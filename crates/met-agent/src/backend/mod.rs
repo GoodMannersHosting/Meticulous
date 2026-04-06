@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use crate::config::ExecutionRuntime;
 use crate::error::Result;
-use crate::process_watcher::{ExecutedBinaryRecord, ProcessWatcher};
+use crate::process_watcher::{ExecutedBinary, ExecutedBinaryRecord, ProcessWatcher};
 use crate::step_log::StepLogPipe;
 use tracing::warn;
 
@@ -58,6 +58,38 @@ impl StepResult {
     }
 }
 
+/// Wakeup interval between `/proc` scans while a step runs (native or container CLI on host).
+pub(crate) const PROCESS_WATCHER_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// After any newly seen descendant, sample a few more times quickly so very short-lived children
+/// (typical `curl` in `curl | sh` install snippets) are still captured for footprint / exec rows.
+const SHORT_LIVED_CHILD_BURST_SAMPLES: u32 = 25;
+const SHORT_LIVED_CHILD_BURST_SLEEP: Duration = Duration::from_millis(4);
+
+async fn emit_poll_batch(
+    watcher: &ProcessWatcher,
+    logs: Option<&StepLogPipe>,
+    step: &StepSpec,
+    workspace_canon: &Path,
+    runtime_budget: &mut u64,
+    runtime_seen: &mut HashSet<PathBuf>,
+    discovered: &[ExecutedBinary],
+) -> Result<()> {
+    if let Some(pipe) = logs {
+        crate::telemetry::emit_for_discovered_processes(
+            pipe,
+            step.step_sequence,
+            discovered,
+            workspace_canon,
+            runtime_budget,
+            runtime_seen,
+        )
+        .await?;
+        crate::telemetry::emit_new_network_flows(pipe, step.step_sequence, watcher).await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn poll_watcher_emit_telemetry(
     watcher: &ProcessWatcher,
     logs: Option<&StepLogPipe>,
@@ -66,18 +98,36 @@ pub(crate) async fn poll_watcher_emit_telemetry(
     runtime_budget: &mut u64,
     runtime_seen: &mut HashSet<PathBuf>,
 ) -> Result<()> {
-    let discovered = watcher.poll().await?;
-    if let Some(pipe) = logs {
-        crate::telemetry::emit_for_discovered_processes(
-            pipe,
-            step.step_sequence,
-            &discovered,
-            workspace_canon,
-            runtime_budget,
-            runtime_seen,
-        )
-        .await?;
-        crate::telemetry::emit_new_network_flows(pipe, step.step_sequence, watcher).await?;
+    let mut discovered = watcher.poll().await?;
+    emit_poll_batch(
+        watcher,
+        logs,
+        step,
+        workspace_canon,
+        runtime_budget,
+        runtime_seen,
+        &discovered,
+    )
+    .await?;
+
+    if !discovered.is_empty() {
+        for _ in 0..SHORT_LIVED_CHILD_BURST_SAMPLES {
+            tokio::time::sleep(SHORT_LIVED_CHILD_BURST_SLEEP).await;
+            discovered = watcher.poll().await?;
+            if discovered.is_empty() {
+                continue;
+            }
+            emit_poll_batch(
+                watcher,
+                logs,
+                step,
+                workspace_canon,
+                runtime_budget,
+                runtime_seen,
+                &discovered,
+            )
+            .await?;
+        }
     }
     Ok(())
 }

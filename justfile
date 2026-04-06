@@ -529,7 +529,7 @@ frontend-install:
 
 # Run frontend dev server
 frontend-dev:
-    cd frontend && npm run dev
+    cd frontend && npm run dev -- --host 0.0.0.0
 
 # Build frontend for production
 frontend-build:

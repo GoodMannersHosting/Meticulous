@@ -13,6 +13,10 @@
 
 	let { data, class: className = '' }: RunFootprintViewerProps = $props();
 
+	/** Agent placeholder for binaries detected from step script text (not measured from disk). */
+	const SCRIPT_INFERRED_SHA =
+		'0000000000000000000000000000000000000000000000000000000000000000';
+
 	const hasExec = $derived(data.executed_binaries.length > 0);
 	const hasNet = $derived(data.network_connections.length > 0);
 	const hasFs = $derived(data.filesystem_by_directory.length > 0);
@@ -74,9 +78,18 @@
 								<td class="py-2 pr-3 font-mono break-all">{row.binary_path}</td>
 								<td class="py-2 pr-3">
 									<div class="flex flex-wrap items-center gap-1">
-										<span class="font-mono break-all">{row.sha256 || '—'}</span>
-										{#if row.sha256}
-											<CopyButton text={row.sha256} size="sm" />
+										{#if row.sha256 === SCRIPT_INFERRED_SHA}
+											<span
+												class="text-[var(--text-secondary)]"
+												title="Not a file hash; tool name detected in step run script"
+											>
+												Inferred (script)
+											</span>
+										{:else}
+											<span class="font-mono break-all">{row.sha256 || '—'}</span>
+											{#if row.sha256}
+												<CopyButton text={row.sha256} size="sm" />
+											{/if}
 										{/if}
 									</div>
 								</td>

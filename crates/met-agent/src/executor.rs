@@ -721,15 +721,23 @@ impl JobExecutor {
 
         match result {
             Ok(step_result) => {
-                let metadata = JobExecutionMetadata {
+                let mut metadata = JobExecutionMetadata {
                     executed_binaries: step_result.executed_binaries,
                     total_processes_spawned: step_result.processes_spawned,
                     execution_tree_depth: step_result.execution_tree_depth,
                 };
+                crate::script_exec_hints::merge_command_hints_into_metadata(
+                    &step.command,
+                    &step.step_id,
+                    &step.step_run_id,
+                    &mut metadata,
+                );
                 Ok((step_result.exit_code, Some(metadata)))
             }
             Err(e) => {
-                let meta = watcher.aggregate_metadata(&step.step_id).await;
+                let meta = watcher
+                    .aggregate_metadata(&step.step_id, &step.step_run_id)
+                    .await;
                 error!(step = %step.name, error = %e, "step backend error; still shipping footprint metadata");
                 Ok((1, Some(meta)))
             }
@@ -898,6 +906,7 @@ impl JobExecutor {
                             nanos: 0,
                         }),
                         step_ids: b.step_ids,
+                        step_run_ids: b.step_run_ids,
                     })
                     .collect(),
                 total_processes_spawned: meta.total_processes_spawned,

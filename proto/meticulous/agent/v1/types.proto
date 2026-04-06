@@ -204,6 +204,8 @@ message ExecutedBinary {
     meticulous.common.v1.Timestamp last_executed_at = 5;
     // Step IDs where this binary was executed.
     repeated string step_ids = 6;
+    // Step run IDs ([`meticulous.common`]) for correlation with `step_runs` (footprint step name).
+    repeated string step_run_ids = 7;
 }
 
 // Execution metadata collected during job run.

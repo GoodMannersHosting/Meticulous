@@ -12,8 +12,9 @@
 //!   operators and tests.
 //! - Typically requires elevated capability / permissive container policy (often `CAP_SYS_ADMIN`,
 //!   or an equivalent seccomp profile) and is **incompatible** with many locked-down runners.
-//! - When not available, operators should rely on polling + engine-level pipeline IR (known
-//!   `StepSpec.command`) — **not** on seeing remote `curl | bash` bodies, which stay inside TLS.
+//! - When not available, operators should rely on polling plus [`crate::script_exec_hints`]
+//!   (conservative token scan of `StepSpec.command` at dispatch) for common CI binaries such as
+//!   `curl` that may exit too quickly for `/proc` sampling inside `podman run`.
 //!
 //! ## Syscall audit stream (proc-derived)
 //!

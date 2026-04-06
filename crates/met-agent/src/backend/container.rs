@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -277,7 +277,7 @@ impl ExecutionBackend for ContainerBackend {
         };
 
         // Poll for child processes while waiting for completion
-        let poll_interval = Duration::from_millis(100);
+        let poll_interval = super::PROCESS_WATCHER_POLL_INTERVAL;
         let result: std::result::Result<std::process::ExitStatus, AgentError> = loop {
             // Check if we've exceeded the timeout
             if let Some(deadline) = deadline {
@@ -346,7 +346,9 @@ impl ExecutionBackend for ContainerBackend {
         };
 
         // Aggregate execution metadata
-        let metadata = watcher.aggregate_metadata(&step.step_id).await;
+        let metadata = watcher
+            .aggregate_metadata(&step.step_id, &step.step_run_id)
+            .await;
         watcher.stop_watching().await;
 
         let exit_code = status.code().unwrap_or(-1);

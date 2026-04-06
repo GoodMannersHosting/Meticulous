@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 use met_core::hash_join_token;
-use met_core::ids::{AgentId, JobRunId, OrganizationId, RunId, StepRunId};
+use met_core::ids::{AgentId, JobRunId, OrganizationId, RunId, StepId, StepRunId};
 use met_core::models::{
     Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
 };
@@ -1295,6 +1295,47 @@ async fn persist_job_sbom_cyclonedx(
     Ok(())
 }
 
+/// Prefer explicit `step_run_ids` from the agent; otherwise correlate IR `step_ids` with `step_runs`.
+async fn resolve_step_run_uuid_for_binary_row(
+    pool: &PgPool,
+    job_run_id: JobRunId,
+    step_run_ids: &[String],
+    step_ids: &[String],
+) -> sqlx::Result<Option<uuid::Uuid>> {
+    use std::str::FromStr as _;
+
+    if let Some(id) = step_run_ids
+        .iter()
+        .find_map(|s| StepRunId::from_str(s).ok())
+    {
+        return Ok(Some(id.as_uuid()));
+    }
+
+    for sid in step_ids {
+        let Ok(step_id) = StepId::from_str(sid) else {
+            continue;
+        };
+        let row: Option<uuid::Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM step_runs
+            WHERE job_run_id = $1 AND step_id = $2
+            ORDER BY created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .bind(step_id.as_uuid())
+        .fetch_optional(pool)
+        .await?;
+        if let Some(id) = row {
+            return Ok(Some(id));
+        }
+    }
+
+    Ok(None)
+}
+
 async fn persist_run_binaries_for_job(
     pool: &PgPool,
     run_id: RunId,
@@ -1304,11 +1345,19 @@ async fn persist_run_binaries_for_job(
 ) -> sqlx::Result<()> {
     for b in &meta.executed_binaries {
         let path = redact_exec_path_for_storage(&b.path);
+        let step_run_uuid = resolve_step_run_uuid_for_binary_row(
+            pool,
+            job_run_id,
+            &b.step_run_ids,
+            &b.step_ids,
+        )
+        .await?;
+
         sqlx::query(
             r#"
             INSERT INTO run_binary_executions
-                (run_id, job_run_id, agent_id, binary_path, binary_sha256, pid, ppid)
-            VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+                (run_id, job_run_id, agent_id, binary_path, binary_sha256, pid, ppid, step_run_id)
+            VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6)
             "#,
         )
         .bind(run_id.as_uuid())
@@ -1316,6 +1365,7 @@ async fn persist_run_binaries_for_job(
         .bind(agent_id.map(|a| a.as_uuid()))
         .bind(&path)
         .bind(&b.sha256)
+        .bind(step_run_uuid)
         .execute(pool)
         .await?;
     }

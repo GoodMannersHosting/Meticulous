@@ -48,6 +48,7 @@ zeroize = { version = "1", features = ["derive"] }
 rand.workspace = true
 sha2 = "0.10"
 hex = "0.4"
+regex = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["time", "process"] }

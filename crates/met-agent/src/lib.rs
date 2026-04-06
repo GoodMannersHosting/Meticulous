@@ -33,6 +33,7 @@ pub mod heartbeat;
 pub mod job_claim;
 pub mod process_watcher;
 pub mod registration;
+pub mod script_exec_hints;
 pub mod seccomp_exec;
 pub mod security;
 pub mod step_log;
