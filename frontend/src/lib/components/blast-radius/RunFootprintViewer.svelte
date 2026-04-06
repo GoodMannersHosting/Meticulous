@@ -21,6 +21,14 @@
 	const hasNet = $derived(data.network_connections.length > 0);
 	const hasFs = $derived(data.filesystem_by_directory.length > 0);
 	const empty = $derived(!hasExec && !hasNet && !hasFs);
+	const hasScriptInferred = $derived(
+		data.executed_binaries.some((r) => r.sha256 === SCRIPT_INFERRED_SHA)
+	);
+
+	const scriptInferredTitle =
+		'Matched from the step script text only—not confirmed by process telemetry or a binary hash for this run. ' +
+		'It may not have executed here (for example if a branch was skipped). ' +
+		'It could still run under other inputs or environments. Worth a quick trust review when assessing exposure, without assuming it actually ran in this job.';
 </script>
 
 <div class="space-y-6 {className}">
@@ -38,6 +46,14 @@
 				<strong class="text-[var(--text-primary)]">Hostnames:</strong> we store destination
 				<strong>IP + port</strong> today. DNS names are not persisted unless the agent starts reporting them.
 			</p>
+			{#if hasScriptInferred}
+				<p>
+					<strong class="text-[var(--text-primary)]">Script references:</strong> rows labeled as coming from
+					the script are <strong>not proof something ran</strong>; they flag tools the script might invoke
+					(including branches that were skipped). That is useful context for supply-chain and trust review
+					without treating every reference as an executed attack surface.
+				</p>
+			{/if}
 		</div>
 	</div>
 
@@ -79,11 +95,19 @@
 								<td class="py-2 pr-3">
 									<div class="flex flex-wrap items-center gap-1">
 										{#if row.sha256 === SCRIPT_INFERRED_SHA}
-											<span
-												class="text-[var(--text-secondary)]"
-												title="Not a file hash; tool name detected in step run script"
-											>
-												Inferred (script)
+											<span class="block max-w-[14rem] leading-snug">
+												<span
+													class="text-[var(--text-secondary)]"
+													title={scriptInferredTitle}
+												>
+													Script reference
+												</span>
+												<span
+													class="mt-0.5 block text-[var(--text-tertiary)]"
+													title={scriptInferredTitle}
+												>
+													Not verified executed — could run under other conditions
+												</span>
 											</span>
 										{:else}
 											<span class="font-mono break-all">{row.sha256 || '—'}</span>
@@ -196,12 +220,26 @@
 										<tr class="border-b border-[var(--border-secondary)]/60 last:border-0">
 											<td class="py-1.5 pr-2 font-mono break-all">{e.binary_path}</td>
 											<td class="py-1.5 pr-2">
-												<div class="flex flex-wrap items-center gap-1">
-													<span class="font-mono">{e.sha256}</span>
-													{#if e.sha256}
-														<CopyButton text={e.sha256} size="sm" />
-													{/if}
-												</div>
+												{#if e.sha256 === SCRIPT_INFERRED_SHA}
+													<span class="block max-w-[14rem] leading-snug">
+														<span class="text-[var(--text-secondary)]" title={scriptInferredTitle}>
+															Script reference
+														</span>
+														<span
+															class="mt-0.5 block text-[var(--text-tertiary)]"
+															title={scriptInferredTitle}
+														>
+															Not verified executed — could run under other conditions
+														</span>
+													</span>
+												{:else}
+													<div class="flex flex-wrap items-center gap-1">
+														<span class="font-mono">{e.sha256}</span>
+														{#if e.sha256}
+															<CopyButton text={e.sha256} size="sm" />
+														{/if}
+													</div>
+												{/if}
 											</td>
 											<td class="py-1.5 pr-2 tabular-nums">{e.execution_count}×</td>
 											<td class="py-1.5 text-[var(--text-secondary)]">

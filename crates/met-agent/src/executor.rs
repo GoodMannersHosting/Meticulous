@@ -16,7 +16,7 @@ use met_proto::agent::v1::{
 use met_proto::common::v1::{RunStatus, Timestamp};
 use prost::Message;
 use sha2::{Digest, Sha256};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use tokio_stream;
 use tonic::transport::Channel;
 use tonic::Request;
@@ -47,6 +47,8 @@ pub struct JobExecutor {
     shutdown_rx: watch::Receiver<bool>,
     /// When true, stop pulling new jobs from NATS (controller requested drain).
     job_pause_rx: watch::Receiver<bool>,
+    /// Nudge heartbeat after busy/idle transitions so the controller sees `busy` without waiting for the interval.
+    heartbeat_transition_wake: mpsc::UnboundedSender<()>,
     /// Updated while a job is active (after Running is reported) for SIGINT cancellation.
     active_trace: Arc<RwLock<Option<ActiveJobTrace>>>,
     /// Step log `StreamLogs` flushes; must finish before workspace cleanup deletes spool files.
@@ -81,6 +83,7 @@ impl JobExecutor {
         heartbeat_state: Arc<RwLock<HeartbeatState>>,
         shutdown_rx: watch::Receiver<bool>,
         job_pause_rx: watch::Receiver<bool>,
+        heartbeat_transition_wake: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             config,
@@ -90,6 +93,7 @@ impl JobExecutor {
             heartbeat_state,
             shutdown_rx,
             job_pause_rx,
+            heartbeat_transition_wake,
             active_trace: Arc::new(RwLock::new(None)),
             pending_log_flushes: Vec::new(),
             footprint_accumulator: Arc::new(RwLock::new(Vec::new())),
@@ -353,6 +357,8 @@ impl JobExecutor {
         if state.running_jobs == 0 {
             state.status = met_proto::AgentStatus::Online;
         }
+        drop(state);
+        let _ = self.heartbeat_transition_wake.send(());
     }
 
     /// Execute a single job.
@@ -386,6 +392,7 @@ impl JobExecutor {
             state.current_job_id = Some(job.job_run_id.clone());
             state.status = met_proto::AgentStatus::Busy;
         }
+        let _ = self.heartbeat_transition_wake.send(());
 
         let job_run_id = job.job_run_id.clone();
         let res = self.do_run_job_dispatch(job).await;

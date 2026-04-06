@@ -234,14 +234,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start heartbeat loop
     let client = registration.client().clone();
     let identity_path = config.identity_path();
-    let (heartbeat_handle, heartbeat_shutdown, mut action_rx) = spawn_heartbeat_loop(
-        client.clone(),
-        identity.clone(),
-        identity_path,
-        Duration::from_secs(15),
-        heartbeat_state.clone(),
-        job_pause_tx,
-    );
+    let (heartbeat_handle, heartbeat_shutdown, mut action_rx, heartbeat_transition_wake) =
+        spawn_heartbeat_loop(
+            client.clone(),
+            identity.clone(),
+            identity_path,
+            Duration::from_secs(15),
+            heartbeat_state.clone(),
+            job_pause_tx,
+        );
 
     // Connect to NATS
     let require_nats_jwt = std::env::var("MET_AGENT_REQUIRE_NATS_JWT")
@@ -271,6 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         heartbeat_state.clone(),
         shutdown_rx.clone(),
         job_pause_rx,
+        heartbeat_transition_wake,
     );
 
     // Start executor in background

@@ -107,6 +107,13 @@
 	function copy(text: string) {
 		void navigator.clipboard.writeText(text);
 	}
+
+	/** Prefer display name over raw `project_id` (UUID); fallback keeps support visible if the project list is incomplete. */
+	function installationProjectLabel(projectId: string): string {
+		const p = projects.find((x) => x.id === projectId);
+		if (p) return p.name;
+		return projectId;
+	}
 </script>
 
 <div class="space-y-8">
@@ -233,7 +240,8 @@
 									Installation <code class="text-xs">{inst.id}</code>
 								</p>
 								<p class="text-xs text-[var(--text-tertiary)]">
-									Project {inst.project_id} · {inst.permissions.join(', ') || '—'}
+									<span class="text-[var(--text-secondary)]">{installationProjectLabel(inst.project_id)}</span>
+									· {inst.permissions.join(', ') || '—'}
 								</p>
 								{#if inst.revoked_at}
 									<p class="mt-1 text-xs text-amber-700 dark:text-amber-400">Revoked {inst.revoked_at}</p>
