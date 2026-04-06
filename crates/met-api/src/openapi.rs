@@ -22,6 +22,7 @@ use crate::routes::{
         ValidatePipelineRequest, ValidatePipelineResponse,
     },
     projects::{CreateProjectRequest, ProjectResponse, UpdateProjectRequest},
+    dashboard::{DashboardStatsResponse, RecentRunResponse},
     runs::{
         CancelRunResponse, DagNodeResponse, ExecutedBinarySummary, FootprintBinaryRow,
         FootprintDirectoryEntry, FootprintDirectoryGroup, FootprintNetworkRow,
@@ -55,6 +56,7 @@ use crate::routes::{
         (name = "projects", description = "Project management"),
         (name = "pipelines", description = "Pipeline management"),
         (name = "runs", description = "Pipeline run management"),
+        (name = "dashboard", description = "Org dashboard overview"),
         (name = "agents", description = "Agent management"),
         (name = "tokens", description = "API token management"),
         (name = "secrets", description = "Secret management"),
@@ -100,6 +102,9 @@ use crate::routes::{
         crate::routes::pipelines::validate_pipeline,
         crate::routes::pipelines::import_pipeline_git,
         crate::routes::pipelines::sync_pipeline_from_git,
+        // Dashboard
+        crate::routes::dashboard::dashboard_stats,
+        crate::routes::dashboard::dashboard_recent_runs,
         // Runs
         crate::routes::runs::list_runs,
         crate::routes::runs::get_run,
@@ -182,6 +187,8 @@ use crate::routes::{
             OrgResponse, CreateOrgRequest, UpdateOrgRequest,
             // Projects
             ProjectResponse, CreateProjectRequest, UpdateProjectRequest,
+            // Dashboard
+            DashboardStatsResponse, RecentRunResponse,
             // Pipelines
             PipelineResponse, CreatePipelineRequest, UpdatePipelineRequest,
             ImportPipelineGitRequest, SyncPipelineGitRequest,

@@ -1,5 +1,6 @@
 //! Agent and pool models.
 
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -136,6 +137,60 @@ pub fn pack_last_security_bundle(v: JsonValue) -> Option<LastSecurityBundleSnaps
 }
 
 impl Agent {
+    /// Forensics-friendly snapshot of this agent as JSON (for `job_runs.agent_snapshot`).
+    ///
+    /// Includes registration/security bundle and host-oriented fields already stored on the agent row.
+    /// Long-term public key material is encoded as base64 (not a private key).
+    #[must_use]
+    pub fn job_audit_snapshot_json(&self) -> serde_json::Value {
+        let last_security_bundle: Option<JsonValue> = {
+            #[cfg(feature = "sqlx")]
+            {
+                self.last_security_bundle.as_ref().map(|j| j.0.clone())
+            }
+            #[cfg(not(feature = "sqlx"))]
+            {
+                self.last_security_bundle.clone()
+            }
+        };
+        let x509_public_key_base64 = self
+            .x509_public_key
+            .as_ref()
+            .map(|k| base64::engine::general_purpose::STANDARD.encode(k));
+        serde_json::json!({
+            "id": self.id.to_string(),
+            "org_id": self.org_id.to_string(),
+            "name": self.name,
+            "status": self.status,
+            "pool": self.pool,
+            "pool_tags": self.pool_tags,
+            "tags": self.tags,
+            "capabilities": self.capabilities.clone(),
+            "os": self.os,
+            "arch": self.arch,
+            "version": self.version,
+            "ip_address": self.ip_address,
+            "max_jobs": self.max_jobs,
+            "running_jobs": self.running_jobs,
+            "last_heartbeat_at": self.last_heartbeat_at,
+            "created_at": self.created_at,
+            "environment_type": self.environment_type,
+            "kernel_version": self.kernel_version,
+            "public_ips": self.public_ips,
+            "private_ips": self.private_ips,
+            "ntp_synchronized": self.ntp_synchronized,
+            "container_runtime": self.container_runtime,
+            "container_runtime_version": self.container_runtime_version,
+            "x509_public_key_base64": x509_public_key_base64,
+            "join_token_id": self.join_token_id.map(|t| t.to_string()),
+            "jwt_expires_at": self.jwt_expires_at,
+            "jwt_renewable": self.jwt_renewable,
+            "drain_missed_heartbeats": self.drain_missed_heartbeats,
+            "deregistered_at": self.deregistered_at,
+            "last_security_bundle": last_security_bundle,
+        })
+    }
+
     /// Create a new agent in offline status.
     #[must_use]
     pub fn new(

@@ -148,6 +148,14 @@ pub struct JobRun {
     /// Path to log storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
+    /// Cache key when restored from cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub cache_key: Option<String>,
+    /// Job outputs JSON (when recorded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(json, default))]
+    pub outputs: Option<serde_json::Value>,
     /// SHA-256 of the pipeline definition JSON snapshot (`definition_snapshots`) at job_run creation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline_definition_sha256: Option<Vec<u8>>,
@@ -165,6 +173,12 @@ pub struct JobRun {
     pub finished_at: Option<DateTime<Utc>>,
     /// When the record was created.
     pub created_at: DateTime<Utc>,
+    /// Agent identity and host/security fields captured when this job entered `running` on an agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_snapshot: Option<serde_json::Value>,
+    /// When [`Self::agent_snapshot`] was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_snapshot_captured_at: Option<DateTime<Utc>>,
 }
 
 impl JobRun {
@@ -183,12 +197,16 @@ impl JobRun {
             error_message: None,
             cache_hit: false,
             log_path: None,
+            cache_key: None,
+            outputs: None,
             pipeline_definition_sha256: None,
             workflow_definition_sha256: None,
             source_workflow: None,
             started_at: None,
             finished_at: None,
             created_at: Utc::now(),
+            agent_snapshot: None,
+            agent_snapshot_captured_at: None,
         }
     }
 

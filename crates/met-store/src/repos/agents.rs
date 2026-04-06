@@ -130,6 +130,25 @@ impl<'a> AgentRepo<'a> {
         .ok_or_else(|| StoreError::not_found("agent", id))
     }
 
+    /// Load agent row by ID for persisting a job-run audit snapshot.
+    ///
+    /// Unlike [`Self::get`], this does **not** filter on `deregistered_at`, so a point-in-time
+    /// snapshot can still be captured if the row exists (e.g. decommission raced with a running job).
+    pub async fn get_for_audit_snapshot(&self, id: AgentId) -> Result<Agent> {
+        sqlx::query_as::<_, Agent>(&format!(
+            r#"
+            SELECT {AGENT_ROW_SELECT}
+            FROM agents
+            WHERE id = $1
+            "#,
+            AGENT_ROW_SELECT = AGENT_ROW_SELECT
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("agent", id))
+    }
+
     /// List agents in an organization.
     pub async fn list_by_org(
         &self,

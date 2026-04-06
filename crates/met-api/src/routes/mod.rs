@@ -20,6 +20,7 @@ pub mod admin;
 pub mod agents;
 pub mod artifacts;
 pub mod auth;
+pub mod dashboard;
 pub mod debug;
 pub mod health;
 pub mod integration;
@@ -55,6 +56,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // Build versioned API routes
     let api_v1 = Router::new()
+        .merge(dashboard::router())
         .merge(projects::router())
         .merge(pipelines::router())
         .merge(runs::router())

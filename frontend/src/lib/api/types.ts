@@ -321,6 +321,9 @@ export interface JobRun {
 	source_workflow?: Record<string, unknown>;
 	/** Best-effort explanation when status is pending or queued (from API). */
 	scheduling_note?: string;
+	/** Agent/host audit JSON when the job entered running (stored for forensics). */
+	agent_snapshot?: Record<string, unknown> | null;
+	agent_snapshot_captured_at?: string;
 	created_at: string;
 }
 
@@ -378,13 +381,15 @@ export interface Agent {
 // Dashboard Stats
 export interface DashboardStats {
 	active_runs: number;
-	completed_today: number;
-	failed_today: number;
+	completed_runs: number;
+	failed_runs: number;
 	avg_duration_ms: number;
 	agents_online: number;
 	agents_total: number;
 	pipelines_count: number;
 	projects_count: number;
+	/** Time window key echoed from the API: 1h, 4h, 12h, 1d, 3d, 7d */
+	window: string;
 }
 
 export interface RecentRun {

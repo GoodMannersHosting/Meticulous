@@ -9,6 +9,7 @@ mod agents;
 mod api_tokens;
 mod auth_providers;
 mod cache_entries;
+mod dashboard;
 mod definition_snapshots;
 mod groups;
 mod job_assignments;
@@ -39,6 +40,9 @@ pub use audit_log::{AuditLogRepo, AuditLogRow, AuditLogFilter, CreateAuditLog};
 pub use auth_providers::AuthProviderRepo;
 pub use builtin_secrets::{BuiltinSecretCipherRow, BuiltinSecretMetaRow, BuiltinSecretsRepo, StoredSecretKind};
 pub use cache_entries::CacheEntryRepo;
+pub use dashboard::{
+    org_dashboard_stats, org_recent_runs, DashboardRecentRunRow, DashboardStats,
+};
 pub use definition_snapshots::DefinitionSnapshotRepo;
 pub use groups::GroupRepo;
 pub use job_assignments::JobAssignmentRepo;

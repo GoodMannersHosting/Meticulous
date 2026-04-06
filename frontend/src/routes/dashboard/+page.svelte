@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { Badge, Button, Card, StatusBadge } from '$components/ui';
+	import { Button, Card, StatusBadge, Select } from '$components/ui';
+	import type { SelectOption } from '$components/ui';
 	import { Skeleton, EmptyState } from '$components/data';
-	import { apiMethods, getWebSocketManager, createConnectionStateStore } from '$api';
+	import { apiMethods } from '$api';
 	import type { DashboardStats, RecentRun, Agent } from '$api';
 	import { formatRelativeTime, formatDurationMs, formatNumber } from '$utils/format';
 	import { goto } from '$app/navigation';
@@ -14,9 +15,7 @@
 		GitBranch,
 		ArrowUpRight,
 		Play,
-		RefreshCw,
-		Wifi,
-		WifiOff
+		RefreshCw
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
@@ -26,12 +25,24 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	const connectionState = createConnectionStateStore();
+	/** Matches API `window` query param */
+	let timeWindow = $state('1d');
+
+	const windowOptions: SelectOption[] = [
+		{ value: '1h', label: 'Last 1 hour' },
+		{ value: '4h', label: 'Last 4 hours' },
+		{ value: '12h', label: 'Last 12 hours' },
+		{ value: '1d', label: 'Last 24 hours' },
+		{ value: '3d', label: 'Last 3 days' },
+		{ value: '7d', label: 'Last 7 days' }
+	];
+
+	const windowShortLabel = $derived(
+		windowOptions.find((o) => o.value === timeWindow)?.label ?? timeWindow
+	);
 
 	onMount(() => {
 		loadDashboard();
-		const ws = getWebSocketManager();
-		ws?.connect();
 
 		const interval = setInterval(loadDashboard, 30000);
 		return () => clearInterval(interval);
@@ -42,25 +53,19 @@
 		error = null;
 		try {
 			const [statsRes, runsRes, agentsRes] = await Promise.all([
-				apiMethods.dashboard.stats().catch(() => null),
-				apiMethods.dashboard.recentRuns(10).catch(() => []),
-				apiMethods.agents.list({ per_page: 5 }).catch(() => ({ data: [], pagination: { has_more: false } }))
+				apiMethods.dashboard.stats(timeWindow),
+				apiMethods.dashboard.recentRuns(10, timeWindow),
+				apiMethods.agents.list({ per_page: 5 })
 			]);
 
-			stats = statsRes ?? {
-				active_runs: 0,
-				completed_today: 0,
-				failed_today: 0,
-				avg_duration_ms: 0,
-				agents_online: 0,
-				agents_total: 0,
-				pipelines_count: 0,
-				projects_count: 0
-			};
-			recentRuns = runsRes ?? [];
+			stats = statsRes;
+			recentRuns = runsRes;
 			agents = agentsRes.data ?? [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load dashboard';
+			stats = null;
+			recentRuns = [];
+			agents = [];
 		} finally {
 			loading = false;
 		}
@@ -69,25 +74,29 @@
 	const statCards = $derived([
 		{
 			label: 'Active Runs',
+			sub: 'Now (all statuses in progress)',
 			value: stats ? formatNumber(stats.active_runs) : '—',
 			icon: Activity,
 			color: 'primary'
 		},
 		{
-			label: 'Completed Today',
-			value: stats ? formatNumber(stats.completed_today) : '—',
+			label: 'Completed',
+			sub: windowShortLabel,
+			value: stats ? formatNumber(stats.completed_runs) : '—',
 			icon: CheckCircle2,
 			color: 'success'
 		},
 		{
 			label: 'Avg Duration',
+			sub: `Succeeded runs · ${windowShortLabel}`,
 			value: stats ? formatDurationMs(stats.avg_duration_ms) : '—',
 			icon: Clock,
 			color: 'secondary'
 		},
 		{
-			label: 'Failed Today',
-			value: stats ? formatNumber(stats.failed_today) : '—',
+			label: 'Failed',
+			sub: windowShortLabel,
+			value: stats ? formatNumber(stats.failed_runs) : '—',
 			icon: AlertCircle,
 			color: 'error'
 		}
@@ -110,20 +119,20 @@
 			</p>
 		</div>
 
-		<div class="flex items-center gap-3">
-			<div class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-				{#if connectionState.current === 'connected'}
-					<Wifi class="h-4 w-4 text-success-500" />
-					<span>Live</span>
-				{:else if connectionState.current === 'connecting' || connectionState.current === 'reconnecting'}
-					<Wifi class="h-4 w-4 animate-pulse text-warning-500" />
-					<span>Connecting...</span>
-				{:else}
-					<WifiOff class="h-4 w-4 text-secondary-400" />
-					<span>Offline</span>
-				{/if}
+		<div class="flex flex-wrap items-center gap-3">
+			<div class="flex flex-col gap-1">
+				<span class="text-xs font-medium text-[var(--text-secondary)]">Metrics period</span>
+				<div class="w-[11rem]">
+					<Select
+						id="dashboard-window"
+						options={windowOptions}
+						bind:value={timeWindow}
+						size="sm"
+						onchange={() => loadDashboard()}
+					/>
+				</div>
 			</div>
-			<Button variant="ghost" size="sm" onclick={loadDashboard} loading={loading}>
+			<Button variant="ghost" size="sm" onclick={loadDashboard} loading={loading} title="Refresh now (also auto-refreshes every 30s)">
 				<RefreshCw class="h-4 w-4" />
 			</Button>
 			<Button variant="outline" href="/pipelines">
@@ -147,10 +156,13 @@
 		{#each statCards as stat (stat.label)}
 			{@const Icon = stat.icon}
 			<Card>
-				<div class="flex items-center justify-between">
-					<span class="text-sm font-medium text-[var(--text-secondary)]">
-						{stat.label}
-					</span>
+				<div class="flex items-center justify-between gap-2">
+					<div>
+						<span class="text-sm font-medium text-[var(--text-secondary)]">
+							{stat.label}
+						</span>
+						<p class="mt-0.5 text-xs text-[var(--text-tertiary)]">{stat.sub}</p>
+					</div>
 					<div class="rounded-lg p-2 {colorClasses[stat.color]}">
 						<Icon class="h-4 w-4" />
 					</div>
@@ -172,7 +184,10 @@
 	<div class="grid gap-6 lg:grid-cols-2">
 		<Card>
 			<div class="flex items-center justify-between">
-				<h2 class="font-semibold text-[var(--text-primary)]">Recent Runs</h2>
+				<h2 class="font-semibold text-[var(--text-primary)]">
+					Recent Runs
+					<span class="ml-2 text-xs font-normal text-[var(--text-tertiary)]">({windowShortLabel})</span>
+				</h2>
 				<Button variant="ghost" size="sm" href="/runs">
 					View all
 					<ArrowUpRight class="h-4 w-4" />

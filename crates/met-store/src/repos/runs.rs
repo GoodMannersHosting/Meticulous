@@ -364,7 +364,8 @@ impl<'a> RunRepo<'a> {
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                   agent_snapshot, agent_snapshot_captured_at
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -505,7 +506,8 @@ impl<'a> JobRunRepo<'a> {
             VALUES ($1, $2, $3, $4, 'pending', 1, $5)
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())
@@ -525,7 +527,8 @@ impl<'a> JobRunRepo<'a> {
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                   agent_snapshot, agent_snapshot_captured_at
             FROM job_runs
             WHERE id = $1
             "#,
@@ -629,7 +632,8 @@ impl<'a> JobRunRepo<'a> {
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                   pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                   agent_snapshot, agent_snapshot_captured_at
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -909,22 +913,39 @@ WHERE jr.run_id = r.id
     }
 
     /// Update job run status to running with agent assignment.
-    pub async fn mark_running(&self, id: JobRunId, agent_id: AgentId) -> Result<JobRun> {
+    ///
+    /// When `agent_snapshot` is `Some`, rows `agent_snapshot` / `agent_snapshot_captured_at` are updated
+    /// (point-in-time audit). When `None`, existing snapshot columns are preserved.
+    pub async fn mark_running(
+        &self,
+        id: JobRunId,
+        agent_id: AgentId,
+        agent_snapshot: Option<serde_json::Value>,
+    ) -> Result<JobRun> {
         let now = Utc::now();
-        
+
         let job_run = sqlx::query_as::<_, JobRun>(
             r#"
             UPDATE job_runs
-            SET status = 'running', agent_id = $2, started_at = $3
+            SET status = 'running',
+                agent_id = $2,
+                started_at = $3,
+                agent_snapshot = COALESCE($4::jsonb, agent_snapshot),
+                agent_snapshot_captured_at = CASE
+                    WHEN $4::jsonb IS NOT NULL THEN $3
+                    ELSE agent_snapshot_captured_at
+                END
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(agent_id.as_uuid())
         .bind(now)
+        .bind(agent_snapshot)
         .fetch_one(self.pool)
         .await?;
 
@@ -950,7 +971,8 @@ WHERE jr.run_id = r.id
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())
@@ -995,7 +1017,8 @@ WHERE jr.run_id = r.id
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())
@@ -1012,11 +1035,13 @@ WHERE jr.run_id = r.id
             r#"
             UPDATE job_runs
             SET attempt = attempt + 1, status = 'pending', 
-                started_at = NULL, finished_at = NULL, exit_code = NULL, error_message = NULL
+                started_at = NULL, finished_at = NULL, exit_code = NULL, error_message = NULL,
+                agent_id = NULL, agent_snapshot = NULL, agent_snapshot_captured_at = NULL
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())
@@ -1071,7 +1096,8 @@ WHERE jr.run_id = r.id
             WHERE id = $1
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
-                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow
+                      pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                      agent_snapshot, agent_snapshot_captured_at
             "#,
         )
         .bind(id.as_uuid())

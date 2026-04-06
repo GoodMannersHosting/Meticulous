@@ -753,7 +753,24 @@ impl AgentService for AgentServiceImpl {
                     let aid: AgentId = raw
                         .parse()
                         .map_err(|_| Status::invalid_argument("invalid agent_id"))?;
-                    job_run_repo.mark_running(job_run_id, aid).await
+                    let agent_snapshot = match AgentRepo::new(self.pool.as_ref())
+                        .get_for_audit_snapshot(aid)
+                        .await
+                    {
+                        Ok(agent) => Some(agent.job_audit_snapshot_json()),
+                        Err(e) => {
+                            warn!(
+                                job_run_id = %job_run_id,
+                                agent_id = %aid,
+                                error = %e,
+                                "could not load agent row for job-run audit snapshot; storing running state without snapshot"
+                            );
+                            None
+                        }
+                    };
+                    job_run_repo
+                        .mark_running(job_run_id, aid, agent_snapshot)
+                        .await
                 }
                 JobStatus::Succeeded => job_run_repo
                     .mark_completed(

@@ -478,6 +478,12 @@ pub struct JobRunResponse {
     /// Best-effort explanation when a job is pending or queued (omitted when not applicable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduling_note: Option<String>,
+    /// Agent/host audit JSON captured when the job entered `running` (investigation / compromise lineage).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object)]
+    pub agent_snapshot: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_snapshot_captured_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[utoipa::path(
@@ -544,6 +550,8 @@ async fn get_run_jobs(
                     .map(hex::encode),
                 source_workflow: j.source_workflow.clone(),
                 scheduling_note,
+                agent_snapshot: j.agent_snapshot.clone(),
+                agent_snapshot_captured_at: j.agent_snapshot_captured_at,
             }
         })
         .collect();

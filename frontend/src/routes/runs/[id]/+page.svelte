@@ -6,6 +6,8 @@
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type { Run, JobRun, Pipeline, JobAssignment, RunDagResponse, StepRun } from '$api/types';
+	import JobRunAgentPanel from '$lib/components/agents/JobRunAgentPanel.svelte';
+	import { auditFromSnapshot, type JobRunAgentAudit } from '$lib/utils/jobRunAgentAudit';
 	import {
 		formatRelativeTime,
 		formatDurationMs,
@@ -25,7 +27,8 @@
 		Terminal,
 		ChevronRight,
 		Package,
-		AlertTriangle
+		AlertTriangle,
+		Fingerprint
 	} from 'lucide-svelte';
 	import { DagViewer } from '$components/pipeline';
 	import LogViewer, {
@@ -87,6 +90,7 @@
 
 	const tabs = [
 		{ id: 'jobs', label: 'Jobs', icon: Terminal },
+		{ id: 'agents', label: 'Agents', icon: Fingerprint },
 		{ id: 'graph', label: 'Graph', icon: GitBranch },
 		{ id: 'sbom', label: 'SBOM', icon: Package },
 		{ id: 'blast-radius', label: 'Blast Radius', icon: AlertTriangle }
@@ -163,6 +167,22 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function agentTabModel(jr: JobRun): {
+		audit: JobRunAgentAudit | null;
+		assignedAgentId: string | null;
+	} {
+		if (jr.agent_snapshot && typeof jr.agent_snapshot === 'object') {
+			return {
+				audit: auditFromSnapshot(
+					jr.agent_snapshot as Record<string, unknown>,
+					jr.agent_snapshot_captured_at
+				),
+				assignedAgentId: jr.agent_id ?? null
+			};
+		}
+		return { audit: null, assignedAgentId: jr.agent_id ?? null };
 	}
 
 	$effect(() => {
@@ -793,6 +813,32 @@
 						</Card>
 					{/if}
 				</div>
+			</div>
+		{:else if activeTab === 'agents'}
+			<div class="space-y-4">
+				<p class="text-sm text-[var(--text-secondary)]">
+					Each panel shows the agent exactly as persisted on the job run when it entered
+					<span class="font-medium text-[var(--text-primary)]">running</span>
+					(same fields as the Agents page: OS, pool, capacity, registration bundle, host metadata). There is no live
+					fallback—only the stored snapshot counts for forensics.
+				</p>
+				{#if jobRuns.length === 0}
+					<Card>
+						<div class="py-10 text-center text-sm text-[var(--text-secondary)]">No jobs on this run</div>
+					</Card>
+				{:else}
+					{#each jobRuns as jr (jr.id)}
+						{@const m = agentTabModel(jr)}
+						{#key jr.id}
+							<JobRunAgentPanel
+								jobName={jr.job_name}
+								jobStatus={jr.status}
+								audit={m.audit}
+								assignedAgentId={m.assignedAgentId}
+							/>
+						{/key}
+					{/each}
+				{/if}
 			</div>
 		{:else if activeTab === 'graph'}
 			<Card>

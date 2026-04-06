@@ -236,9 +236,17 @@ export const apiMethods = {
 
 	// Dashboard
 	dashboard: {
-		stats: () => api.get<import('./types').DashboardStats>('/api/v1/dashboard/stats'),
-		recentRuns: (limit = 10) =>
-			api.get<import('./types').RecentRun[]>('/api/v1/dashboard/recent-runs', { params: { limit } })
+		stats: (windowKey?: string) =>
+			api.get<import('./types').DashboardStats>('/api/v1/dashboard/stats', {
+				params: windowKey ? { window: windowKey } : {}
+			}),
+		recentRuns: (limit = 10, windowKey?: string) =>
+			api.get<import('./types').RecentRun[]>('/api/v1/dashboard/recent-runs', {
+				params: {
+					limit,
+					...(windowKey ? { window: windowKey } : {})
+				}
+			})
 	},
 
 	// Projects
