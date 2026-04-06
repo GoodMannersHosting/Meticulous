@@ -366,7 +366,9 @@ export const apiMethods = {
 				lines?: import('./types').LogLinePayload[];
 				offset?: number;
 				has_more?: boolean;
-			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`)
+			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`),
+		jobSteps: (runId: string, jobRunId: string) =>
+			api.get<import('./types').StepRun[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/steps`)
 	},
 
 	// Agents

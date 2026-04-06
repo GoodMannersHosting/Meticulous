@@ -216,11 +216,16 @@ export interface SbomApiResponse {
 	format: string;
 	status: string;
 	sbom: Record<string, unknown> | null;
+	/** Job that uploaded the SBOM artifact (when known). */
+	job_name?: string | null;
+	/** Step hint from artifact metadata when present. */
+	step_name?: string | null;
 }
 
 /** GET /api/v1/runs/:id/footprint — execution surface for Blast Radius tab */
 export interface FootprintBinaryRow {
 	job_name: string;
+	step_name?: string | null;
 	binary_path: string;
 	sha256: string;
 	execution_count: number;
@@ -337,6 +342,7 @@ export interface StepRun {
 	id: string;
 	job_run_id: string;
 	step_id: string;
+	step_name: string;
 	status: JobStatus;
 	exit_code?: number;
 	log_path?: string;

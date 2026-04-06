@@ -5,7 +5,7 @@
 	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton, Select } from '$components/ui';
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Run, JobRun, Pipeline, JobAssignment, RunDagResponse } from '$api/types';
+	import type { Run, JobRun, Pipeline, JobAssignment, RunDagResponse, StepRun } from '$api/types';
 	import {
 		formatRelativeTime,
 		formatDurationMs,
@@ -28,7 +28,10 @@
 		AlertTriangle
 	} from 'lucide-svelte';
 	import { DagViewer } from '$components/pipeline';
-	import LogViewer from '$components/logs/LogViewer.svelte';
+	import LogViewer, {
+		LOG_STEP_FILTER_ALL,
+		LOG_STEP_FILTER_UNSCOPED
+	} from '$components/logs/LogViewer.svelte';
 	import { SbomViewer } from '$components/sbom';
 	import { RunFootprintViewer } from '$components/blast-radius';
 	import RunJobDefinitionsCompare from '$components/run-compare/RunJobDefinitionsCompare.svelte';
@@ -65,6 +68,11 @@
 	let prevSbomError = $state<string | null>(null);
 	let prevFootprint = $state<RunFootprintResponse | null>(null);
 	let prevFootprintError = $state<string | null>(null);
+	let jobStepRuns = $state<StepRun[]>([]);
+	let jobStepsLoading = $state(false);
+	let logStepFilter = $state(LOG_STEP_FILTER_ALL);
+	let logHasUnscopedLogLines = $state(false);
+	let lastLogStepJobRunId = $state<string | null>(null);
 
 	const baselineRun = $derived(
 		compareRunCandidates.find((c) => c.id === compareBaselineRunId) ?? null
@@ -231,6 +239,48 @@
 		return {
 			startIso: a.started_at ?? a.accepted_at,
 			endIso: a.completed_at ?? null
+		};
+	});
+
+	const logStepDisplayNames = $derived(
+		Object.fromEntries(jobStepRuns.map((s) => [s.id, s.step_name]))
+	);
+
+	$effect(() => {
+		const jid = selectedJobRunId;
+		if (jid !== lastLogStepJobRunId) {
+			lastLogStepJobRunId = jid;
+			logStepFilter = LOG_STEP_FILTER_ALL;
+		}
+		if (!jid) {
+			lastLogStepJobRunId = null;
+		}
+	});
+
+	$effect(() => {
+		const rid = run?.id;
+		const jid = selectedJobRunId;
+		const onJobsTab = activeTab === 'jobs';
+		if (!rid || !jid || !onJobsTab) {
+			jobStepRuns = [];
+			jobStepsLoading = false;
+			return;
+		}
+		let cancelled = false;
+		jobStepsLoading = true;
+		void apiMethods.runs
+			.jobSteps(rid, jid)
+			.then((rows) => {
+				if (!cancelled) jobStepRuns = rows;
+			})
+			.catch(() => {
+				if (!cancelled) jobStepRuns = [];
+			})
+			.finally(() => {
+				if (!cancelled) jobStepsLoading = false;
+			});
+		return () => {
+			cancelled = true;
 		};
 	});
 
@@ -599,6 +649,76 @@
 								{/each}
 							{/if}
 						</div>
+						{#if selectedJobRunId}
+							<div class="border-t border-[var(--border-primary)] bg-[var(--bg-secondary)]/25 px-3 py-3">
+								<p class="mb-2 text-xs font-medium text-[var(--text-secondary)]">Workflow steps</p>
+								<div class="flex flex-col gap-1.5">
+									<button
+										type="button"
+										class="w-full rounded-lg border px-3 py-2 text-left transition-colors
+											{logStepFilter === LOG_STEP_FILTER_ALL
+											? 'border-primary-400 bg-primary-50 ring-1 ring-primary-400/40 dark:bg-primary-900/25'
+											: 'border-[var(--border-primary)] hover:bg-[var(--bg-hover)]'}"
+										onclick={() => (logStepFilter = LOG_STEP_FILTER_ALL)}
+									>
+										<span class="text-sm font-medium text-[var(--text-primary)]">All steps</span>
+										<p class="mt-0.5 text-[0.65rem] text-[var(--text-tertiary)]">
+											Full job log (newest at the bottom while running)
+										</p>
+									</button>
+									{#if logHasUnscopedLogLines}
+										<button
+											type="button"
+											class="w-full rounded-lg border px-3 py-2 text-left transition-colors
+												{logStepFilter === LOG_STEP_FILTER_UNSCOPED
+												? 'border-primary-400 bg-primary-50 ring-1 ring-primary-400/40 dark:bg-primary-900/25'
+												: 'border-[var(--border-primary)] hover:bg-[var(--bg-hover)]'}"
+											onclick={() => (logStepFilter = LOG_STEP_FILTER_UNSCOPED)}
+										>
+											<span class="text-sm font-medium text-[var(--text-primary)]">Unscoped lines</span>
+											<p class="mt-0.5 text-[0.65rem] text-[var(--text-tertiary)]">
+												Logs with no step id only
+											</p>
+										</button>
+									{/if}
+									{#if jobStepsLoading && jobStepRuns.length === 0}
+										<div class="space-y-2 py-1">
+											<Skeleton class="h-9 w-full rounded-lg" />
+											<Skeleton class="h-9 w-full rounded-lg" />
+										</div>
+									{:else}
+										{#each jobStepRuns as st (st.id)}
+											<button
+												type="button"
+												class="w-full rounded-lg border px-3 py-2 text-left transition-colors
+													{logStepFilter === st.id
+													? 'border-primary-400 bg-primary-50 ring-1 ring-primary-400/40 dark:bg-primary-900/25'
+													: 'border-[var(--border-primary)] hover:bg-[var(--bg-hover)]'}"
+												onclick={() => (logStepFilter = st.id)}
+											>
+												<div class="flex items-center gap-2">
+													<StatusBadge status={st.status} size="sm" showIcon={true} />
+													<span class="truncate text-sm font-medium text-[var(--text-primary)]">
+														{st.step_name}
+													</span>
+												</div>
+												<p
+													class="mt-1 font-mono text-[0.65rem] leading-snug text-[var(--text-tertiary)]"
+													title={st.id}
+												>
+													id {truncateId(st.id, 10)}…
+												</p>
+												{#if st.step_id}
+													<p class="font-mono text-[0.65rem] text-[var(--text-tertiary)]" title={st.step_id}>
+														step_id {st.step_id.length > 12 ? `${truncateId(st.step_id, 12)}…` : st.step_id}
+													</p>
+												{/if}
+											</button>
+										{/each}
+									{/if}
+								</div>
+							</div>
+						{/if}
 					</Card>
 				</div>
 
@@ -648,7 +768,8 @@
 										disabled={assignmentsLoading}
 									/>
 									<p class="mt-1 text-xs text-[var(--text-tertiary)]">
-										Logs are filtered by time window per dispatch when a single attempt is selected.
+										Logs are filtered by time window per dispatch when a single attempt is selected. Choose a
+										workflow step under the job list (left) to focus logs on one step.
 									</p>
 								</div>
 							{/if}
@@ -658,6 +779,9 @@
 									jobRunId={selectedJobRun.id}
 									jobStatus={selectedJobRun.status}
 									logTimeFilter={logTimeFilterForViewer}
+									bind:stepLogFilter={logStepFilter}
+									stepDisplayNames={logStepDisplayNames}
+									bind:hasUnscopedLogLines={logHasUnscopedLogLines}
 								/>
 							</div>
 						</Card>
@@ -756,6 +880,17 @@
 									<StatusBadge status={baselineRun.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">baseline</span>
 								</div>
+								{#if prevSbomRes?.job_name || prevSbomRes?.step_name}
+									<p class="text-xs text-[var(--text-tertiary)]">
+										<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
+										{#if prevSbomRes?.job_name}
+											<span class="text-[var(--text-primary)]"> job {prevSbomRes.job_name}</span>
+										{/if}
+										{#if prevSbomRes?.step_name}
+											<span class="text-[var(--text-primary)]"> · step {prevSbomRes.step_name}</span>
+										{/if}
+									</p>
+								{/if}
 								{#if prevSbomError}
 									<Alert variant="error" title="Baseline SBOM">{prevSbomError}</Alert>
 								{:else if prevSbomRes?.sbom}
@@ -766,6 +901,17 @@
 									/>
 								{:else if prevSbomRes?.status === 'artifact_registered'}
 									<div class="space-y-2 text-sm text-[var(--text-secondary)]">
+										{#if prevSbomRes?.job_name || prevSbomRes?.step_name}
+											<p class="text-xs text-[var(--text-tertiary)]">
+												<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
+												{#if prevSbomRes?.job_name}
+													<span class="text-[var(--text-primary)]"> job {prevSbomRes.job_name}</span>
+												{/if}
+												{#if prevSbomRes?.step_name}
+													<span class="text-[var(--text-primary)]"> · step {prevSbomRes.step_name}</span>
+												{/if}
+											</p>
+										{/if}
 										<p class="font-medium text-[var(--text-primary)]">
 											SBOM artifact linked, preview not loaded
 										</p>
@@ -783,6 +929,17 @@
 									<StatusBadge status={run.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">this run</span>
 								</div>
+								{#if sbomRes?.job_name || sbomRes?.step_name}
+									<p class="text-xs text-[var(--text-tertiary)]">
+										<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
+										{#if sbomRes?.job_name}
+											<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
+										{/if}
+										{#if sbomRes?.step_name}
+											<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
+										{/if}
+									</p>
+								{/if}
 								{#if sbomRes?.sbom}
 									<SbomViewer
 										rawDocument={sbomRes.sbom}
@@ -791,6 +948,17 @@
 									/>
 								{:else if sbomRes?.status === 'artifact_registered'}
 									<div class="space-y-2 p-1 text-sm text-[var(--text-secondary)]">
+										{#if sbomRes?.job_name || sbomRes?.step_name}
+											<p class="text-xs text-[var(--text-tertiary)]">
+												<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
+												{#if sbomRes?.job_name}
+													<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
+												{/if}
+												{#if sbomRes?.step_name}
+													<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
+												{/if}
+											</p>
+										{/if}
 										<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
 										<p>
 											The run has an artifact whose name or path looks like an SBOM (e.g.
@@ -829,6 +997,17 @@
 						{sbomError}
 					</Alert>
 				{:else if sbomRes?.sbom}
+					{#if sbomRes.job_name || sbomRes.step_name}
+						<p class="mb-3 text-xs text-[var(--text-tertiary)]">
+							<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
+							{#if sbomRes.job_name}
+								<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
+							{/if}
+							{#if sbomRes.step_name}
+								<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
+							{/if}
+						</p>
+					{/if}
 					<SbomViewer
 						rawDocument={sbomRes.sbom}
 						apiFormat={sbomRes.format}
@@ -836,6 +1015,17 @@
 					/>
 				{:else if sbomRes?.status === 'artifact_registered'}
 					<div class="space-y-2 p-4 text-sm text-[var(--text-secondary)]">
+						{#if sbomRes.job_name || sbomRes.step_name}
+							<p class="text-xs text-[var(--text-tertiary)]">
+								<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
+								{#if sbomRes.job_name}
+									<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
+								{/if}
+								{#if sbomRes.step_name}
+									<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
+								{/if}
+							</p>
+						{/if}
 						<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
 						<p>
 							The run has an artifact whose name or path looks like an SBOM (e.g.

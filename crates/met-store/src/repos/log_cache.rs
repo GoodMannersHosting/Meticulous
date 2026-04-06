@@ -74,7 +74,7 @@ impl<'a> LogCacheRepo<'a> {
             r#"
             INSERT INTO log_cache (job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL)
-            ON CONFLICT (job_run_id, sequence) DO UPDATE SET
+            ON CONFLICT (job_run_id, step_key, sequence) DO UPDATE SET
                 timestamp = EXCLUDED.timestamp,
                 stream = EXCLUDED.stream,
                 content = EXCLUDED.content,
@@ -113,7 +113,7 @@ impl<'a> LogCacheRepo<'a> {
             FROM log_cache
             WHERE job_run_id = $1
               AND ($4::text IS NULL OR stream = $4)
-            ORDER BY sequence ASC
+            ORDER BY timestamp ASC, step_key ASC, sequence ASC
             LIMIT $2 OFFSET $3
             "#,
         )
@@ -133,7 +133,7 @@ impl<'a> LogCacheRepo<'a> {
             SELECT job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at
             FROM log_cache
             WHERE job_run_id = $1
-            ORDER BY sequence ASC
+            ORDER BY timestamp ASC, step_key ASC, sequence ASC
             "#,
         )
         .bind(job_run_id.as_uuid())
@@ -177,7 +177,7 @@ impl<'a> LogCacheRepo<'a> {
                 r#"
                 INSERT INTO log_cache (job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
-                ON CONFLICT (job_run_id, sequence) DO UPDATE SET
+                ON CONFLICT (job_run_id, step_key, sequence) DO UPDATE SET
                     timestamp = EXCLUDED.timestamp,
                     stream = EXCLUDED.stream,
                     content = EXCLUDED.content,

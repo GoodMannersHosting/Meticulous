@@ -60,15 +60,17 @@
 					<thead>
 						<tr class="border-b border-[var(--border-secondary)] text-[var(--text-tertiary)]">
 							<th class="pb-2 pr-3 font-medium">Job</th>
+							<th class="pb-2 pr-3 font-medium">Step</th>
 							<th class="pb-2 pr-3 font-medium">Path</th>
 							<th class="pb-2 pr-3 font-medium">SHA-256</th>
 							<th class="pb-2 text-right font-medium">Exec count</th>
 						</tr>
 					</thead>
 					<tbody class="text-[var(--text-primary)]">
-						{#each data.executed_binaries as row (row.sha256 + row.binary_path + row.job_name)}
+						{#each data.executed_binaries as row (row.sha256 + row.binary_path + row.job_name + (row.step_name ?? ''))}
 							<tr class="border-b border-[var(--border-secondary)]/80 align-top text-xs">
 								<td class="py-2 pr-3">{row.job_name || '—'}</td>
+								<td class="py-2 pr-3">{row.step_name?.trim() ? row.step_name : '—'}</td>
 								<td class="py-2 pr-3 font-mono break-all">{row.binary_path}</td>
 								<td class="py-2 pr-3">
 									<div class="flex flex-wrap items-center gap-1">
@@ -154,7 +156,8 @@
 				</p>
 			{:else}
 				<p class="mb-3 text-xs text-[var(--text-tertiary)]">
-					Grouped by parent directory of observed executables (expandable).
+					Grouped by parent directory of observed executables (expandable). The last column lists
+					<span class="text-[var(--text-secondary)]">job · step</span> when exec telemetry includes step linkage.
 				</p>
 			{/if}
 

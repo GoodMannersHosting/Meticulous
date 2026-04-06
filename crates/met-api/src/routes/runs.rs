@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use met_core::{
-    ids::{JobId, JobRunId, PipelineId, ProjectId, RunId},
+    ids::{JobId, JobRunId, PipelineId, ProjectId, RunId, StepRunId},
     models::{JobRun, Run, RunStatus},
 };
 use met_store::{
@@ -830,7 +830,10 @@ async fn get_job_logs(
         .map(|e| JobLogLine {
             run_id: e.run_id.to_string(),
             job_run_id: e.job_run_id.to_string(),
-            step_run_id: e.step_run_id.map(|s| s.to_string()),
+            // Match `StepRunId` JSON everywhere else (`srun_<uuid>`), not bare `Uuid::to_string()`.
+            step_run_id: e
+                .step_run_id
+                .map(|u| StepRunId::from_uuid(u).to_string()),
             line: e.content.clone(),
             level: if e.stream == "stderr" {
                 "stderr".to_string()
@@ -1032,6 +1035,8 @@ const FOOTPRINT_MAX_NETWORK: i64 = 500;
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FootprintBinaryRow {
     pub job_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_name: Option<String>,
     pub binary_path: String,
     pub sha256: String,
     pub execution_count: i64,
@@ -1079,6 +1084,16 @@ pub struct RunFootprintResponse {
     pub filesystem_more_directory_count: Option<u32>,
 }
 
+fn footprint_job_step_label(job_name: &str, step_name: Option<&str>) -> String {
+    let job = job_name.trim();
+    match step_name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(step) if !job.is_empty() => format!("{job} · {step}"),
+        Some(step) => step.to_string(),
+        None if !job.is_empty() => job.to_string(),
+        None => "—".to_string(),
+    }
+}
+
 fn format_footprint_parent_dir(binary_path: &str) -> String {
     let p = std::path::Path::new(binary_path.trim());
     let Some(parent) = p.parent() else {
@@ -1124,6 +1139,7 @@ fn build_footprint_filesystem(
 
     for b in binaries {
         let parent = format_footprint_parent_dir(&b.binary_path);
+        let label = footprint_job_step_label(&b.job_name, b.step_name.as_deref());
 
         dir_map
             .entry(parent)
@@ -1131,14 +1147,14 @@ fn build_footprint_filesystem(
             .entry((b.binary_path.clone(), b.sha256.clone()))
             .and_modify(|(c, jobs)| {
                 *c += b.execution_count;
-                if !b.job_name.is_empty() {
-                    jobs.insert(b.job_name.clone());
+                if label != "—" {
+                    jobs.insert(label.clone());
                 }
             })
             .or_insert_with(|| {
                 let mut jobs = BTreeSet::new();
-                if !b.job_name.is_empty() {
-                    jobs.insert(b.job_name.clone());
+                if label != "—" {
+                    jobs.insert(label);
                 }
                 (b.execution_count, jobs)
             });
@@ -1204,6 +1220,11 @@ async fn get_run_footprint(
         .into_iter()
         .map(|r| FootprintBinaryRow {
             job_name: r.job_name,
+            step_name: if r.step_name.is_empty() {
+                None
+            } else {
+                Some(r.step_name)
+            },
             binary_path: r.binary_path,
             sha256: r.binary_sha256,
             execution_count: r.execution_count,

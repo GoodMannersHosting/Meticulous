@@ -17,6 +17,7 @@ pub struct RunBinaryExecutionAgg {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RunBinaryFootprintRow {
     pub job_name: String,
+    pub step_name: String,
     pub binary_path: String,
     pub binary_sha256: String,
     pub execution_count: i64,
@@ -60,14 +61,16 @@ impl<'a> RunBinaryExecutionRepo<'a> {
             r#"
             SELECT
                 COALESCE(jr.job_name, '') AS job_name,
+                COALESCE(sr.step_name, '') AS step_name,
                 rbe.binary_path,
                 rbe.binary_sha256,
                 COUNT(*)::bigint AS execution_count
             FROM run_binary_executions rbe
             LEFT JOIN job_runs jr ON jr.id = rbe.job_run_id
+            LEFT JOIN step_runs sr ON sr.id = rbe.step_run_id
             WHERE rbe.run_id = $1 AND rbe.job_run_id IS NOT NULL
-            GROUP BY jr.job_name, rbe.binary_path, rbe.binary_sha256
-            ORDER BY jr.job_name, rbe.binary_path
+            GROUP BY jr.job_name, sr.step_name, rbe.binary_path, rbe.binary_sha256
+            ORDER BY jr.job_name, sr.step_name, rbe.binary_path
             "#,
         )
         .bind(run_id.as_uuid())
