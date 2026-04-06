@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 use met_core::hash_join_token;
-use met_core::ids::{AgentId, JobRunId, OrganizationId, RunId, StepId, StepRunId};
+use met_core::ids::{AgentId, JobRunId, OrganizationId, ProjectId, RunId, StepId, StepRunId};
 use met_core::models::{
     Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
 };
@@ -26,7 +26,7 @@ use met_secrets::BuiltinStoredCrypto;
 use met_objstore::ObjectStore;
 use met_store::repos::{
     reenroll_agent_with_exhausted_join_token, register_agent_with_join_token, AgentHeartbeatRepo,
-    AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, StepRunRepo,
+    AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, ProjectRepo, StepRunRepo,
 };
 use met_store::PgPool;
 use sha2::{Digest, Sha256};
@@ -295,9 +295,26 @@ impl AgentService for AgentServiceImpl {
                 };
                 OrganizationId::from_uuid(scope_uuid)
             }
-            JoinTokenScope::Platform | JoinTokenScope::Project | JoinTokenScope::Pipeline => {
+            JoinTokenScope::Project => {
+                let Some(proj_uuid) = join_record.scope_id else {
+                    return Err(Status::failed_precondition(
+                        "project join token is missing project scope",
+                    ));
+                };
+                let project = ProjectRepo::new(&self.pool)
+                    .get(ProjectId::from_uuid(proj_uuid))
+                    .await
+                    .map_err(|e| match e {
+                        StoreError::NotFound { .. } => Status::failed_precondition(
+                            "join token references a project that does not exist",
+                        ),
+                        _ => Status::internal(e.to_string()),
+                    })?;
+                project.org_id
+            }
+            JoinTokenScope::Platform | JoinTokenScope::Pipeline => {
                 return Err(Status::invalid_argument(
-                    "only tenant-scoped join tokens are supported for agent registration",
+                    "only tenant-scoped or project-scoped join tokens are supported for agent registration",
                 ));
             }
         };

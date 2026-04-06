@@ -69,6 +69,24 @@ fn sample_register_request(join_token: impl Into<String>) -> RegisterRequest {
     }
 }
 
+async fn seed_project(pool: &PgPool, org_id: Uuid, user_id: Uuid) -> Uuid {
+    let project_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO projects (id, org_id, name, slug, owner_type, owner_id, created_at, updated_at)
+        VALUES ($1, $2, 'proj', $3, 'user', $4, NOW(), NOW())
+        "#,
+    )
+    .bind(project_id)
+    .bind(org_id)
+    .bind(format!("slug-{}", project_id.as_simple()))
+    .bind(user_id.to_string())
+    .execute(pool)
+    .await
+    .expect("insert project");
+    project_id
+}
+
 async fn seed_org_and_user(pool: &PgPool) -> (Uuid, Uuid) {
     let org_id = Uuid::new_v4();
     sqlx::query(
@@ -187,4 +205,70 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
         resp.nats_subjects
     );
     let _ = resp.agent_id.parse::<met_core::ids::AgentId>().expect("agent id");
+}
+
+/// Project-scoped tokens are issued by the integration API; agents must enroll into the project's org.
+#[sqlx::test(migrations = "../met-store/migrations")]
+#[ignore = "requires Postgres (DATABASE_URL) and NATS on NATS_URL"]
+async fn register_succeeds_with_valid_project_scoped_token(pool: PgPool) {
+    let Some(nats) = connect_nats().await else {
+        eprintln!("NATS unavailable; start with: docker compose up -d nats");
+        return;
+    };
+
+    let (org_id, user_id) = seed_org_and_user(&pool).await;
+    let project_id = seed_project(&pool, org_id, user_id).await;
+
+    let plain = format!("met_join_{}", Uuid::new_v4().simple());
+    let token_hash = hash_join_token(&plain);
+    let now = Utc::now();
+    let token = JoinToken {
+        id: JoinTokenId::new(),
+        token_hash,
+        scope: JoinTokenScope::Project,
+        scope_id: Some(project_id),
+        description: "integration-style project token".to_string(),
+        org_id: None,
+        max_uses: 1,
+        current_uses: 0,
+        labels: vec![],
+        pool_tags: vec!["k8s".to_string()],
+        expires_at: None,
+        revoked: false,
+        created_by: UserId::from_uuid(user_id),
+        created_at: now,
+        updated_at: now,
+        consumed_by_agent_id: None,
+        consumed_at: None,
+    };
+    JoinTokenRepo::new(&pool)
+        .create(&token)
+        .await
+        .expect("create join token");
+
+    let config = test_controller_config();
+    let registry = AgentRegistry::new();
+    let impl_ = AgentServiceImpl::new(
+        config,
+        Arc::new(pool),
+        registry,
+        nats,
+        None,
+        None,
+    );
+
+    let resp = AgentService::register(&impl_, Request::new(sample_register_request(&plain)))
+        .await
+        .expect("register should succeed")
+        .into_inner();
+
+    assert!(!resp.agent_id.is_empty());
+    assert!(!resp.jwt_token.is_empty());
+    assert!(
+        resp.nats_subjects
+            .iter()
+            .any(|s| s.contains(&org_id.to_string())),
+        "subjects should include org id, got {:?}",
+        resp.nats_subjects
+    );
 }

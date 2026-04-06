@@ -8,7 +8,9 @@ use met_controller::nats::subjects;
 use met_core::ids::{AppInstallationId, MeticulousAppId, ProjectId};
 use met_store::PgPool;
 use met_store::repos::MeticulousAppRepo;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// Authenticated Meticulous App installation after JWT verification.
@@ -27,13 +29,96 @@ pub struct AppInstallationPrincipal {
 pub struct AppJwtClaims {
     /// Issuer: `application_id` (public app id string).
     pub iss: String,
-    /// Subject: `installation_id` (UUID string).
+    /// Subject: installation id as a raw UUID or prefixed `appi_<uuid>` (public id form).
     pub sub: String,
+    /// `aud` may be a string or (for some JWT libraries) a single-element array.
+    #[serde(deserialize_with = "deserialize_aud_claim")]
     pub aud: String,
+    #[serde(deserialize_with = "deserialize_unix_ts")]
     pub exp: i64,
+    #[serde(deserialize_with = "deserialize_unix_ts")]
     pub iat: i64,
     #[serde(default)]
     pub permissions: Vec<String>,
+}
+
+fn deserialize_aud_claim<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, IgnoredAny, Visitor};
+
+    struct AudVisitor;
+
+    impl<'de> Visitor<'de> for AudVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or single-element string array for `aud`")
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(value.to_owned())
+        }
+
+        fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+            Ok(value)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let first: Option<String> = seq.next_element()?;
+            let s = first.ok_or_else(|| de::Error::custom("`aud` array is empty"))?;
+            if seq.next_element::<IgnoredAny>()?.is_some() {
+                return Err(de::Error::custom(
+                    "`aud` array must contain exactly one string for integration JWTs",
+                ));
+            }
+            Ok(s)
+        }
+    }
+
+    deserializer.deserialize_any(AudVisitor)
+}
+
+fn deserialize_unix_ts<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+
+    struct TsVisitor;
+
+    impl<'de> Visitor<'de> for TsVisitor {
+        type Value = i64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a unix timestamp (integer, float, or decimal string)")
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            i64::try_from(v).map_err(|_| de::Error::custom("timestamp out of i64 range"))
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<i64, E> {
+            if !v.is_finite() {
+                return Err(de::Error::custom("non-finite timestamp"));
+            }
+            Ok(v as i64)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<i64, E> {
+            v.parse::<i64>().map_err(de::Error::custom)
+        }
+    }
+
+    deserializer.deserialize_any(TsVisitor)
 }
 
 #[derive(Debug, Error)]
@@ -150,8 +235,7 @@ pub async fn verify_app_installation_jwt(
         return Err(ApiError::unauthorized(AppJwtError::TtlTooLong.to_string()));
     }
 
-    let installation_id: AppInstallationId = uuid::Uuid::parse_str(&verified.sub)
-        .map(AppInstallationId::from_uuid)
+    let installation_id = AppInstallationId::from_str(verified.sub.trim())
         .map_err(|_| ApiError::unauthorized(AppJwtError::BadSubject.to_string()))?;
 
     let inst = repo
