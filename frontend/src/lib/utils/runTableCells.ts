@@ -1,5 +1,5 @@
 import type { Run, RunStatus } from '$api/types';
-import { formatDurationMs, formatRelativeTime } from './format';
+import { formatDateTimeForTitle, formatDurationMs, formatRelativeTime } from './format';
 import { escapeHtml } from './html';
 
 export function runNumberHtml(value: unknown, row?: Run): string {
@@ -65,9 +65,14 @@ export function runDurationHtml(value: unknown): string {
 	return `<span class="text-sm">${escapeHtml(formatDurationMs(value as number))}</span>`;
 }
 
-/** Relative “started” time; use with `runStartedAtHover` on an ancestor for delayed absolute `title`. */
+/** Relative “started” time with native tooltip showing absolute local start time. */
 export function runStartedAtHtml(_value: unknown, row: Run): string {
 	const iso = row.started_at ?? row.created_at;
+	if (iso == null || iso === '') {
+		return '<span class="text-sm text-[var(--text-tertiary)]">—</span>';
+	}
 	const rel = formatRelativeTime(iso);
-	return `<span class="met-run-started-at text-sm text-[var(--text-secondary)]" data-started-at="${escapeHtml(iso)}">${escapeHtml(rel)}</span>`;
+	const abs = formatDateTimeForTitle(iso);
+	const titleAttr = abs ? ` title="${escapeHtml(abs)}"` : '';
+	return `<span class="met-run-started-at text-sm text-[var(--text-secondary)]"${titleAttr}>${escapeHtml(rel)}</span>`;
 }

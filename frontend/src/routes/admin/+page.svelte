@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Users, UserCog, Key, Server, ListOrdered, ChevronRight } from 'lucide-svelte';
+	import { Users, UserCog, Key, Server, ListOrdered, ChevronRight, AppWindow } from 'lucide-svelte';
 
 	interface AdminLink {
 		title: string;
@@ -26,6 +26,12 @@
 			description: 'Configure OIDC, GitHub, and other auth providers',
 			href: '/admin/auth',
 			icon: Key
+		},
+		{
+			title: 'Meticulous Apps',
+			description: 'Machine integrations, JWT signing keys, and project installations',
+			href: '/admin/apps',
+			icon: AppWindow
 		},
 		{
 			title: 'Agents',

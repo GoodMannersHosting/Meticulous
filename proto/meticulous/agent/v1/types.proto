@@ -59,6 +59,10 @@ message SecurityBundle {
     uint64 memory_total_bytes = 14;
     // Outbound (egress) public IPv4/IPv6 as seen by an external service, when discoverable.
     string egress_public_ip = 15;
+    // Kubernetes correlation (optional; set by operator / downward API).
+    string kubernetes_pod_uid = 16;
+    string kubernetes_namespace = 17;
+    string kubernetes_node_name = 18;
 }
 
 // Type of execution environment.
@@ -79,6 +83,8 @@ message AgentCapabilities {
     repeated string labels = 3;
     // Pool tags for NATS subject subscriptions.
     repeated string pool_tags = 4;
+    // Maximum concurrent jobs (and optional lifetime cap when controller enforces MET_AGENT_MAX_JOBS).
+    int32 max_jobs = 5;
 }
 
 // Resource utilization snapshot.

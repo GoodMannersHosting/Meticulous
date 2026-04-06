@@ -6,7 +6,13 @@
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type { Run, JobRun, Pipeline, JobAssignment, RunDagResponse } from '$api/types';
-	import { formatRelativeTime, formatDurationMs, truncateId, formatDateTime } from '$utils/format';
+	import {
+		formatRelativeTime,
+		formatDurationMs,
+		truncateId,
+		formatDateTime,
+		formatDateTimeForTitle
+	} from '$utils/format';
 	import {
 		ArrowLeft,
 		RefreshCw,
@@ -503,7 +509,10 @@
 						<User class="h-4 w-4" />
 						{run.triggered_by}
 					</span>
-					<span class="flex items-center gap-1">
+					<span
+						class="flex items-center gap-1"
+						title={formatDateTimeForTitle(run.created_at) || undefined}
+					>
 						<Clock class="h-4 w-4" />
 						{formatRelativeTime(run.created_at)}
 					</span>

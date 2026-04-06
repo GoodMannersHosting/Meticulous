@@ -27,6 +27,7 @@ mod run_logs;
 mod run_binary_executions;
 mod run_network_connections;
 mod log_cache;
+mod meticulous_apps;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
 pub use agent_join_registration::{
@@ -43,6 +44,7 @@ pub use groups::GroupRepo;
 pub use job_assignments::JobAssignmentRepo;
 pub use jobs::{JobDagNode, JobRepo};
 pub use join_tokens::JoinTokenRepo;
+pub use meticulous_apps::MeticulousAppRepo;
 pub use organizations::OrganizationRepo;
 pub use pipelines::PipelineRepo;
 pub use projects::ProjectRepo;

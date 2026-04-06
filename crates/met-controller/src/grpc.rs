@@ -49,6 +49,7 @@ const MAX_SECURITY_MACHINE_ID_LEN: usize = 256;
 const MAX_SECURITY_EGRESS_IP_LEN: usize = 45;
 const MAX_SECURITY_LOGICAL_CPUS: u32 = 65_536;
 const MAX_SECURITY_MEMORY_BYTES: u64 = 1 << 50;
+const MAX_K8S_METADATA_FIELD_LEN: usize = 512;
 
 fn security_bundle_to_json(bundle: &SecurityBundle) -> serde_json::Value {
     serde_json::json!({
@@ -67,6 +68,9 @@ fn security_bundle_to_json(bundle: &SecurityBundle) -> serde_json::Value {
         "logical_cpus": bundle.logical_cpus,
         "memory_total_bytes": bundle.memory_total_bytes,
         "egress_public_ip": bundle.egress_public_ip,
+        "kubernetes_pod_uid": bundle.kubernetes_pod_uid,
+        "kubernetes_namespace": bundle.kubernetes_namespace,
+        "kubernetes_node_name": bundle.kubernetes_node_name,
     })
 }
 
@@ -178,6 +182,17 @@ impl AgentServiceImpl {
             return Err(ControllerError::ValidationFailed(
                 "memory_total_bytes out of range".to_string(),
             ));
+        }
+        for (label, s) in [
+            ("kubernetes_pod_uid", bundle.kubernetes_pod_uid.as_str()),
+            ("kubernetes_namespace", bundle.kubernetes_namespace.as_str()),
+            ("kubernetes_node_name", bundle.kubernetes_node_name.as_str()),
+        ] {
+            if s.len() > MAX_K8S_METADATA_FIELD_LEN {
+                return Err(ControllerError::ValidationFailed(format!(
+                    "{label} exceeds max length {MAX_K8S_METADATA_FIELD_LEN}"
+                )));
+            }
         }
 
         Ok(())

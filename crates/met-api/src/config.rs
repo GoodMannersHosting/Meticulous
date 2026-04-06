@@ -104,6 +104,12 @@ pub struct JwtConfig {
     /// Token expiration time.
     #[serde(with = "humantime_serde")]
     pub expiration: Duration,
+
+    /// Max lifetime (`exp` − `iat`) allowed for Meticulous App JWTs (integration auth).
+    pub app_max_ttl_secs: u64,
+
+    /// Clock skew leeway (seconds) when validating App JWT `exp` / `nbf`.
+    pub app_leeway_secs: u64,
 }
 
 impl Default for JwtConfig {
@@ -113,6 +119,8 @@ impl Default for JwtConfig {
             issuer: "meticulous".to_string(),
             audience: "meticulous-api".to_string(),
             expiration: Duration::from_secs(3600),
+            app_max_ttl_secs: 600,
+            app_leeway_secs: 60,
         }
     }
 }

@@ -14,7 +14,6 @@
 		runDurationHtml,
 		runStartedAtHtml
 	} from '$utils/runTableCells';
-	import { runStartedAtHover } from '$utils/runStartedAtHover';
 	import { RefreshCw, Play, ChevronLeft, ChevronRight, FolderOpen } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 
@@ -394,18 +393,16 @@
 					</Button>
 				</div>
 			</div>
-			<div use:runStartedAtHover>
-				<DataTable
-					columns={runColumns}
-					data={sortedRuns}
-					rowKey="id"
-					sortKey={runSortKey}
-					sortDirection={runSortDirection}
-					onSort={handleRunSort}
-					onRowClick={handleRunClick}
-					loading={runsLoading && runs.length === 0}
-				/>
-			</div>
+			<DataTable
+				columns={runColumns}
+				data={sortedRuns}
+				rowKey="id"
+				sortKey={runSortKey}
+				sortDirection={runSortDirection}
+				onSort={handleRunSort}
+				onRowClick={handleRunClick}
+				loading={runsLoading && runs.length === 0}
+			/>
 		</div>
 	{/if}
 </div>

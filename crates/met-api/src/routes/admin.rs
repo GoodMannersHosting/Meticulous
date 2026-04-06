@@ -34,6 +34,7 @@ use crate::{
 /// Build the admin router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(crate::routes::meticulous_apps::admin_router())
         // User management
         .route("/admin/users", get(list_users))
         .route("/admin/users/{id}", get(get_user).patch(update_user))
@@ -122,7 +123,7 @@ pub fn router() -> Router<AppState> {
 // Middleware / Guards
 // ============================================================================
 
-fn require_admin(user: &crate::extractors::CurrentUser) -> ApiResult<()> {
+pub(crate) fn require_admin(user: &crate::extractors::CurrentUser) -> ApiResult<()> {
     if !user.has_permission("*") {
         return Err(ApiError::forbidden("admin access required"));
     }
@@ -1799,7 +1800,7 @@ async fn list_join_tokens(
 }
 
 /// Enriches join tokens with creator names and associated agents.
-async fn enrich_join_tokens(
+pub(crate) async fn enrich_join_tokens(
     tokens: &[JoinToken],
     db: &sqlx::PgPool,
 ) -> ApiResult<Vec<JoinTokenResponse>> {

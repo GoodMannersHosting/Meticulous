@@ -10,6 +10,14 @@ export function formatDateTime(date: string | Date): string {
 	return format(d, 'MMM d, yyyy h:mm a');
 }
 
+/** Local absolute time for native `title` tooltips; empty if missing/invalid. */
+export function formatDateTimeForTitle(date: string | Date | undefined | null): string {
+	if (date == null || date === '') return '';
+	const d = typeof date === 'string' ? new Date(date) : date;
+	if (Number.isNaN(d.getTime())) return typeof date === 'string' ? date : '';
+	return formatDateTime(d);
+}
+
 export function formatDateShort(date: string | Date): string {
 	const d = typeof date === 'string' ? new Date(date) : date;
 	return format(d, 'MMM d, yyyy');

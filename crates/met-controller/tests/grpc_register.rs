@@ -55,12 +55,16 @@ fn sample_register_request(join_token: impl Into<String>) -> RegisterRequest {
             logical_cpus: 0,
             memory_total_bytes: 0,
             egress_public_ip: String::new(),
+            kubernetes_pod_uid: String::new(),
+            kubernetes_namespace: String::new(),
+            kubernetes_node_name: String::new(),
         }),
         capabilities: Some(AgentCapabilities {
             os: "linux".to_string(),
             arch: "amd64".to_string(),
             labels: vec!["from-agent".to_string()],
             pool_tags: vec!["docker".to_string()],
+            max_jobs: 1,
         }),
     }
 }

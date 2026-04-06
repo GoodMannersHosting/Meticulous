@@ -81,6 +81,9 @@ pub struct AgentConfig {
     pub labels: Vec<String>,
     /// Maximum concurrent jobs.
     pub concurrency: i32,
+    /// Upper bound on jobs this agent will accept over its lifetime (optional; ephemeral runners).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_jobs: Option<i32>,
     /// Workspace directory for job execution.
     pub workspace_dir: PathBuf,
     /// Log level.
@@ -110,6 +113,7 @@ impl Default for AgentConfig {
             pool_tags: vec!["_default".to_string()],
             labels: Vec::new(),
             concurrency: 1,
+            max_jobs: None,
             workspace_dir,
             log_level: "info".to_string(),
             execution_runtime: ExecutionRuntime::Native,
@@ -369,6 +373,11 @@ impl AgentConfig {
         if let Ok(concurrency) = std::env::var("MET_AGENT_CONCURRENCY") {
             if let Ok(c) = concurrency.parse() {
                 self.concurrency = c;
+            }
+        }
+        if let Ok(m) = std::env::var("MET_AGENT_MAX_JOBS") {
+            if let Ok(v) = m.parse::<i32>() {
+                self.max_jobs = Some(v.max(1));
             }
         }
         if let Ok(workspace) = std::env::var("MET_WORKSPACE_DIR") {

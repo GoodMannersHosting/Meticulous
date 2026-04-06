@@ -449,9 +449,71 @@ export const apiMethods = {
 		ops: {
 			jobQueue: (params?: { limit?: number }) =>
 				api.get<{ count: number; data: JobQueueEntry[] }>('/admin/ops/job-queue', { params })
+		},
+		/** Meticulous Apps (machine / integration auth). */
+		meticulousApps: {
+			list: () => api.get<MeticulousAppSummary[]>('/admin/meticulous-apps'),
+			create: (data: { name: string; description?: string }) =>
+				api.post<CreateMeticulousAppResponse>('/admin/meticulous-apps', data),
+			get: (applicationId: string) =>
+				api.get<MeticulousAppSummary>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}`
+				),
+			addKey: (applicationId: string) =>
+				api.post<{ key_id: string; private_key_pem: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys`,
+					{}
+				),
+			revokeKey: (applicationId: string, keyId: string) =>
+				api.post<{ message: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys/${encodeURIComponent(keyId)}/revoke`,
+					{}
+				),
+			listInstallations: (applicationId: string) =>
+				api.get<MeticulousAppInstallationRow[]>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`
+				),
+			createInstallation: (
+				applicationId: string,
+				body: { project_id: string; permissions: string[] }
+			) =>
+				api.post<MeticulousAppInstallationRow>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`,
+					body
+				),
+			revokeInstallation: (applicationId: string, installationId: string) =>
+				api.post<{ message: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations/${encodeURIComponent(installationId)}/revoke`,
+					{}
+				)
 		}
 	}
 };
+
+/** Admin: Meticulous App row (no secrets). */
+export interface MeticulousAppSummary {
+	id: string;
+	application_id: string;
+	name: string;
+	description?: string | null;
+	created_at: string;
+}
+
+/** Admin: response when creating an app or rotating a key (private key once). */
+export interface CreateMeticulousAppResponse {
+	app: MeticulousAppSummary;
+	key_id: string;
+	private_key_pem: string;
+}
+
+/** Admin: app installation row. */
+export interface MeticulousAppInstallationRow {
+	id: string;
+	project_id: string;
+	permissions: string[];
+	created_at: string;
+	revoked_at?: string | null;
+}
 
 /** Admin job queue row (`/admin/ops/job-queue`). */
 export interface JobQueueEntry {

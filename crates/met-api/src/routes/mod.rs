@@ -22,6 +22,8 @@ pub mod artifacts;
 pub mod auth;
 pub mod debug;
 pub mod health;
+pub mod integration;
+pub mod meticulous_apps;
 pub mod oauth;
 pub mod orgs;
 pub mod pipelines;
@@ -66,7 +68,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(debug::router())
         .merge(artifacts::router())
         .merge(webhooks::router())
-        .merge(websocket::router());
+        .merge(websocket::router())
+        .merge(integration::router());
 
     let openapi_spec = ApiDoc::openapi();
     let swagger_router: Router<()> = SwaggerUi::new("/docs")
