@@ -3,7 +3,7 @@
 //! The agent connects to the controller, receives job assignments,
 //! and executes steps in isolated environments.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +25,41 @@ use tokio::signal;
 use tokio::signal::unix::{signal as unix_signal, SignalKind};
 use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
+
+// #region agent log
+#[allow(dead_code)]
+fn agent_debug_log(
+    location: &'static str,
+    message: &'static str,
+    data: serde_json::Value,
+    hypothesis_id: &'static str,
+) {
+    const DEFAULT_DEBUG_LOG_PATH: &str =
+        "/home/dan/code/gmh/meticulous/.cursor/debug-14f9f9.log";
+    let path = std::env::var("MET_AGENT_DEBUG_LOG_PATH").unwrap_or_else(|_| {
+        DEFAULT_DEBUG_LOG_PATH.to_string()
+    });
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = serde_json::json!({
+        "sessionId": "14f9f9",
+        "timestamp": ts,
+        "location": location,
+        "message": message,
+        "data": data,
+        "hypothesisId": hypothesis_id,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{}", line);
+    }
+}
+// #endregion
 
 #[derive(Parser)]
 #[command(name = "met-agent")]
@@ -286,14 +321,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Wait for shutdown; DRAIN only pauses NATS pulls (handled in heartbeat + executor), not process exit.
+    // Reuse one SIGTERM `Signal` for the whole process lifetime. A prior approach called a helper that ran
+    // `unix_signal(terminate)` on every loop iteration; dropping the old listener can lose SIGTERM while
+    // other branches (heartbeat actions) complete.
+    #[cfg(unix)]
+    let mut sigterm = unix_signal(SignalKind::terminate()).expect("register SIGTERM");
     let mut shutdown_notify = shutdown_rx.clone();
+    let mut shutdown_wait_iter: u64 = 0;
     loop {
+        shutdown_wait_iter += 1;
+        // #region agent log
+        agent_debug_log(
+            "main.rs:shutdown_loop",
+            "shutdown wait iteration",
+            serde_json::json!({ "iter": shutdown_wait_iter }),
+            "H1",
+        );
+        // #endregion
+        let sig_or_ctrl_c = async {
+            #[cfg(unix)]
+            {
+                tokio::select! {
+                    biased;
+                    _ = sigterm.recv() => {
+                        // #region agent log
+                        agent_debug_log(
+                            "main.rs:sigterm",
+                            "SIGTERM recv done",
+                            serde_json::json!({ "iter": shutdown_wait_iter }),
+                            "H2",
+                        );
+                        // #endregion
+                        info!("received SIGTERM, shutting down");
+                    }
+                    res = signal::ctrl_c() => {
+                        // #region agent log
+                        agent_debug_log(
+                            "main.rs:sigint",
+                            "SIGINT recv done",
+                            serde_json::json!({ "iter": shutdown_wait_iter }),
+                            "H2",
+                        );
+                        // #endregion
+                        res.expect("SIGINT handler");
+                        info!("received SIGINT, shutting down");
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                signal::ctrl_c().await.expect("SIGINT handler");
+                // #region agent log
+                agent_debug_log(
+                    "main.rs:sigint",
+                    "SIGINT only (non-unix)",
+                    serde_json::json!({ "iter": shutdown_wait_iter }),
+                    "H2",
+                );
+                // #endregion
+                info!("received SIGINT, shutting down");
+            }
+        };
         tokio::select! {
-            _ = wait_sigint_or_sigterm() => {
-                info!("received SIGINT or SIGTERM, shutting down");
+            _ = sig_or_ctrl_c => {
+                // #region agent log
+                agent_debug_log(
+                    "main.rs:shutdown_break",
+                    "exit shutdown wait loop (signal)",
+                    serde_json::json!({ "iter": shutdown_wait_iter }),
+                    "H3",
+                );
+                // #endregion
                 break;
             }
             action = action_rx.recv() => {
+                // #region agent log
+                let action_dbg = action.as_ref().map(|a| format!("{a:?}")).unwrap_or_else(|| "None".to_string());
+                agent_debug_log(
+                    "main.rs:heartbeat_action",
+                    "action_rx branch",
+                    serde_json::json!({ "iter": shutdown_wait_iter, "action": action_dbg }),
+                    "H1",
+                );
+                // #endregion
                 match action {
                     Some(HeartbeatAction::Drain) => {
                         info!("received DRAIN command, no longer accepting new jobs from NATS");
@@ -303,15 +413,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Some(HeartbeatAction::Terminate) => {
                         warn!("received TERMINATE command, shutting down immediately");
+                        // #region agent log
+                        agent_debug_log(
+                            "main.rs:shutdown_break",
+                            "exit shutdown wait loop (terminate cmd)",
+                            serde_json::json!({ "iter": shutdown_wait_iter }),
+                            "H4",
+                        );
+                        // #endregion
                         break;
                     }
                     Some(_) => {}
-                    None => break,
+                    None => {
+                        // #region agent log
+                        agent_debug_log(
+                            "main.rs:shutdown_break",
+                            "exit shutdown wait loop (action channel closed)",
+                            serde_json::json!({ "iter": shutdown_wait_iter }),
+                            "H4",
+                        );
+                        // #endregion
+                        break;
+                    }
                 }
             }
             _ = shutdown_notify.changed() => {
                 if *shutdown_notify.borrow() {
                     info!("shutdown requested (e.g. MET_AGENT_EXIT_AFTER_JOBS reached)");
+                    // #region agent log
+                    agent_debug_log(
+                        "main.rs:shutdown_break",
+                        "exit shutdown wait loop (shutdown watch)",
+                        serde_json::json!({ "iter": shutdown_wait_iter }),
+                        "H5",
+                    );
+                    // #endregion
                     break;
                 }
             }
@@ -319,6 +455,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Signal shutdown (executor + heartbeat respond and exit their loops).
+    // #region agent log
+    agent_debug_log(
+        "main.rs:post_loop",
+        "sending shutdown to executor and heartbeat",
+        serde_json::json!({}),
+        "H6",
+    );
+    // #endregion
     let _ = shutdown_tx.send(true);
     let _ = heartbeat_shutdown.send(true);
 
@@ -329,10 +473,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(Err(e)) => warn!(error = %e, "heartbeat loop exited with error"),
         Err(e) => warn!(error = %e, "heartbeat task panicked or was cancelled"),
     }
+    // #region agent log
+    agent_debug_log(
+        "main.rs:after_heartbeat_join",
+        "heartbeat task joined",
+        serde_json::json!({}),
+        "H6",
+    );
+    // #endregion
     match executor_handle.await {
         Ok(()) => {}
         Err(e) => warn!(error = %e, "executor task panicked or was cancelled"),
     }
+    // #region agent log
+    agent_debug_log(
+        "main.rs:after_executor_join",
+        "executor task joined",
+        serde_json::json!({}),
+        "H6",
+    );
+    // #endregion
 
     info!("agent shutdown complete");
     Ok(())
@@ -344,23 +504,6 @@ fn registration_failure_should_exit(err: &AgentError) -> bool {
         AgentError::Config(msg) if msg.contains("join_token") => true,
         _ => false,
     }
-}
-
-/// Kubernetes and other supervisors send SIGTERM; interactive use sends SIGINT (ctrl_c).
-#[cfg(unix)]
-async fn wait_sigint_or_sigterm() {
-    let mut sigterm = unix_signal(SignalKind::terminate()).expect("register SIGTERM");
-    tokio::select! {
-        res = signal::ctrl_c() => {
-            res.expect("SIGINT handler");
-        }
-        _ = sigterm.recv() => {}
-    }
-}
-
-#[cfg(not(unix))]
-async fn wait_sigint_or_sigterm() {
-    signal::ctrl_c().await.expect("SIGINT handler OS support");
 }
 
 async fn connect_nats(
