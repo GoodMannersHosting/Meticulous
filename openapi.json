@@ -4507,6 +4507,10 @@
           "job_name": {
             "type": "string"
           },
+          "job_run_id": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "type": "string"
           }

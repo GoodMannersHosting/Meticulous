@@ -419,6 +419,8 @@ export interface RunDagNode {
 	job_name: string;
 	status: string;
 	depends_on: string[];
+	/** When set, steps for this workflow can be loaded for this run. */
+	job_run_id?: string | null;
 	executed_binaries?: RunDagExecutedBinary[];
 }
 

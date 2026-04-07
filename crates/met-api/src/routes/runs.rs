@@ -909,6 +909,9 @@ pub struct DagNodeResponse {
     pub job_name: String,
     pub status: String,
     pub depends_on: Vec<String>,
+    /// Latest job run for this node (when the run has been materialized), for step drill-down in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executed_binaries: Vec<ExecutedBinarySummary>,
 }
@@ -971,6 +974,15 @@ async fn get_run_dag(
 }
 
 fn job_defs_from_pipeline_definition(def: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    let from_jobs = job_defs_from_jobs_key(def);
+    if !from_jobs.is_empty() {
+        return from_jobs;
+    }
+    job_defs_from_workflows_key(def)
+}
+
+/// Top-level `jobs:` array (legacy / simple pipelines).
+fn job_defs_from_jobs_key(def: &serde_json::Value) -> Vec<(String, Vec<String>)> {
     let Some(arr) = def.get("jobs").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
@@ -987,6 +999,42 @@ fn job_defs_from_pipeline_definition(def: &serde_json::Value) -> Vec<(String, Ve
                         .collect()
                 })
                 .unwrap_or_default();
+            Some((name, deps))
+        })
+        .collect()
+}
+
+/// `workflows:` invocations — `depends-on` lists workflow **ids**; edges use display **names**
+/// so they match `JobRun.job_name` and the graph viewer.
+fn job_defs_from_workflows_key(def: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    let Some(arr) = def.get("workflows").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    let mut id_to_name: HashMap<String, String> = HashMap::new();
+    for w in arr {
+        let (Some(id), Some(name)) = (
+            w.get("id").and_then(|v| v.as_str()),
+            w.get("name").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        id_to_name.insert(id.to_string(), name.to_string());
+    }
+
+    arr.iter()
+        .filter_map(|w| {
+            let name = w.get("name")?.as_str()?.to_string();
+            let deps_raw: Vec<&str> = w
+                .get("depends-on")
+                .or_else(|| w.get("depends_on"))
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+                .unwrap_or_default();
+            let deps: Vec<String> = deps_raw
+                .iter()
+                .filter_map(|id| id_to_name.get(*id).cloned())
+                .collect();
             Some((name, deps))
         })
         .collect()
@@ -1042,10 +1090,23 @@ fn build_dag_nodes_from_db_jobs(
                 job_name: j.name,
                 status,
                 depends_on: j.depends_on,
+                job_run_id: latest_job_run(jrs).map(|jr| jr.id.to_string()),
                 executed_binaries,
             }
         })
         .collect()
+}
+
+fn job_run_matches_pipeline_dag_label(jr: &JobRun, node_label: &str) -> bool {
+    if jr.job_name == node_label {
+        return true;
+    }
+    let Some(sw) = jr.source_workflow.as_ref().and_then(|v| v.as_object()) else {
+        return false;
+    };
+    sw.get("invocation_name")
+        .and_then(|v| v.as_str())
+        .is_some_and(|n| n == node_label)
 }
 
 fn build_dag_nodes_from_definition(
@@ -1056,8 +1117,10 @@ fn build_dag_nodes_from_definition(
     job_defs_from_pipeline_definition(def)
         .into_iter()
         .map(|(name, deps)| {
-            let jrs_for_name: Vec<&JobRun> =
-                job_runs.iter().filter(|jr| jr.job_name == name).collect();
+            let jrs_for_name: Vec<&JobRun> = job_runs
+                .iter()
+                .filter(|jr| job_run_matches_pipeline_dag_label(jr, &name))
+                .collect();
             let status = latest_job_run(&jrs_for_name)
                 .map(|jr| format!("{:?}", jr.status).to_lowercase())
                 .unwrap_or_else(|| "pending".to_string());
@@ -1068,6 +1131,7 @@ fn build_dag_nodes_from_definition(
                 job_name: name,
                 status,
                 depends_on: deps,
+                job_run_id: latest_job_run(&jrs_for_name).map(|jr| jr.id.to_string()),
                 executed_binaries,
             }
         })

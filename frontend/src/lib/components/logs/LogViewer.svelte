@@ -212,6 +212,11 @@
 	}
 
 	$effect(() => {
+		// Explicit reads so job / run switches always rebind polling and WebSocket filters.
+		void runId;
+		void jobRunId;
+		void jobStatus;
+
 		let poll: ReturnType<typeof setInterval> | null = null;
 		const active =
 			jobStatus === 'running' ||

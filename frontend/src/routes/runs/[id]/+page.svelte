@@ -655,7 +655,7 @@
 		<Tabs items={tabs} bind:value={activeTab} />
 
 		{#if activeTab === 'jobs'}
-			<div class="grid gap-6 lg:grid-cols-3">
+			<div class="grid gap-6 lg:grid-cols-3 lg:items-stretch">
 				<div class="lg:col-span-1">
 					<Card padding="none">
 						<div class="border-b border-[var(--border-primary)] px-4 py-3">
@@ -794,10 +794,10 @@
 					</Card>
 				</div>
 
-				<div class="lg:col-span-2">
+				<div class="lg:col-span-2 flex min-h-[calc(100dvh-11rem)] flex-col">
 					{#if selectedJobRun}
 						{@const sjdisp = jobRunDisplay(selectedJobRun)}
-						<Card padding="none">
+						<Card padding="none" class="flex min-h-0 flex-1 flex-col overflow-hidden">
 							<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
 								<div>
 									{#if sjdisp.catalogLine}
@@ -852,16 +852,18 @@
 									</p>
 								</div>
 							{/if}
-							<div class="h-96">
-								<LogViewer
-									runId={run.id}
-									jobRunId={selectedJobRun.id}
-									jobStatus={selectedJobRun.status}
-									logTimeFilter={logTimeFilterForViewer}
-									bind:stepLogFilter={logStepFilter}
-									stepDisplayNames={logStepDisplayNames}
-									bind:hasUnscopedLogLines={logHasUnscopedLogLines}
-								/>
+							<div class="min-h-0 flex-1">
+								{#key selectedJobRun.id}
+									<LogViewer
+										runId={run.id}
+										jobRunId={selectedJobRun.id}
+										jobStatus={selectedJobRun.status}
+										logTimeFilter={logTimeFilterForViewer}
+										bind:stepLogFilter={logStepFilter}
+										stepDisplayNames={logStepDisplayNames}
+										bind:hasUnscopedLogLines={logHasUnscopedLogLines}
+									/>
+								{/key}
 							</div>
 						</Card>
 					{:else}
@@ -912,10 +914,12 @@
 					</Alert>
 				{:else if runDag && runDag.nodes.length > 0}
 					<DagViewer
+						runId={run.id}
 						jobs={runDag.nodes.map((n) => ({
 							name: n.job_name,
 							depends_on: n.depends_on,
 							status: n.status,
+							job_run_id: n.job_run_id ?? null,
 							executed_binaries: n.executed_binaries
 						}))}
 					/>
