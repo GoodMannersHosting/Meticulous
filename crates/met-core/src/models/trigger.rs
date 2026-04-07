@@ -253,7 +253,10 @@ impl WebhookConfig {
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
                 let Some(n) = name else {
-                    return Err(r#"inbound_auth "query" requires inbound_query_param (e.g. "token")"#.into());
+                    return Err(
+                        r#"inbound_auth "query" requires inbound_query_param (e.g. "token")"#
+                            .into(),
+                    );
                 };
                 if !Self::inbound_query_param_name_valid(n) {
                     return Err(
@@ -288,9 +291,8 @@ impl WebhookConfig {
         let root: JsonValue = if raw_body.is_empty() {
             JsonValue::Object(serde_json::Map::new())
         } else {
-            serde_json::from_slice(raw_body).map_err(|e| {
-                WebhookVariableMapError::InvalidJson(e.to_string())
-            })?
+            serde_json::from_slice(raw_body)
+                .map_err(|e| WebhookVariableMapError::InvalidJson(e.to_string()))?
         };
 
         let mut out = HashMap::new();
@@ -327,11 +329,8 @@ fn json_value_to_mapped_string(v: &JsonValue) -> Result<String, WebhookVariableM
         JsonValue::Bool(b) => Ok(b.to_string()),
         JsonValue::Number(n) => Ok(n.to_string()),
         JsonValue::String(s) => Ok(s.clone()),
-        JsonValue::Array(_) | JsonValue::Object(_) => {
-            serde_json::to_string(v).map_err(|e| {
-                WebhookVariableMapError::InvalidJson(e.to_string())
-            })
-        }
+        JsonValue::Array(_) | JsonValue::Object(_) => serde_json::to_string(v)
+            .map_err(|e| WebhookVariableMapError::InvalidJson(e.to_string())),
     }
 }
 
@@ -434,10 +433,7 @@ mod tests {
         let big = "x".repeat(WEBHOOK_MAX_VALUE_BYTES + 1);
         let body = format!(r#"{{"k":"{big}"}}"#);
         let err = c.map_payload_to_variables(body.as_bytes()).unwrap_err();
-        assert!(matches!(
-            err,
-            WebhookVariableMapError::ValueTooLarge { .. }
-        ));
+        assert!(matches!(err, WebhookVariableMapError::ValueTooLarge { .. }));
     }
 
     #[test]

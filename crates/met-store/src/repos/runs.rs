@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use met_core::ids::{
-    AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId, TriggerId,
+    AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId,
+    TriggerId,
 };
 use met_core::models::{JobRun, JobStatus, Run, RunStatus, StepRun};
 use sqlx::PgPool;
@@ -364,7 +365,7 @@ impl<'a> RunRepo<'a> {
     /// Get run with all job runs.
     pub async fn get_with_jobs(&self, id: RunId) -> Result<RunWithJobs> {
         let run = self.get(id).await?;
-        
+
         let job_runs = sqlx::query_as::<_, JobRun>(
             r#"
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
@@ -386,7 +387,7 @@ impl<'a> RunRepo<'a> {
     /// Set run to running status.
     pub async fn start_run(&self, id: RunId) -> Result<Run> {
         let now = Utc::now();
-        
+
         let run = sqlx::query_as::<_, Run>(
             r#"
             UPDATE runs
@@ -405,9 +406,14 @@ impl<'a> RunRepo<'a> {
     }
 
     /// Complete a run with final status.
-    pub async fn complete_run(&self, id: RunId, status: RunStatus, error_message: Option<&str>) -> Result<Run> {
+    pub async fn complete_run(
+        &self,
+        id: RunId,
+        status: RunStatus,
+        error_message: Option<&str>,
+    ) -> Result<Run> {
         let now = Utc::now();
-        
+
         let run = sqlx::query_as::<_, Run>(
             r#"
             UPDATE runs
@@ -503,12 +509,7 @@ impl<'a> JobRunRepo<'a> {
     }
 
     /// Create a new job run.
-    pub async fn create(
-        &self,
-        run_id: RunId,
-        job_id: JobId,
-        job_name: &str,
-    ) -> Result<JobRun> {
+    pub async fn create(&self, run_id: RunId, job_id: JobId, job_name: &str) -> Result<JobRun> {
         let id = JobRunId::new();
         let now = Utc::now();
 
@@ -659,7 +660,10 @@ impl<'a> JobRunRepo<'a> {
     }
 
     /// Roll up job-run counts and whether any job is `running` per run (for run-list badges).
-    pub async fn rollup_by_run_ids(&self, run_ids: &[RunId]) -> Result<HashMap<RunId, JobRunRollup>> {
+    pub async fn rollup_by_run_ids(
+        &self,
+        run_ids: &[RunId],
+    ) -> Result<HashMap<RunId, JobRunRollup>> {
         if run_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -1006,8 +1010,12 @@ WHERE jr.run_id = r.id
         outputs: Option<serde_json::Value>,
     ) -> Result<JobRun> {
         let now = Utc::now();
-        let status = if success { JobStatus::Succeeded } else { JobStatus::Failed };
-        
+        let status = if success {
+            JobStatus::Succeeded
+        } else {
+            JobStatus::Failed
+        };
+
         let job_run = sqlx::query_as::<_, JobRun>(
             r#"
             UPDATE job_runs
@@ -1033,7 +1041,8 @@ WHERE jr.run_id = r.id
 
     /// Mark job as skipped.
     pub async fn mark_skipped(&self, id: JobRunId, reason: Option<&str>) -> Result<JobRun> {
-        self.update_status(id, JobStatus::Skipped, None, reason).await
+        self.update_status(id, JobStatus::Skipped, None, reason)
+            .await
     }
 
     /// Mark job as cancelled.
@@ -1049,7 +1058,13 @@ WHERE jr.run_id = r.id
 
     /// Mark job as timed out.
     pub async fn mark_timed_out(&self, id: JobRunId) -> Result<JobRun> {
-        self.update_status(id, JobStatus::TimedOut, None, Some("Job execution timed out")).await
+        self.update_status(
+            id,
+            JobStatus::TimedOut,
+            None,
+            Some("Job execution timed out"),
+        )
+        .await
     }
 
     /// Set cache hit information.
@@ -1096,7 +1111,10 @@ WHERE jr.run_id = r.id
     }
 
     /// Load pipeline definition context for secret resolution (controller / jobs).
-    pub async fn get_pipeline_context(&self, job_run_id: JobRunId) -> Result<Option<JobRunPipelineContext>> {
+    pub async fn get_pipeline_context(
+        &self,
+        job_run_id: JobRunId,
+    ) -> Result<Option<JobRunPipelineContext>> {
         let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, serde_json::Value)>(
             r#"
             SELECT COALESCE(r.org_id, pr.org_id), p.project_id, p.id, p.definition
@@ -1111,12 +1129,14 @@ WHERE jr.run_id = r.id
         .fetch_optional(self.pool)
         .await?;
 
-        Ok(row.map(|(org_id, project_id, pipeline_id, definition)| JobRunPipelineContext {
-            org_id,
-            project_id,
-            pipeline_id,
-            definition,
-        }))
+        Ok(row.map(
+            |(org_id, project_id, pipeline_id, definition)| JobRunPipelineContext {
+                org_id,
+                project_id,
+                pipeline_id,
+                definition,
+            },
+        ))
     }
 
     /// Update status helper.
@@ -1129,7 +1149,7 @@ WHERE jr.run_id = r.id
     ) -> Result<JobRun> {
         let now = Utc::now();
         let is_terminal = status.is_terminal();
-        
+
         let job_run = sqlx::query_as::<_, JobRun>(
             r#"
             UPDATE job_runs
@@ -1235,7 +1255,7 @@ impl<'a> StepRunRepo<'a> {
     /// Mark step as running.
     pub async fn mark_running(&self, id: StepRunId) -> Result<StepRun> {
         let now = Utc::now();
-        
+
         let step_run = sqlx::query_as::<_, StepRun>(
             r#"
             UPDATE step_runs
@@ -1263,12 +1283,12 @@ impl<'a> StepRunRepo<'a> {
         outputs: Option<serde_json::Value>,
     ) -> Result<StepRun> {
         let now = Utc::now();
-        let status = if exit_code == 0 { 
-            met_core::models::StepStatus::Succeeded 
-        } else { 
-            met_core::models::StepStatus::Failed 
+        let status = if exit_code == 0 {
+            met_core::models::StepStatus::Succeeded
+        } else {
+            met_core::models::StepStatus::Failed
         };
-        
+
         let step_run = sqlx::query_as::<_, StepRun>(
             r#"
             UPDATE step_runs
@@ -1295,7 +1315,7 @@ impl<'a> StepRunRepo<'a> {
     /// Mark step as skipped.
     pub async fn mark_skipped(&self, id: StepRunId, reason: Option<&str>) -> Result<StepRun> {
         let now = Utc::now();
-        
+
         let step_run = sqlx::query_as::<_, StepRun>(
             r#"
             UPDATE step_runs

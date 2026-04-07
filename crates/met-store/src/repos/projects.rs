@@ -259,7 +259,7 @@ impl<'a> ProjectRepo<'a> {
     /// Schedule a project for deletion after a retention period.
     pub async fn schedule_deletion(&self, id: ProjectId, retention_days: i64) -> Result<Project> {
         let deletion_time = Utc::now() + Duration::days(retention_days);
-        
+
         let project = sqlx::query_as::<_, Project>(
             r#"
             UPDATE projects

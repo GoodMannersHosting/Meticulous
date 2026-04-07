@@ -54,7 +54,11 @@ pub struct TrackedTool {
 
 impl TrackedTool {
     /// Create a new tracked tool.
-    pub fn new(name: impl Into<String>, version: impl Into<String>, sha256: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        sha256: impl Into<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
@@ -218,9 +222,7 @@ impl ToolRegistry {
             .get(sha256)
             .map(|ids| {
                 ids.iter()
-                    .filter_map(|id| {
-                        tools.values().find(|t| &t.id == id).cloned()
-                    })
+                    .filter_map(|id| tools.values().find(|t| &t.id == id).cloned())
                     .collect()
             })
             .unwrap_or_default()
@@ -302,7 +304,11 @@ mod tests {
     async fn test_register_and_get() {
         let registry = ToolRegistry::new();
 
-        let tool = TrackedTool::new("cargo", "1.75.0", "abc123def456789012345678901234567890123456789012345678901234");
+        let tool = TrackedTool::new(
+            "cargo",
+            "1.75.0",
+            "abc123def456789012345678901234567890123456789012345678901234",
+        );
         registry.register(tool.clone()).await;
 
         let retrieved = registry.get("cargo", "1.75.0", "abc123def4567890").await;
@@ -314,7 +320,11 @@ mod tests {
     async fn test_record_usage() {
         let registry = ToolRegistry::new();
 
-        let tool = TrackedTool::new("npm", "10.0.0", "sha256hash1234567890123456789012345678901234567890123456789012");
+        let tool = TrackedTool::new(
+            "npm",
+            "10.0.0",
+            "sha256hash1234567890123456789012345678901234567890123456789012",
+        );
         let tool = registry.register(tool).await;
 
         let run_id = RunId::new();
@@ -349,9 +359,27 @@ mod tests {
     async fn test_search() {
         let registry = ToolRegistry::new();
 
-        registry.register(TrackedTool::new("cargo", "1.75.0", "hash1234567890123456789012345678901234567890123456789012")).await;
-        registry.register(TrackedTool::new("cargo-watch", "8.0.0", "hash2345678901234567890123456789012345678901234567890123")).await;
-        registry.register(TrackedTool::new("npm", "10.0.0", "hash3456789012345678901234567890123456789012345678901234")).await;
+        registry
+            .register(TrackedTool::new(
+                "cargo",
+                "1.75.0",
+                "hash1234567890123456789012345678901234567890123456789012",
+            ))
+            .await;
+        registry
+            .register(TrackedTool::new(
+                "cargo-watch",
+                "8.0.0",
+                "hash2345678901234567890123456789012345678901234567890123",
+            ))
+            .await;
+        registry
+            .register(TrackedTool::new(
+                "npm",
+                "10.0.0",
+                "hash3456789012345678901234567890123456789012345678901234",
+            ))
+            .await;
 
         let results = registry.search("cargo").await;
         assert_eq!(results.len(), 2);

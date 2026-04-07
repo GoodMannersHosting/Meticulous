@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -84,7 +84,9 @@ pub fn create_app_jwt(creds: &GithubAppCredentials) -> Result<String, GithubAppE
 }
 
 /// Parse the decrypted payload for a stored `github_app` secret.
-pub fn parse_github_app_credentials(plaintext: &str) -> Result<GithubAppCredentials, GithubAppError> {
+pub fn parse_github_app_credentials(
+    plaintext: &str,
+) -> Result<GithubAppCredentials, GithubAppError> {
     let t = plaintext.trim();
     match serde_json::from_str::<GithubAppCredentials>(t) {
         Ok(creds) => Ok(creds),
@@ -105,7 +107,9 @@ fn looks_like_legacy_pem_only(t: &str) -> bool {
 }
 
 /// Exchange JWT for a repository-scoped installation access token (Bearer usable for HTTPS Git / API).
-pub async fn installation_access_token(creds: &GithubAppCredentials) -> Result<String, GithubAppError> {
+pub async fn installation_access_token(
+    creds: &GithubAppCredentials,
+) -> Result<String, GithubAppError> {
     let jwt = create_app_jwt(creds)?;
     let base = default_api_base(creds);
     let url = format!(
@@ -171,7 +175,10 @@ mod tests {
         let j = r#"{"app_id":1,"installation_id":2,"private_key_pem":"k","client_id":"c","webhook_secret":"ws"}"#;
         let c = parse_github_app_credentials(j).unwrap();
         assert_eq!(c.extra.get("client_id").and_then(|v| v.as_str()), Some("c"));
-        assert_eq!(c.extra.get("webhook_secret").and_then(|v| v.as_str()), Some("ws"));
+        assert_eq!(
+            c.extra.get("webhook_secret").and_then(|v| v.as_str()),
+            Some("ws")
+        );
         let out = serde_json::to_value(&c).unwrap();
         assert_eq!(out.get("client_id").and_then(|v| v.as_str()), Some("c"));
     }
@@ -195,8 +202,8 @@ mod tests {
     fn create_app_jwt_uses_rs256() {
         use jsonwebtoken::decode_header;
         use rand::thread_rng;
-        use rsa::pkcs8::{EncodePrivateKey, LineEnding};
         use rsa::RsaPrivateKey;
+        use rsa::pkcs8::{EncodePrivateKey, LineEnding};
 
         let mut rng = thread_rng();
         let key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
@@ -216,8 +223,8 @@ mod tests {
     #[tokio::test]
     async fn installation_access_token_posts_to_mock_github() {
         use rand::thread_rng;
-        use rsa::pkcs8::{EncodePrivateKey, LineEnding};
         use rsa::RsaPrivateKey;
+        use rsa::pkcs8::{EncodePrivateKey, LineEnding};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -225,7 +232,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/app/installations/99/access_tokens"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "token": "ghs_mock_install_token" })),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "token": "ghs_mock_install_token" })),
             )
             .mount(&server)
             .await;
@@ -241,7 +249,9 @@ mod tests {
             extra: serde_json::Map::new(),
         };
 
-        let tok = installation_access_token(&creds).await.expect("install token");
+        let tok = installation_access_token(&creds)
+            .await
+            .expect("install token");
         assert_eq!(tok, "ghs_mock_install_token");
     }
 }

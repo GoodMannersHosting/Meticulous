@@ -119,7 +119,12 @@ fn evaluate_cel_expression(condition: &str, ctx: &CelContext) -> std::result::Re
     let variables_map: std::collections::HashMap<cel_interpreter::objects::Key, Value> = ctx
         .variables
         .iter()
-        .map(|(k, v)| (cel_interpreter::objects::Key::String(Arc::from(k.clone())), Value::String(Arc::from(v.clone()))))
+        .map(|(k, v)| {
+            (
+                cel_interpreter::objects::Key::String(Arc::from(k.clone())),
+                Value::String(Arc::from(v.clone())),
+            )
+        })
         .collect();
     let _ = cel_ctx.add_variable("variables", Value::Map(variables_map.into()));
 
@@ -128,7 +133,12 @@ fn evaluate_cel_expression(condition: &str, ctx: &CelContext) -> std::result::Re
     for (job_name, outputs) in &ctx.job_outputs {
         let outputs_map: std::collections::HashMap<cel_interpreter::objects::Key, Value> = outputs
             .iter()
-            .map(|(k, v)| (cel_interpreter::objects::Key::String(Arc::from(k.clone())), Value::String(Arc::from(v.clone()))))
+            .map(|(k, v)| {
+                (
+                    cel_interpreter::objects::Key::String(Arc::from(k.clone())),
+                    Value::String(Arc::from(v.clone())),
+                )
+            })
             .collect();
         let job_obj: std::collections::HashMap<cel_interpreter::objects::Key, Value> = [(
             cel_interpreter::objects::Key::String(Arc::from("outputs".to_string())),
@@ -136,11 +146,16 @@ fn evaluate_cel_expression(condition: &str, ctx: &CelContext) -> std::result::Re
         )]
         .into_iter()
         .collect();
-        jobs_map.insert(cel_interpreter::objects::Key::String(Arc::from(job_name.clone())), Value::Map(job_obj.into()));
+        jobs_map.insert(
+            cel_interpreter::objects::Key::String(Arc::from(job_name.clone())),
+            Value::Map(job_obj.into()),
+        );
     }
     let _ = cel_ctx.add_variable("jobs", Value::Map(jobs_map.into()));
 
-    let result = program.execute(&cel_ctx).map_err(|e| format!("CEL execution error: {e}"))?;
+    let result = program
+        .execute(&cel_ctx)
+        .map_err(|e| format!("CEL execution error: {e}"))?;
 
     match result {
         Value::Bool(b) => {
@@ -156,8 +171,18 @@ fn evaluate_cel_expression(condition: &str, ctx: &CelContext) -> std::result::Re
 
 fn preprocess_builtin_functions(condition: &str, ctx: &CelContext) -> String {
     condition
-        .replace("success()", if ctx.all_deps_succeeded { "true" } else { "false" })
-        .replace("failure()", if ctx.any_dep_failed { "true" } else { "false" })
+        .replace(
+            "success()",
+            if ctx.all_deps_succeeded {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .replace(
+            "failure()",
+            if ctx.any_dep_failed { "true" } else { "false" },
+        )
         .replace("always()", "true")
         .replace("cancelled()", if ctx.cancelled { "true" } else { "false" })
 }
@@ -211,7 +236,8 @@ mod tests {
     #[test]
     fn test_variable_condition() {
         let mut ctx = test_ctx(true, false);
-        ctx.variables.insert("env".to_string(), "production".to_string());
+        ctx.variables
+            .insert("env".to_string(), "production".to_string());
 
         assert!(evaluate_condition("variables.env == 'production'", &ctx).unwrap());
         assert!(!evaluate_condition("variables.env == 'staging'", &ctx).unwrap());

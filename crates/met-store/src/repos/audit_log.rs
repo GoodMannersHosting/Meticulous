@@ -154,12 +154,24 @@ impl AuditLogRepo {
 
         let mut q = sqlx::query_as::<_, AuditLogRow>(&query);
 
-        if let Some(ref action) = filter.action { q = q.bind(action); }
-        if let Some(ref actor_id) = filter.actor_id { q = q.bind(actor_id); }
-        if let Some(ref rt) = filter.resource_type { q = q.bind(rt); }
-        if let Some(org_id) = filter.org_id { q = q.bind(org_id); }
-        if let Some(start) = filter.start_time { q = q.bind(start); }
-        if let Some(end) = filter.end_time { q = q.bind(end); }
+        if let Some(ref action) = filter.action {
+            q = q.bind(action);
+        }
+        if let Some(ref actor_id) = filter.actor_id {
+            q = q.bind(actor_id);
+        }
+        if let Some(ref rt) = filter.resource_type {
+            q = q.bind(rt);
+        }
+        if let Some(org_id) = filter.org_id {
+            q = q.bind(org_id);
+        }
+        if let Some(start) = filter.start_time {
+            q = q.bind(start);
+        }
+        if let Some(end) = filter.end_time {
+            q = q.bind(end);
+        }
 
         q = q.bind(limit);
         q = q.bind(offset);
@@ -168,23 +180,35 @@ impl AuditLogRepo {
     }
 
     /// Count audit log entries matching a filter.
-    pub async fn count(pool: &PgPool, action: Option<&str>, org_id: Option<Uuid>) -> Result<i64, sqlx::Error> {
+    pub async fn count(
+        pool: &PgPool,
+        action: Option<&str>,
+        org_id: Option<Uuid>,
+    ) -> Result<i64, sqlx::Error> {
         let row: (i64,) = match (action, org_id) {
             (Some(action), Some(org_id)) => {
                 sqlx::query_as("SELECT COUNT(*) FROM audit_log WHERE action = $1 AND org_id = $2")
-                    .bind(action).bind(org_id).fetch_one(pool).await?
+                    .bind(action)
+                    .bind(org_id)
+                    .fetch_one(pool)
+                    .await?
             }
             (Some(action), None) => {
                 sqlx::query_as("SELECT COUNT(*) FROM audit_log WHERE action = $1")
-                    .bind(action).fetch_one(pool).await?
+                    .bind(action)
+                    .fetch_one(pool)
+                    .await?
             }
             (None, Some(org_id)) => {
                 sqlx::query_as("SELECT COUNT(*) FROM audit_log WHERE org_id = $1")
-                    .bind(org_id).fetch_one(pool).await?
+                    .bind(org_id)
+                    .fetch_one(pool)
+                    .await?
             }
             (None, None) => {
                 sqlx::query_as("SELECT COUNT(*) FROM audit_log")
-                    .fetch_one(pool).await?
+                    .fetch_one(pool)
+                    .await?
             }
         };
         Ok(row.0)

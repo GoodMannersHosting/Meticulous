@@ -135,14 +135,8 @@ impl<'a> PipelineRepo<'a> {
             .scm_repository
             .clone()
             .or_else(|| existing.scm_repository.clone());
-        let scm_ref = input
-            .scm_ref
-            .clone()
-            .or_else(|| existing.scm_ref.clone());
-        let scm_path = input
-            .scm_path
-            .clone()
-            .or_else(|| existing.scm_path.clone());
+        let scm_ref = input.scm_ref.clone().or_else(|| existing.scm_ref.clone());
+        let scm_path = input.scm_path.clone().or_else(|| existing.scm_path.clone());
         let scm_credentials = input
             .scm_credentials_secret_path
             .clone()

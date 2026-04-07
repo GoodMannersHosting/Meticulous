@@ -363,9 +363,9 @@ impl<'a> IntoIterator for &'a ParseDiagnostics {
 
 impl From<serde_yaml::Error> for ParseError {
     fn from(err: serde_yaml::Error) -> Self {
-        let location = err.location().map(|loc| {
-            SourceLocation::new(loc.line(), loc.column()).with_span(loc.index(), 1)
-        });
+        let location = err
+            .location()
+            .map(|loc| SourceLocation::new(loc.line(), loc.column()).with_span(loc.index(), 1));
 
         let mut error = ParseError::new(ErrorCode::E1001, err.to_string());
         if let Some(loc) = location {

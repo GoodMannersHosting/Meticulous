@@ -55,22 +55,22 @@
 //! }
 //! ```
 
+pub mod aggregator;
+pub mod archive_codec;
+pub mod blast_radius;
 pub mod capture;
 pub mod redactor;
-pub mod aggregator;
-pub mod shipper;
-pub mod archive_codec;
 pub mod sbom;
+pub mod shipper;
 pub mod tools;
-pub mod blast_radius;
 
-pub use capture::{LogCapture, LogCaptureConfig, LogSource};
-pub use redactor::{Redactor, RedactorConfig, RedactionPattern};
 pub use aggregator::{LogAggregator, LogLine, LogSubscription};
-pub use shipper::{LogArchive, LogShipper, ShipperConfig};
 pub use archive_codec::{
-    gunzip_jsonl, gzip_jsonl, job_run_archive_key, ArchiveCodecError, ArchivedLogLine,
+    ArchiveCodecError, ArchivedLogLine, gunzip_jsonl, gzip_jsonl, job_run_archive_key,
 };
-pub use sbom::{Sbom, SbomComponent, SbomDiff, SbomFormat, DiffEntry, DiffKind};
-pub use tools::{ToolRegistry, TrackedTool, ToolUsage};
-pub use blast_radius::{BlastRadiusQuery, BlastRadiusResult, AffectedRun};
+pub use blast_radius::{AffectedRun, BlastRadiusQuery, BlastRadiusResult};
+pub use capture::{LogCapture, LogCaptureConfig, LogSource};
+pub use redactor::{RedactionPattern, Redactor, RedactorConfig};
+pub use sbom::{DiffEntry, DiffKind, Sbom, SbomComponent, SbomDiff, SbomFormat};
+pub use shipper::{LogArchive, LogShipper, ShipperConfig};
+pub use tools::{ToolRegistry, ToolUsage, TrackedTool};

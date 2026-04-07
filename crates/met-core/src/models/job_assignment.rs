@@ -8,7 +8,10 @@ use crate::ids::{AgentId, JobAssignmentId, JobRunId};
 /// Status of a job assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx", sqlx(type_name = "job_assignment_status", rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "job_assignment_status", rename_all = "snake_case")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum JobAssignmentStatus {
     /// Job has been accepted by the agent.

@@ -1,8 +1,8 @@
 //! Validation of Meticulous App–issued JWTs (RS256 / ES256), separate from user session JWTs.
 
-use base64::Engine;
 use crate::config::JwtConfig;
 use crate::error::ApiError;
+use base64::Engine;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use met_controller::nats::subjects;
 use met_core::ids::{AppInstallationId, MeticulousAppId, ProjectId};
@@ -166,13 +166,18 @@ pub fn integration_jwt_audience_for_ingress(jwt_config: &JwtConfig) -> String {
 }
 
 fn jwt_payload_json(token: &str) -> Result<Vec<u8>, AppJwtError> {
-    let payload_b64 = token
-        .split('.')
-        .nth(1)
-        .ok_or_else(|| AppJwtError::Jwt(jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken)))?;
+    let payload_b64 = token.split('.').nth(1).ok_or_else(|| {
+        AppJwtError::Jwt(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidToken,
+        ))
+    })?;
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64.as_bytes())
-        .map_err(|_| AppJwtError::Jwt(jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken)))
+        .map_err(|_| {
+            AppJwtError::Jwt(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::InvalidToken,
+            ))
+        })
 }
 
 /// Verify a bearer token as a Meticulous App JWT and resolve the active installation.
@@ -186,10 +191,14 @@ pub async fn verify_app_installation_jwt(
     let alg = match header.alg {
         Algorithm::RS256 | Algorithm::ES256 => header.alg,
         Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
-            return Err(ApiError::unauthorized(AppJwtError::WeakAlgorithm.to_string()));
+            return Err(ApiError::unauthorized(
+                AppJwtError::WeakAlgorithm.to_string(),
+            ));
         }
         _ => {
-            return Err(ApiError::unauthorized(AppJwtError::WeakAlgorithm.to_string()));
+            return Err(ApiError::unauthorized(
+                AppJwtError::WeakAlgorithm.to_string(),
+            ));
         }
     };
 
@@ -198,9 +207,10 @@ pub async fn verify_app_installation_jwt(
         .as_deref()
         .ok_or_else(|| ApiError::unauthorized(AppJwtError::MissingKid.to_string()))?;
 
-    let payload_bytes = jwt_payload_json(token).map_err(|e| ApiError::unauthorized(e.to_string()))?;
-    let preview: AppJwtClaims =
-        serde_json::from_slice(&payload_bytes).map_err(|_| ApiError::unauthorized(AppJwtError::InvalidPayload.to_string()))?;
+    let payload_bytes =
+        jwt_payload_json(token).map_err(|e| ApiError::unauthorized(e.to_string()))?;
+    let preview: AppJwtClaims = serde_json::from_slice(&payload_bytes)
+        .map_err(|_| ApiError::unauthorized(AppJwtError::InvalidPayload.to_string()))?;
 
     let repo = MeticulousAppRepo::new(db);
     let (app_row_id, public_pem) = repo
@@ -209,12 +219,10 @@ pub async fn verify_app_installation_jwt(
         .map_err(|_| ApiError::unauthorized(AppJwtError::UnknownKey.to_string()))?;
 
     let decoding_key = match alg {
-        Algorithm::RS256 => DecodingKey::from_rsa_pem(public_pem.as_bytes()).map_err(|e| {
-            ApiError::internal(format!("invalid stored public key: {e}"))
-        })?,
-        Algorithm::ES256 => DecodingKey::from_ec_pem(public_pem.as_bytes()).map_err(|e| {
-            ApiError::internal(format!("invalid stored public key: {e}"))
-        })?,
+        Algorithm::RS256 => DecodingKey::from_rsa_pem(public_pem.as_bytes())
+            .map_err(|e| ApiError::internal(format!("invalid stored public key: {e}")))?,
+        Algorithm::ES256 => DecodingKey::from_ec_pem(public_pem.as_bytes())
+            .map_err(|e| ApiError::internal(format!("invalid stored public key: {e}")))?,
         _ => unreachable!(),
     };
 

@@ -47,8 +47,8 @@ impl Default for ObjectStoreConfig {
             connect_timeout_secs: 5,
             read_timeout_secs: 30,
             max_retries: 3,
-            presigned_url_expiry_secs: 3600, // 1 hour
-            multipart_part_size: 5 * 1024 * 1024, // 5 MB (S3 minimum)
+            presigned_url_expiry_secs: 3600,        // 1 hour
+            multipart_part_size: 5 * 1024 * 1024,   // 5 MB (S3 minimum)
             multipart_threshold: 100 * 1024 * 1024, // 100 MB
         }
     }

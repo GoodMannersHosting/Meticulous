@@ -11,8 +11,8 @@ use met_parser::{
     PipelineParser,
 };
 use met_secrets::{BuiltinStoredCrypto, installation_access_token, parse_github_app_credentials};
-use met_store::StoreError;
 use met_store::PgPool;
+use met_store::StoreError;
 use met_store::repos::BuiltinSecretCipherRow;
 use met_store::repos::{BuiltinSecretsRepo, CreateWorkflow, StoredSecretKind, WorkflowRepo};
 use serde::Deserialize;
@@ -95,20 +95,18 @@ pub async fn github_app_installation_token_for_project_secret(
     let repo = BuiltinSecretsRepo::new(pool);
     let nil_pipe = PipelineId::from_uuid(uuid::Uuid::nil());
     let row = if catalog_scm {
-        repo
-            .get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
+        repo.get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
             .await
     } else {
-        repo
-            .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
+        repo.get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
             .await
     }
     .map_err(met_store::StoreError::from)?
-        .ok_or_else(|| {
-            ApiError::bad_request(format!(
-                "stored secret '{credentials_path}' not found for this project"
-            ))
-        })?;
+    .ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "stored secret '{credentials_path}' not found for this project"
+        ))
+    })?;
 
     let kind =
         StoredSecretKind::parse(&row.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -209,14 +207,10 @@ pub async fn list_github_branches(
 
     let base = api_base.trim_end_matches('/');
     let cap = per_page.clamp(1, 100);
-    let url = format!(
-        "{base}/repos/{owner}/{repo}/branches?per_page={cap}"
-    );
-    github_get_json_array::<Row>(token, &url).await.map(|rows| {
-        rows.into_iter()
-            .map(|r| (r.name, r.commit.sha))
-            .collect()
-    })
+    let url = format!("{base}/repos/{owner}/{repo}/branches?per_page={cap}");
+    github_get_json_array::<Row>(token, &url)
+        .await
+        .map(|rows| rows.into_iter().map(|r| (r.name, r.commit.sha)).collect())
 }
 
 /// List tags (`name` + object SHA), first page only (`per_page` max 100).
@@ -241,11 +235,9 @@ pub async fn list_github_tags(
     let base = api_base.trim_end_matches('/');
     let cap = per_page.clamp(1, 100);
     let url = format!("{base}/repos/{owner}/{repo}/tags?per_page={cap}");
-    github_get_json_array::<Row>(token, &url).await.map(|rows| {
-        rows.into_iter()
-            .map(|r| (r.name, r.commit.sha))
-            .collect()
-    })
+    github_get_json_array::<Row>(token, &url)
+        .await
+        .map(|rows| rows.into_iter().map(|r| (r.name, r.commit.sha)).collect())
 }
 
 /// Recent commits on `git_ref` (branch, tag, or SHA), first page only.
@@ -298,10 +290,7 @@ pub async fn list_github_commits(
         .collect())
 }
 
-async fn github_get_json_array<T: DeserializeOwned>(
-    token: &str,
-    url: &str,
-) -> ApiResult<Vec<T>> {
+async fn github_get_json_array<T: DeserializeOwned>(token: &str, url: &str) -> ApiResult<Vec<T>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -499,20 +488,18 @@ pub async fn github_api_base_for_credentials_path(
     let repo = BuiltinSecretsRepo::new(pool);
     let nil_pipe = PipelineId::from_uuid(uuid::Uuid::nil());
     let row = if catalog_scm {
-        repo
-            .get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
+        repo.get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
             .await
     } else {
-        repo
-            .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
+        repo.get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
             .await
     }
     .map_err(met_store::StoreError::from)?
-        .ok_or_else(|| {
-            ApiError::bad_request(format!(
-                "stored secret '{credentials_path}' not found for this project"
-            ))
-        })?;
+    .ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "stored secret '{credentials_path}' not found for this project"
+        ))
+    })?;
     github_api_base_hint_from_encrypted_row(crypto, &row)
 }
 
@@ -529,7 +516,8 @@ pub fn json_workflow_version(v: &serde_json::Value) -> Option<String> {
             return Some(t.to_string());
         }
     }
-    v.as_u64().map(|n| n.to_string())
+    v.as_u64()
+        .map(|n| n.to_string())
         .or_else(|| v.as_f64().map(|n| n.to_string()))
 }
 
@@ -622,9 +610,15 @@ pub async fn fetch_pipeline_yaml_from_github_checkout(
     credentials_path: &str,
 ) -> ApiResult<String> {
     let slug = parse_github_repository(repository)?;
-    let api_base =
-        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path, false)
-            .await?;
+    let api_base = github_api_base_for_credentials_path(
+        pool,
+        crypto,
+        org_id,
+        project_id,
+        credentials_path,
+        false,
+    )
+    .await?;
     let token = github_app_installation_token_for_project_secret(
         pool,
         crypto,
@@ -662,9 +656,15 @@ pub async fn parse_pipeline_from_github_checkout(
     credentials_path: &str,
 ) -> ApiResult<(PipelineIR, String, serde_json::Value)> {
     let slug = parse_github_repository(repository)?;
-    let api_base =
-        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path, false)
-            .await?;
+    let api_base = github_api_base_for_credentials_path(
+        pool,
+        crypto,
+        org_id,
+        project_id,
+        credentials_path,
+        false,
+    )
+    .await?;
     let token = github_app_installation_token_for_project_secret(
         pool,
         crypto,

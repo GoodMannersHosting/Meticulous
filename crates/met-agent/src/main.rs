@@ -9,21 +9,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use dialoguer::{theme::ColorfulTheme, Input, Password};
+use dialoguer::{Input, Password, theme::ColorfulTheme};
 use met_agent::backend;
 use met_agent::config::{AgentConfig, JoinTokenSource};
-use met_agent::executor::JobExecutor;
-use met_agent::heartbeat::{spawn_heartbeat_loop, HeartbeatState};
 use met_agent::error::AgentError;
+use met_agent::executor::JobExecutor;
+use met_agent::heartbeat::{HeartbeatState, spawn_heartbeat_loop};
 use met_agent::registration::{
-    registration_needs_join_token, AgentRegistration, RegistrationSource,
+    AgentRegistration, RegistrationSource, registration_needs_join_token,
 };
 use met_proto::agent::v1::HeartbeatAction;
 use nkeys::KeyPair;
 use tokio::signal;
 #[cfg(unix)]
-use tokio::signal::unix::{signal as unix_signal, SignalKind};
-use tokio::sync::{watch, RwLock};
+use tokio::signal::unix::{SignalKind, signal as unix_signal};
+use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
 // #region agent log
@@ -34,11 +34,9 @@ fn agent_debug_log(
     data: serde_json::Value,
     hypothesis_id: &'static str,
 ) {
-    const DEFAULT_DEBUG_LOG_PATH: &str =
-        "/home/dan/code/gmh/meticulous/.cursor/debug-14f9f9.log";
-    let path = std::env::var("MET_AGENT_DEBUG_LOG_PATH").unwrap_or_else(|_| {
-        DEFAULT_DEBUG_LOG_PATH.to_string()
-    });
+    const DEFAULT_DEBUG_LOG_PATH: &str = "/home/dan/code/gmh/meticulous/.cursor/debug-14f9f9.log";
+    let path = std::env::var("MET_AGENT_DEBUG_LOG_PATH")
+        .unwrap_or_else(|_| DEFAULT_DEBUG_LOG_PATH.to_string());
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -153,9 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     if let Some(raw) = args.execution_runtime.as_ref() {
-        config.execution_runtime = raw.parse().map_err(|e: String| {
-            AgentError::Config(format!("invalid --execution-runtime: {e}"))
-        })?;
+        config.execution_runtime = raw
+            .parse()
+            .map_err(|e: String| AgentError::Config(format!("invalid --execution-runtime: {e}")))?;
     }
 
     let force_register = args.force_register
@@ -181,10 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .with_prompt("Join token")
                     .interact()?;
                 if token.is_empty() {
-                    return Err(AgentError::Config(
-                        "join token cannot be empty".to_string(),
-                    )
-                    .into());
+                    return Err(AgentError::Config("join token cannot be empty".to_string()).into());
                 }
                 config.join_token = Some(token);
                 let name_opt: String = Input::with_theme(&theme)
@@ -219,7 +214,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register with controller
     let mut registration = AgentRegistration::new(config.clone()).await?;
 
-    let (identity, registration_source) = match registration.register_or_load(force_register).await {
+    let (identity, registration_source) = match registration.register_or_load(force_register).await
+    {
         Ok(pair) => pair,
         Err(e) if registration_failure_should_exit(&e) => {
             error!(error = %e, "registration failed; invalid join token or enrollment rejected");
@@ -256,9 +252,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create execution backend (default: native / host processes — see `execution_runtime` in config)
-    let backend: Arc<dyn backend::ExecutionBackend> = Arc::from(
-        backend::create_execution_backend(config.execution_runtime).await,
-    );
+    let backend: Arc<dyn backend::ExecutionBackend> =
+        Arc::from(backend::create_execution_backend(config.execution_runtime).await);
     info!(
         backend = backend.name(),
         runtime = ?config.execution_runtime,
@@ -511,13 +506,10 @@ async fn connect_nats(
 ) -> Result<async_nats::Client, AgentError> {
     let url = identity.nats_url.as_str();
     match (&identity.nats_user_jwt, &identity.nats_user_seed) {
-        (Some(jwt), Some(seed))
-            if !jwt.trim().is_empty() && !seed.trim().is_empty() =>
-        {
-            let kp = std::sync::Arc::new(
-                KeyPair::from_seed(seed.trim())
-                    .map_err(|e| AgentError::Config(format!("invalid NATS user seed in identity: {e}")))?,
-            );
+        (Some(jwt), Some(seed)) if !jwt.trim().is_empty() && !seed.trim().is_empty() => {
+            let kp = std::sync::Arc::new(KeyPair::from_seed(seed.trim()).map_err(|e| {
+                AgentError::Config(format!("invalid NATS user seed in identity: {e}"))
+            })?);
             let jwt = jwt.clone();
             async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                 let kp = kp.clone();

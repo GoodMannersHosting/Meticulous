@@ -3,46 +3,46 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{TimeZone, Utc};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use met_core::hash_join_token;
 use met_core::ids::{AgentId, JobRunId, OrganizationId, ProjectId, RunId, StepId, StepRunId};
 use met_core::models::{
     Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
 };
-use met_store::StoreError;
 use met_logging::{Redactor, RedactorConfig};
+use met_objstore::ObjectStore;
 use met_proto::agent::v1::{
-    agent_service_server::AgentService, DeregisterRequest, DeregisterResponse,
-    EncryptedSecretValue, HeartbeatAction, HeartbeatRequest, HeartbeatResponse, JobKeyExchange,
-    JobExecutionMetadata as ProtoJobExecMeta, JobSecretsPayload, JobStatusAck, JobStatusUpdate,
-    LogAck, LogChunk, LogStream, RegisterRequest,
-    RegisterResponse, SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
+    DeregisterRequest, DeregisterResponse, EncryptedSecretValue, HeartbeatAction, HeartbeatRequest,
+    HeartbeatResponse, JobExecutionMetadata as ProtoJobExecMeta, JobKeyExchange, JobSecretsPayload,
+    JobStatusAck, JobStatusUpdate, LogAck, LogChunk, LogStream, RegisterRequest, RegisterResponse,
+    SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
+    agent_service_server::AgentService,
 };
 use met_proto::common::v1::RunStatus as ProtoRunStatus;
 use met_proto::common::v1::Timestamp as ProtoTimestamp;
 use met_proto::controller::v1::JobCompletion;
-use met_secrets::pki::encryption::HybridEncryption;
 use met_secrets::BuiltinStoredCrypto;
-use met_objstore::ObjectStore;
-use met_store::repos::{
-    reenroll_agent_with_exhausted_join_token, register_agent_with_join_token, AgentHeartbeatRepo,
-    AgentRepo,     JobRunRepo, JoinTokenRepo, LogCacheRepo, PipelineRunWorkflowOutputsRepo, ProjectRepo,
-    StepRunRepo,
-};
+use met_secrets::pki::encryption::HybridEncryption;
 use met_store::PgPool;
+use met_store::StoreError;
+use met_store::repos::{
+    AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo,
+    PipelineRunWorkflowOutputsRepo, ProjectRepo, StepRunRepo,
+    reenroll_agent_with_exhausted_join_token, register_agent_with_join_token,
+};
 use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::config::ControllerConfig;
-use crate::log_archive::finalize_job_logs;
 use crate::error::ControllerError;
 use crate::jwt::JwtManager;
+use crate::log_archive::finalize_job_logs;
 use crate::nats::NatsDispatcher;
 use crate::nats_jwt::issue_agent_nats_credentials;
-use crate::registry::{agent_state_from_db_row, AgentRegistry, AgentState, ResourceSnapshot};
+use crate::registry::{AgentRegistry, AgentState, ResourceSnapshot, agent_state_from_db_row};
 
 /// After this many heartbeats without the agent reporting `draining` while drain is requested, delete its NATS consumer.
 const DRAIN_FORCE_EJECT_MISSED_HEARTBEATS: i32 = 3;
@@ -145,10 +145,7 @@ impl AgentServiceImpl {
     }
 
     /// Validate the security bundle from the agent.
-    fn validate_security_bundle(
-        &self,
-        bundle: &SecurityBundle,
-    ) -> Result<(), ControllerError> {
+    fn validate_security_bundle(&self, bundle: &SecurityBundle) -> Result<(), ControllerError> {
         // Check NTP synchronization
         if self.config.require_ntp_sync && !bundle.ntp_synchronized {
             return Err(ControllerError::NtpNotSynchronized);
@@ -367,9 +364,9 @@ impl AgentService for AgentServiceImpl {
         let caps = req.capabilities.as_ref();
 
         let mut agent = if reenroll_with_exhausted_token {
-            let consumed_id = join_record.consumed_by_agent_id.ok_or_else(|| {
-                Status::failed_precondition("join token missing consuming agent")
-            })?;
+            let consumed_id = join_record
+                .consumed_by_agent_id
+                .ok_or_else(|| Status::failed_precondition("join token missing consuming agent"))?;
             AgentRepo::new(&self.pool)
                 .get(consumed_id)
                 .await
@@ -402,7 +399,9 @@ impl AgentService for AgentServiceImpl {
         // Match `runs-on.tags` in pipelines: scheduler requires `key=value` strings on this column
         // (see met-engine scheduler). Mirror reported OS/arch from capabilities or the security bundle.
         let os_for_tags = caps.map(|c| c.os.as_str()).unwrap_or(bundle.os.as_str());
-        let arch_for_tags = caps.map(|c| c.arch.as_str()).unwrap_or(bundle.arch.as_str());
+        let arch_for_tags = caps
+            .map(|c| c.arch.as_str())
+            .unwrap_or(bundle.arch.as_str());
         for tag in [format!("os={os_for_tags}"), format!("arch={arch_for_tags}")] {
             if !agent.tags.contains(&tag) {
                 agent.tags.push(tag);
@@ -416,12 +415,11 @@ impl AgentService for AgentServiceImpl {
         agent.public_ips = bundle.public_ips.clone();
         agent.private_ips = bundle.private_ips.clone();
         agent.ntp_synchronized = bundle.ntp_synchronized;
-        agent.container_runtime =
-            Some(bundle.container_runtime.clone()).filter(|s| !s.is_empty());
+        agent.container_runtime = Some(bundle.container_runtime.clone()).filter(|s| !s.is_empty());
         agent.container_runtime_version =
             Some(bundle.container_runtime_version.clone()).filter(|s| !s.is_empty());
-        agent.x509_public_key = Some(bundle.agent_x509_public_key.clone())
-            .filter(|b| !b.is_empty());
+        agent.x509_public_key =
+            Some(bundle.agent_x509_public_key.clone()).filter(|b| !b.is_empty());
         agent.last_security_bundle =
             met_core::models::pack_last_security_bundle(security_bundle_to_json(bundle));
         agent.join_token_id = Some(join_record.id);
@@ -455,18 +453,22 @@ impl AgentService for AgentServiceImpl {
         };
 
         let agent = if reenroll_with_exhausted_token {
-            let (updated, _) =
-                reenroll_agent_with_exhausted_join_token(&self.pool, &token_hash, &bundle.machine_id, &agent)
-                    .await
-                    .map_err(|e| match e {
-                        StoreError::NotFound { .. } => {
-                            Status::unauthenticated("invalid or unknown join token")
-                        }
-                        StoreError::Constraint(_) => {
-                            Status::unauthenticated("invalid or unknown join token")
-                        }
-                        _ => Status::internal(e.to_string()),
-                    })?;
+            let (updated, _) = reenroll_agent_with_exhausted_join_token(
+                &self.pool,
+                &token_hash,
+                &bundle.machine_id,
+                &agent,
+            )
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound { .. } => {
+                    Status::unauthenticated("invalid or unknown join token")
+                }
+                StoreError::Constraint(_) => {
+                    Status::unauthenticated("invalid or unknown join token")
+                }
+                _ => Status::internal(e.to_string()),
+            })?;
             updated
         } else {
             let (registered, _) = register_agent_with_join_token(&self.pool, &token_hash, &agent)
@@ -564,15 +566,15 @@ impl AgentService for AgentServiceImpl {
         let status = req
             .status
             .as_ref()
-            .map(|s| {
-                match met_proto::common::v1::AgentStatus::try_from(s.status) {
+            .map(
+                |s| match met_proto::common::v1::AgentStatus::try_from(s.status) {
                     Ok(met_proto::common::v1::AgentStatus::Online) => AgentStatus::Online,
                     Ok(met_proto::common::v1::AgentStatus::Busy) => AgentStatus::Busy,
                     Ok(met_proto::common::v1::AgentStatus::Draining) => AgentStatus::Draining,
                     Ok(met_proto::common::v1::AgentStatus::Offline) => AgentStatus::Offline,
                     _ => AgentStatus::Online,
-                }
-            })
+                },
+            )
             .unwrap_or(AgentStatus::Online);
 
         let running_jobs = req.status.as_ref().map(|s| s.running_jobs).unwrap_or(0);
@@ -734,8 +736,8 @@ impl AgentService for AgentServiceImpl {
                 .map_err(|_| Status::invalid_argument("invalid job_run_id"))?;
 
             // Convert proto status to model status
-            let proto_status = ProtoRunStatus::try_from(update.status)
-                .unwrap_or(ProtoRunStatus::Unspecified);
+            let proto_status =
+                ProtoRunStatus::try_from(update.status).unwrap_or(ProtoRunStatus::Unspecified);
             let status = Self::convert_run_status(proto_status);
 
             // Update job_runs table based on status
@@ -775,45 +777,32 @@ impl AgentService for AgentServiceImpl {
                         .mark_running(job_run_id, aid, agent_snapshot)
                         .await
                 }
-                JobStatus::Succeeded => job_run_repo
-                    .mark_completed(
-                        job_run_id,
-                        true,
-                        update.exit_code,
-                        None,
-                        None,
-                    )
-                    .await,
-                JobStatus::Failed => job_run_repo
-                    .mark_completed(
-                        job_run_id,
-                        false,
-                        update.exit_code,
-                        error_msg,
-                        None,
-                    )
-                    .await,
+                JobStatus::Succeeded => {
+                    job_run_repo
+                        .mark_completed(job_run_id, true, update.exit_code, None, None)
+                        .await
+                }
+                JobStatus::Failed => {
+                    job_run_repo
+                        .mark_completed(job_run_id, false, update.exit_code, error_msg, None)
+                        .await
+                }
                 JobStatus::Cancelled => {
                     job_run_repo
                         .mark_cancelled(job_run_id, error_msg.or(Some("Cancelled")))
                         .await
                 }
                 JobStatus::TimedOut => job_run_repo.mark_timed_out(job_run_id).await,
-                JobStatus::Skipped => job_run_repo
-                    .mark_skipped(job_run_id, error_msg)
-                    .await,
+                JobStatus::Skipped => job_run_repo.mark_skipped(job_run_id, error_msg).await,
                 _ => job_run_repo.get(job_run_id).await,
             };
 
             match result {
                 Ok(ref job_row) if status.is_terminal() => {
                     if let Some(ref meta) = update.execution_metadata {
-                        let aid = job_row.agent_id.or_else(|| {
-                            update
-                                .agent_id
-                                .as_deref()
-                                .and_then(|s| s.parse().ok())
-                        });
+                        let aid = job_row
+                            .agent_id
+                            .or_else(|| update.agent_id.as_deref().and_then(|s| s.parse().ok()));
                         if let Err(e) = persist_run_binaries_for_job(
                             self.pool.as_ref(),
                             job_row.run_id,
@@ -831,7 +820,11 @@ impl AgentService for AgentServiceImpl {
                         }
                     }
 
-                    if let Some(raw) = update.sbom_cyclonedx_json.as_deref().filter(|s| !s.is_empty()) {
+                    if let Some(raw) = update
+                        .sbom_cyclonedx_json
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                    {
                         if let Err(e) = persist_job_sbom_cyclonedx(
                             self.pool.as_ref(),
                             job_row.run_id,
@@ -907,10 +900,7 @@ impl AgentService for AgentServiceImpl {
                                     .unwrap_or_default(),
                                 status: Self::job_status_to_proto(job_row.status) as i32,
                                 exit_code: job_row.exit_code,
-                                error_message: job_row
-                                    .error_message
-                                    .clone()
-                                    .unwrap_or_default(),
+                                error_message: job_row.error_message.clone().unwrap_or_default(),
                                 duration_ms,
                                 timestamp: Some(ProtoTimestamp {
                                     seconds: ts.timestamp(),
@@ -961,7 +951,9 @@ impl AgentService for AgentServiceImpl {
             count += 1;
         }
 
-        Ok(Response::new(JobStatusAck { received_count: count }))
+        Ok(Response::new(JobStatusAck {
+            received_count: count,
+        }))
     }
 
     async fn report_step_status(
@@ -988,8 +980,8 @@ impl AgentService for AgentServiceImpl {
                 .map_err(|_| Status::invalid_argument("invalid step_run_id"))?;
 
             // Convert proto status to model status
-            let proto_status = ProtoRunStatus::try_from(update.status)
-                .unwrap_or(ProtoRunStatus::Unspecified);
+            let proto_status =
+                ProtoRunStatus::try_from(update.status).unwrap_or(ProtoRunStatus::Unspecified);
             let status = Self::convert_run_status(proto_status);
 
             // Update step_runs table based on status
@@ -1001,21 +993,25 @@ impl AgentService for AgentServiceImpl {
 
             let result = match status {
                 JobStatus::Running => step_run_repo.mark_running(step_run_id).await,
-                JobStatus::Succeeded | JobStatus::Failed => step_run_repo
-                    .mark_completed(
-                        step_run_id,
-                        update.exit_code.unwrap_or(if status == JobStatus::Succeeded { 0 } else { 1 }),
-                        error_msg,
-                        None,
-                        None,
-                    )
-                    .await,
-                JobStatus::Skipped => step_run_repo
-                    .mark_skipped(step_run_id, error_msg)
-                    .await,
-                JobStatus::Cancelled => step_run_repo
-                    .mark_cancelled(step_run_id, error_msg.or(Some("Cancelled")))
-                    .await,
+                JobStatus::Succeeded | JobStatus::Failed => {
+                    step_run_repo
+                        .mark_completed(
+                            step_run_id,
+                            update
+                                .exit_code
+                                .unwrap_or(if status == JobStatus::Succeeded { 0 } else { 1 }),
+                            error_msg,
+                            None,
+                            None,
+                        )
+                        .await
+                }
+                JobStatus::Skipped => step_run_repo.mark_skipped(step_run_id, error_msg).await,
+                JobStatus::Cancelled => {
+                    step_run_repo
+                        .mark_cancelled(step_run_id, error_msg.or(Some("Cancelled")))
+                        .await
+                }
                 _ => step_run_repo.get(step_run_id).await,
             };
 
@@ -1026,7 +1022,9 @@ impl AgentService for AgentServiceImpl {
             count += 1;
         }
 
-        Ok(Response::new(StepStatusAck { received_count: count }))
+        Ok(Response::new(StepStatusAck {
+            received_count: count,
+        }))
     }
 
     async fn stream_logs(
@@ -1169,9 +1167,7 @@ impl AgentService for AgentServiceImpl {
                         .client()
                         .publish(
                             subject,
-                            serde_json::to_vec(&log_event)
-                                .unwrap_or_default()
-                                .into(),
+                            serde_json::to_vec(&log_event).unwrap_or_default().into(),
                         )
                         .await
                     {
@@ -1225,7 +1221,9 @@ impl AgentService for AgentServiceImpl {
             .one_time_x509_public_key
             .as_slice()
             .try_into()
-            .map_err(|_| Status::invalid_argument("invalid public key length, expected 32 bytes"))?;
+            .map_err(|_| {
+                Status::invalid_argument("invalid public key length, expected 32 bytes")
+            })?;
 
         let job_secrets = self
             .fetch_job_secrets(
@@ -1425,13 +1423,9 @@ async fn persist_run_binaries_for_job(
 ) -> sqlx::Result<()> {
     for b in &meta.executed_binaries {
         let path = redact_exec_path_for_storage(&b.path);
-        let step_run_uuid = resolve_step_run_uuid_for_binary_row(
-            pool,
-            job_run_id,
-            &b.step_run_ids,
-            &b.step_ids,
-        )
-        .await?;
+        let step_run_uuid =
+            resolve_step_run_uuid_for_binary_row(pool, job_run_id, &b.step_run_ids, &b.step_ids)
+                .await?;
 
         sqlx::query(
             r#"
@@ -1465,14 +1459,9 @@ async fn ingest_telemetry_log_chunk(
             let v: serde_json::Value =
                 serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}));
             let path = redact_exec_path_for_storage(
-                v.get("path")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or_default(),
+                v.get("path").and_then(|x| x.as_str()).unwrap_or_default(),
             );
-            let sha = v
-                .get("sha256")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default();
+            let sha = v.get("sha256").and_then(|x| x.as_str()).unwrap_or_default();
             let pid = v
                 .get("pid")
                 .and_then(|x| x.as_i64())
@@ -1481,7 +1470,10 @@ async fn ingest_telemetry_log_chunk(
                 .get("ppid")
                 .and_then(|x| x.as_i64())
                 .and_then(|i| i32::try_from(i).ok());
-            let step_seq = v.get("step_sequence").and_then(|x| x.as_i64()).map(|i| i as i32);
+            let step_seq = v
+                .get("step_sequence")
+                .and_then(|x| x.as_i64())
+                .map(|i| i as i32);
             sqlx::query(
                 r#"
                 INSERT INTO run_binary_executions
@@ -1559,7 +1551,10 @@ async fn ingest_telemetry_log_chunk(
                 .unwrap_or_default()
                 .to_string();
             let byte_length = v.get("byte_length").and_then(|x| x.as_i64()).unwrap_or(0);
-            let truncated = v.get("truncated").and_then(|x| x.as_bool()).unwrap_or(false);
+            let truncated = v
+                .get("truncated")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
             let object_key = v
                 .get("object_key")
                 .and_then(|x| x.as_str())
@@ -1602,10 +1597,7 @@ async fn ingest_telemetry_log_chunk(
                 .and_then(|x| x.as_i64())
                 .and_then(|i| i32::try_from(i).ok())
                 .unwrap_or(0_i32);
-            let protocol = v
-                .get("protocol")
-                .and_then(|x| x.as_str())
-                .unwrap_or("tcp");
+            let protocol = v.get("protocol").and_then(|x| x.as_str()).unwrap_or("tcp");
             let direction = v
                 .get("direction")
                 .and_then(|x| x.as_str())

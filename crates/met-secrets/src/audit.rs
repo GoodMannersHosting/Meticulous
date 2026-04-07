@@ -111,7 +111,11 @@ impl AuditEvent {
     }
 
     /// Set the resource.
-    pub fn with_resource(mut self, resource_type: impl Into<String>, resource_id: impl Into<String>) -> Self {
+    pub fn with_resource(
+        mut self,
+        resource_type: impl Into<String>,
+        resource_id: impl Into<String>,
+    ) -> Self {
         self.resource = Some(AuditResource {
             resource_type: resource_type.into(),
             resource_id: resource_id.into(),
@@ -453,10 +457,7 @@ impl From<ActorId> for AuditActor {
                 id: name.clone(),
                 name: Some(name),
             },
-            ActorId::Agent(id) => AuditActor::Agent {
-                id,
-                name: None,
-            },
+            ActorId::Agent(id) => AuditActor::Agent { id, name: None },
             ActorId::System => AuditActor::System { component: None },
         }
     }
@@ -608,7 +609,11 @@ impl AuditFilter {
     }
 
     /// Filter by resource.
-    pub fn resource(mut self, resource_type: impl Into<String>, resource_id: impl Into<String>) -> Self {
+    pub fn resource(
+        mut self,
+        resource_type: impl Into<String>,
+        resource_id: impl Into<String>,
+    ) -> Self {
         self.resource_type = Some(resource_type.into());
         self.resource_id = Some(resource_id.into());
         self
@@ -763,7 +768,9 @@ mod tests {
         }
 
         match AuditActor::from("sa:my-service") {
-            AuditActor::ServiceAccount { name, .. } => assert_eq!(name, Some("my-service".to_string())),
+            AuditActor::ServiceAccount { name, .. } => {
+                assert_eq!(name, Some("my-service".to_string()))
+            }
             _ => panic!("Expected ServiceAccount actor"),
         }
 

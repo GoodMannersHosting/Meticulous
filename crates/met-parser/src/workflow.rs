@@ -3,7 +3,7 @@
 //! Handles fetching and resolving reusable workflow references.
 
 use crate::error::{ErrorCode, ParseDiagnostics, ParseError, SourceLocation};
-use crate::ir::{defaults, WorkflowRef, WorkflowScope};
+use crate::ir::{WorkflowRef, WorkflowScope, defaults};
 use crate::schema::RawWorkflowDef;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -174,9 +174,12 @@ impl<'a> WorkflowResolver<'a> {
             }
             Err(WorkflowFetchError::NotFound { scope, name }) => {
                 diagnostics.push(
-                    ParseError::new(ErrorCode::E3001, format!("workflow not found: {}/{}", scope, name))
-                        .with_source(location)
-                        .with_hint("check the workflow name and scope"),
+                    ParseError::new(
+                        ErrorCode::E3001,
+                        format!("workflow not found: {}/{}", scope, name),
+                    )
+                    .with_source(location)
+                    .with_hint("check the workflow name and scope"),
                 );
                 None
             }
@@ -239,10 +242,13 @@ impl WorkflowProvider for MockWorkflowProvider {
         _version: &str,
     ) -> Result<RawWorkflowDef, WorkflowFetchError> {
         let key = format!("{:?}/{}", scope, name);
-        self.workflows.get(&key).cloned().ok_or_else(|| WorkflowFetchError::NotFound {
-            scope: format!("{:?}", scope).to_lowercase(),
-            name: name.to_string(),
-        })
+        self.workflows
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| WorkflowFetchError::NotFound {
+                scope: format!("{:?}", scope).to_lowercase(),
+                name: name.to_string(),
+            })
     }
 
     async fn list_versions(
@@ -268,7 +274,8 @@ mod tests {
 
     #[test]
     fn test_parse_workflow_ref() {
-        let (scope, name, version) = parse_workflow_ref("global/docker-build", Some("v1.0")).unwrap();
+        let (scope, name, version) =
+            parse_workflow_ref("global/docker-build", Some("v1.0")).unwrap();
         assert_eq!(scope, WorkflowScope::Global);
         assert_eq!(name, "docker-build");
         assert_eq!(version, "v1.0");
@@ -308,7 +315,9 @@ mod tests {
         let result = provider.fetch(WorkflowScope::Global, "test", "1.0.0").await;
         assert!(result.is_ok());
 
-        let result = provider.fetch(WorkflowScope::Global, "nonexistent", "1.0.0").await;
+        let result = provider
+            .fetch(WorkflowScope::Global, "nonexistent", "1.0.0")
+            .await;
         assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
     }
 }

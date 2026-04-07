@@ -96,13 +96,11 @@ impl Redactor {
         let compiled_patterns = if config.redact_common_patterns {
             RedactionPattern::common_patterns()
                 .into_iter()
-                .filter_map(|p| {
-                    match Regex::new(&p.pattern) {
-                        Ok(regex) => Some((p.name, regex)),
-                        Err(e) => {
-                            debug!("Failed to compile pattern {}: {}", p.name, e);
-                            None
-                        }
+                .filter_map(|p| match Regex::new(&p.pattern) {
+                    Ok(regex) => Some((p.name, regex)),
+                    Err(e) => {
+                        debug!("Failed to compile pattern {}: {}", p.name, e);
+                        None
                     }
                 })
                 .collect()
@@ -155,7 +153,9 @@ impl Redactor {
         // Then apply pattern-based redaction
         for (name, regex) in &self.compiled_patterns {
             if regex.is_match(&output) {
-                output = regex.replace_all(&output, &self.config.replacement).to_string();
+                output = regex
+                    .replace_all(&output, &self.config.replacement)
+                    .to_string();
                 debug!("Redacted match for pattern: {}", name);
             }
         }

@@ -2,10 +2,12 @@
 
 use async_nats::jetstream::Context as JetStreamContext;
 use indexmap::IndexMap;
-use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepRunId};
+use met_core::ids::{
+    AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepRunId,
+};
 use met_core::models::{Agent, AgentStatus};
-use met_store::repos::AgentRepo;
 use met_parser::{JobIR, Shell, StepCommand, TagValue};
+use met_store::repos::AgentRepo;
 use prost::Message;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -299,7 +301,11 @@ impl Scheduler {
         true
     }
 
-    async fn prepare_steps(&self, ctx: &ExecutionContext, job: &JobIR) -> Result<Vec<StepDispatch>> {
+    async fn prepare_steps(
+        &self,
+        ctx: &ExecutionContext,
+        job: &JobIR,
+    ) -> Result<Vec<StepDispatch>> {
         let mut steps = Vec::new();
 
         for (seq, step) in job.steps.iter().enumerate() {
@@ -315,9 +321,17 @@ impl Scheduler {
                     };
                     (script.clone(), shell_str.to_string())
                 }
-                StepCommand::Action { name, version, inputs } => {
-                    let action_cmd = format!("met-action run {}@{} --inputs '{}'", 
-                        name, version, serde_json::to_string(inputs).unwrap_or_default());
+                StepCommand::Action {
+                    name,
+                    version,
+                    inputs,
+                } => {
+                    let action_cmd = format!(
+                        "met-action run {}@{} --inputs '{}'",
+                        name,
+                        version,
+                        serde_json::to_string(inputs).unwrap_or_default()
+                    );
                     (action_cmd, "bash".to_string())
                 }
             };
@@ -379,7 +393,8 @@ impl Scheduler {
         let workspace_delete_after_job =
             crate::affinity::workspace_delete_after_job(ctx.pipeline(), job, run_state).await;
         let suppress_exit_after_jobs_increment =
-            crate::affinity::suppress_exit_after_jobs_increment(ctx.pipeline(), job, run_state).await;
+            crate::affinity::suppress_exit_after_jobs_increment(ctx.pipeline(), job, run_state)
+                .await;
 
         Ok(JobDispatchMessage {
             job_run_id,
@@ -400,10 +415,7 @@ impl Scheduler {
             workspace_root_id,
             workspace_delete_after_job,
             suppress_exit_after_jobs_increment,
-            workflow_invocation_id: job
-                .workflow_invocation_id
-                .clone()
-                .unwrap_or_default(),
+            workflow_invocation_id: job.workflow_invocation_id.clone().unwrap_or_default(),
             output_wrap_x25519_public_key: ctx
                 .output_wrap_public_key_for_job_run(job_run_id)
                 .await
@@ -430,17 +442,18 @@ impl Scheduler {
                 image: String::new(),
                 working_dir: s.working_dir.clone().unwrap_or_default(),
                 shell: s.shell.clone(),
-                environment: s.environment.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                environment: s
+                    .environment
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 sequence: s.sequence,
                 continue_on_error: s.continue_on_error,
                 timeout_secs: s.timeout_secs as i32,
             })
             .collect();
 
-        let project_id = msg
-            .project_id
-            .map(|p| p.to_string())
-            .unwrap_or_default();
+        let project_id = msg.project_id.map(|p| p.to_string()).unwrap_or_default();
         Ok(JobDispatch {
             job_run_id: msg.job_run_id.to_string(),
             run_id: msg.run_id.to_string(),
@@ -448,7 +461,11 @@ impl Scheduler {
             pipeline_name: msg.pipeline_name.clone(),
             job_name: msg.job_name.clone(),
             steps,
-            variables: msg.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            variables: msg
+                .variables
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             secrets: Vec::new(),
             timeout_secs: msg.timeout_secs as i32,
             required_tags: msg.required_tags.clone(),
@@ -480,7 +497,7 @@ impl Scheduler {
         ctx: &ExecutionContext,
     ) -> Result<()> {
         let job_run_id = notification.job_run_id;
-        
+
         self.active_jobs.write().await.remove(&job_run_id);
 
         if let Some(job_state) = run_state.get_job_by_run_id(notification.job_run_id).await {
@@ -494,7 +511,8 @@ impl Scheduler {
                 .await;
 
             if !notification.outputs.is_empty() {
-                ctx.set_job_outputs(job_state.job_id, notification.outputs).await;
+                ctx.set_job_outputs(job_state.job_id, notification.outputs)
+                    .await;
             }
             for wo in &notification.workflow_outputs {
                 if let Err(e) = ctx
@@ -552,7 +570,9 @@ impl Scheduler {
         let active = self.active_jobs.read().await;
         for (job_run_id, active_job) in active.iter() {
             let elapsed = now - active_job.dispatched_at;
-            if elapsed > chrono::Duration::from_std(active_job.timeout).unwrap_or(chrono::TimeDelta::MAX) {
+            if elapsed
+                > chrono::Duration::from_std(active_job.timeout).unwrap_or(chrono::TimeDelta::MAX)
+            {
                 timed_out.push(*job_run_id);
             }
         }
@@ -582,4 +602,3 @@ impl Scheduler {
         self.active_jobs.write().await.remove(&job_run_id);
     }
 }
-

@@ -44,10 +44,7 @@ impl SecretMaskingFilter {
             r"sk_live_[A-Za-z0-9]{24,}",
             r"met_join_[A-Za-z0-9]{32,}",
         ];
-        patterns
-            .iter()
-            .filter_map(|p| Regex::new(p).ok())
-            .collect()
+        patterns.iter().filter_map(|p| Regex::new(p).ok()).collect()
     }
 
     /// Register a secret value to be masked in all its encoded forms.

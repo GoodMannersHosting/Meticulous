@@ -12,11 +12,11 @@ use futures::StreamExt;
 use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
 use met_parser::{JobIR, PipelineIR, WorkflowScope as IrWorkflowScope};
+use met_secrets::BuiltinStoredCrypto;
+use met_store::repos::JobRunRepo;
 use met_store::repos::{
     DefinitionSnapshotRepo, PipelineRepo, WorkflowRepo, WorkflowScope as DbWorkflowScope,
 };
-use met_secrets::BuiltinStoredCrypto;
-use met_store::repos::JobRunRepo;
 use rand::RngCore;
 use secrecy::SecretString;
 use sqlx::PgPool;
@@ -25,7 +25,7 @@ use tokio::time::interval;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::cache::{CacheBackend, CacheLookupResult, CacheManager};
-use crate::cel::{evaluate_condition, CelContext};
+use crate::cel::{CelContext, evaluate_condition};
 use crate::context::ExecutionContext;
 use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
@@ -117,7 +117,11 @@ impl<C: CacheBackend> Executor<C> {
 
     /// Execute a pipeline run.
     #[instrument(skip(self, ctx), fields(run_id = %ctx.run_id(), pipeline = %ctx.pipeline().name))]
-    pub async fn execute(&self, ctx: ExecutionContext, start: RunStartKind) -> Result<ExecutionResult> {
+    pub async fn execute(
+        &self,
+        ctx: ExecutionContext,
+        start: RunStartKind,
+    ) -> Result<ExecutionResult> {
         let run_id = ctx.run_id();
         let pipeline_id = ctx.pipeline_id();
         let start_time = Utc::now();
@@ -150,7 +154,8 @@ impl<C: CacheBackend> Executor<C> {
             )
             .await?;
             for (name, (value, _, _)) in resolved {
-                ctx.register_secret(name, SecretString::new(value.into_boxed_str())).await;
+                ctx.register_secret(name, SecretString::new(value.into_boxed_str()))
+                    .await;
             }
         }
 
@@ -242,9 +247,23 @@ impl<C: CacheBackend> Executor<C> {
         let duration_ms = (end_time - start_time).num_milliseconds() as u64;
 
         let jobs = run_state.all_jobs().await;
-        let jobs_succeeded = jobs.values().filter(|j| j.status == JobStatus::Succeeded).count();
-        let jobs_failed = jobs.values().filter(|j| matches!(j.status, JobStatus::Failed | JobStatus::TimedOut | JobStatus::Cancelled)).count();
-        let jobs_skipped = jobs.values().filter(|j| j.status == JobStatus::Skipped).count();
+        let jobs_succeeded = jobs
+            .values()
+            .filter(|j| j.status == JobStatus::Succeeded)
+            .count();
+        let jobs_failed = jobs
+            .values()
+            .filter(|j| {
+                matches!(
+                    j.status,
+                    JobStatus::Failed | JobStatus::TimedOut | JobStatus::Cancelled
+                )
+            })
+            .count();
+        let jobs_skipped = jobs
+            .values()
+            .filter(|j| j.status == JobStatus::Skipped)
+            .count();
 
         if let Err(e) = self
             .events
@@ -290,7 +309,11 @@ impl<C: CacheBackend> Executor<C> {
         }
     }
 
-    async fn initialize_job_states(&self, ctx: &ExecutionContext, run_state: &RunState) -> Result<()> {
+    async fn initialize_job_states(
+        &self,
+        ctx: &ExecutionContext,
+        run_state: &RunState,
+    ) -> Result<()> {
         let pipeline_row = PipelineRepo::new(&self.pool).get(ctx.pipeline_id()).await?;
         let pipeline_digest =
             DefinitionSnapshotRepo::ensure_json(&self.pool, &pipeline_row.definition).await?;
@@ -306,6 +329,8 @@ impl<C: CacheBackend> Executor<C> {
                     },
                     "name": wf.name,
                     "version": wf.version,
+                    "invocation_id": job.workflow_invocation_id,
+                    "invocation_name": job.workflow_invocation_name,
                 })
             });
 
@@ -318,7 +343,9 @@ impl<C: CacheBackend> Executor<C> {
                     .get(ctx.org_id(), ctx.project_id(), scope, &wf.name, &wf.version)
                     .await
                 {
-                    Ok(row) => Some(DefinitionSnapshotRepo::ensure_json(&self.pool, &row.definition).await?),
+                    Ok(row) => Some(
+                        DefinitionSnapshotRepo::ensure_json(&self.pool, &row.definition).await?,
+                    ),
                     Err(e) => {
                         warn!(
                             error = %e,
@@ -436,9 +463,7 @@ impl<C: CacheBackend> Executor<C> {
                 continue;
             }
 
-            let deps_satisfied = self
-                .check_dependencies_satisfied(job, run_state)
-                .await;
+            let deps_satisfied = self.check_dependencies_satisfied(job, run_state).await;
 
             if deps_satisfied {
                 ready.push(job);
@@ -473,7 +498,10 @@ impl<C: CacheBackend> Executor<C> {
                 Ok(false) => {
                     info!(job = %job.name, condition, "job skipped due to condition");
                     run_state
-                        .mark_job_skipped(&job.id, Some(format!("Condition '{condition}' evaluated to false")))
+                        .mark_job_skipped(
+                            &job.id,
+                            Some(format!("Condition '{condition}' evaluated to false")),
+                        )
                         .await;
                     return Ok(());
                 }
@@ -481,7 +509,10 @@ impl<C: CacheBackend> Executor<C> {
                     if condition != "success()" {
                         warn!(job = %job.name, condition, error = %e, "condition evaluation failed, skipping job");
                         run_state
-                            .mark_job_skipped(&job.id, Some(format!("Condition evaluation failed: {e}")))
+                            .mark_job_skipped(
+                                &job.id,
+                                Some(format!("Condition evaluation failed: {e}")),
+                            )
                             .await;
                         return Ok(());
                     }
@@ -513,7 +544,11 @@ impl<C: CacheBackend> Executor<C> {
                 .await?;
 
             match self.cache.lookup(&cache_key).await? {
-                CacheLookupResult::Hit { key, storage_path: _, .. } => {
+                CacheLookupResult::Hit {
+                    key,
+                    storage_path: _,
+                    ..
+                } => {
                     info!(job = %job.name, cache_key = %key, "cache hit, skipping job");
                     run_state
                         .mark_job_completed(&job.id, true, Some(0), None)
@@ -529,7 +564,9 @@ impl<C: CacheBackend> Executor<C> {
             }
         }
 
-        let job_state = run_state.get_job(&job.id).await
+        let job_state = run_state
+            .get_job(&job.id)
+            .await
             .ok_or_else(|| EngineError::JobNotFound(job.id))?;
 
         match self
@@ -626,9 +663,7 @@ impl<C: CacheBackend> Executor<C> {
     ) -> Result<()> {
         let pending = run_state.pending_jobs().await;
         for job_id in pending {
-            run_state
-                .mark_job_cancelled(&job_id)
-                .await;
+            run_state.mark_job_cancelled(&job_id).await;
         }
         Ok(())
     }
@@ -784,6 +819,7 @@ mod tests {
             affinity_group: None,
             share_workspace: false,
             workflow_invocation_id: None,
+            workflow_invocation_name: None,
         }
     }
 
@@ -856,11 +892,11 @@ mod tests {
         let a = JobId::new();
         let b = JobId::new();
 
-        let pipeline = test_pipeline(vec![
-            test_job(a, "a", vec![b]),
-            test_job(b, "b", vec![a]),
-        ]);
+        let pipeline = test_pipeline(vec![test_job(a, "a", vec![b]), test_job(b, "b", vec![a])]);
 
-        assert!(matches!(topological_order(&pipeline), Err(EngineError::CycleDetected)));
+        assert!(matches!(
+            topological_order(&pipeline),
+            Err(EngineError::CycleDetected)
+        ));
     }
 }

@@ -6,7 +6,7 @@ mod hints;
 mod resolve;
 
 pub use error::ResolveError;
-pub use hints::{hints_json_from_secret_refs, SecretResolutionHints, SecretResolutionRefHint};
+pub use hints::{SecretResolutionHints, SecretResolutionRefHint, hints_json_from_secret_refs};
 pub use resolve::{
     load_secret_refs_from_definition, materialization_for_kind, resolve_for_job_run_context,
     resolve_job_secrets_for_exchange, resolve_stored_secret_map, validate_secret_refs,

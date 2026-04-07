@@ -5,31 +5,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use async_nats::jetstream::AckKind;
+use chrono::Utc;
 use futures::StreamExt;
 use met_proto::agent::v1::{
-    agent_service_client::AgentServiceClient, ExecutedBinary as ProtoExecutedBinary,
-    JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange, JobStatusUpdate,
-    SecretMaterialKind, StepStatusUpdate,
+    ExecutedBinary as ProtoExecutedBinary, JobExecutionMetadata as ProtoJobExecutionMetadata,
+    JobKeyExchange, JobStatusUpdate, SecretMaterialKind, StepStatusUpdate,
+    agent_service_client::AgentServiceClient,
 };
-use met_proto::controller::v1::WorkflowInvocationOutputs;
 use met_proto::common::v1::{RunStatus, Timestamp};
+use met_proto::controller::v1::WorkflowInvocationOutputs;
 use prost::Message;
 use sha2::{Digest, Sha256};
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{RwLock, mpsc, watch};
 use tokio_stream;
-use tonic::transport::Channel;
 use tonic::Request;
+use tonic::transport::Channel;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::backend::ExecutionBackend;
 use crate::config::{AgentConfig, AgentIdentity};
 use crate::error::{AgentError, Result};
 use crate::heartbeat::HeartbeatState;
-use crate::process_watcher::{merge_execution_metadata, JobExecutionMetadata, ProcessWatcher};
+use crate::process_watcher::{JobExecutionMetadata, ProcessWatcher, merge_execution_metadata};
 use crate::security::JobPki;
-use crate::step_log::{step_log_spool_path, StepLogSession};
+use crate::step_log::{StepLogSession, step_log_spool_path};
 
 /// In-flight job identity for operator interrupt → controller cancellation.
 #[derive(Clone)]
@@ -182,10 +182,7 @@ impl JobExecutor {
     }
 
     /// One pull-consumer session until drain, shutdown, or stream end.
-    async fn run_pull_session(
-        &mut self,
-        jetstream: &async_nats::jetstream::Context,
-    ) -> Result<()> {
+    async fn run_pull_session(&mut self, jetstream: &async_nats::jetstream::Context) -> Result<()> {
         let stream = match jetstream.get_stream("JOBS").await {
             Ok(s) => s,
             Err(e) => {
@@ -404,7 +401,10 @@ impl JobExecutor {
         out
     }
 
-    async fn run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+    async fn run_job_dispatch(
+        &mut self,
+        job: met_proto::controller::v1::JobDispatch,
+    ) -> Result<()> {
         info!(
             job_name = %job.job_name,
             pipeline = %job.pipeline_name,
@@ -465,7 +465,10 @@ impl JobExecutor {
         }
     }
 
-    async fn do_run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+    async fn do_run_job_dispatch(
+        &mut self,
+        job: met_proto::controller::v1::JobDispatch,
+    ) -> Result<()> {
         if !self.pending_log_flushes.is_empty() {
             warn!(
                 count = self.pending_log_flushes.len(),
@@ -551,8 +554,7 @@ impl JobExecutor {
                     last_exit_code = Some(exit_code);
                     if let Some(meta) = metadata {
                         step_metadata.push((step.step_id.clone(), meta.clone()));
-                        self.record_footprint_step(step.step_id.clone(), meta)
-                            .await;
+                        self.record_footprint_step(step.step_id.clone(), meta).await;
                     }
 
                     if exit_code != 0 && !step.continue_on_error {
@@ -738,12 +740,7 @@ impl JobExecutor {
         // Execute with process watching and live log shipping
         let result = self
             .backend
-            .execute_with_watcher(
-                &backend_step,
-                workspace,
-                &mut watcher,
-                Some(&log_pipe),
-            )
+            .execute_with_watcher(&backend_step, workspace, &mut watcher, Some(&log_pipe))
             .await;
 
         // Report terminal step status before awaiting log drain: `finish()` waits on `stream_logs`
@@ -756,14 +753,8 @@ impl JobExecutor {
                 } else {
                     RunStatus::Failed
                 };
-                self.report_step_status(
-                    step_run_id,
-                    job_run_id,
-                    status,
-                    Some(exit_code),
-                    None,
-                )
-                .await?;
+                self.report_step_status(step_run_id, job_run_id, status, Some(exit_code), None)
+                    .await?;
             }
             Err(e) => {
                 self.report_step_status(
@@ -889,13 +880,12 @@ impl JobExecutor {
                     }
 
                     // Convert decrypted bytes to string (zeroizing wrapper ensures cleanup)
-                    let value = String::from_utf8(plaintext.to_vec())
-                        .map_err(|_| AgentError::Security(format!(
-                            "secret '{}' is not valid UTF-8",
-                            secret.key
-                        )))?;
+                    let value = String::from_utf8(plaintext.to_vec()).map_err(|_| {
+                        AgentError::Security(format!("secret '{}' is not valid UTF-8", secret.key))
+                    })?;
 
-                    let is_file = secret.material_kind == SecretMaterialKind::WorkspaceFilePath as i32;
+                    let is_file =
+                        secret.material_kind == SecretMaterialKind::WorkspaceFilePath as i32;
 
                     if is_file {
                         let secrets_dir = workspace.join(".meticulous").join("secrets");
@@ -905,12 +895,20 @@ impl JobExecutor {
                         let safe_name: String = secret
                             .key
                             .chars()
-                            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                            .map(|c| {
+                                if c.is_alphanumeric() || c == '_' || c == '-' {
+                                    c
+                                } else {
+                                    '_'
+                                }
+                            })
                             .collect();
                         let path = secrets_dir.join(safe_name);
                         tokio::fs::write(&path, value.as_bytes())
                             .await
-                            .map_err(|e| AgentError::Workspace(format!("write secret file: {e}")))?;
+                            .map_err(|e| {
+                                AgentError::Workspace(format!("write secret file: {e}"))
+                            })?;
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;

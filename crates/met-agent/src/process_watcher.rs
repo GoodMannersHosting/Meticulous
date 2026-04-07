@@ -195,8 +195,7 @@ impl ProcessWatcher {
         // Get all descendant processes
         let descendants = self.get_descendant_pids(root_pid).await;
         let mut tracked = self.tracked_processes.write().await;
-        let tracked_pids: std::collections::HashSet<u32> =
-            tracked.iter().map(|p| p.pid).collect();
+        let tracked_pids: std::collections::HashSet<u32> = tracked.iter().map(|p| p.pid).collect();
 
         for (pid, parent_pid, depth) in descendants {
             if tracked_pids.contains(&pid) {
@@ -259,7 +258,11 @@ impl ProcessWatcher {
     }
 
     /// Aggregate execution metadata for a job.
-    pub async fn aggregate_metadata(&self, step_id: &str, step_run_id: &str) -> JobExecutionMetadata {
+    pub async fn aggregate_metadata(
+        &self,
+        step_id: &str,
+        step_run_id: &str,
+    ) -> JobExecutionMetadata {
         let tracked = self.tracked_processes.read().await;
 
         // Group by (path, sha256)
@@ -287,7 +290,8 @@ impl ProcessWatcher {
                     if !record.step_ids.contains(&step_id.to_string()) {
                         record.step_ids.push(step_id.to_string());
                     }
-                    if !step_run_id.is_empty() && !record.step_run_ids.contains(&step_run_id.to_string())
+                    if !step_run_id.is_empty()
+                        && !record.step_run_ids.contains(&step_run_id.to_string())
                     {
                         record.step_run_ids.push(step_run_id.to_string());
                     }
@@ -327,7 +331,11 @@ impl ProcessWatcher {
     async fn compute_or_get_cached_sha256(&self, path: &Path) -> Result<String> {
         // Get file metadata for cache key
         let metadata = tokio::fs::metadata(path).await.map_err(|e| {
-            AgentError::Internal(format!("failed to get metadata for {}: {}", path.display(), e))
+            AgentError::Internal(format!(
+                "failed to get metadata for {}: {}",
+                path.display(),
+                e
+            ))
         })?;
 
         let cache_key = BinaryCacheKey {
@@ -437,9 +445,7 @@ impl ProcessWatcher {
         match tokio::fs::read_link(&exe_link).await {
             Ok(path) => {
                 // Filter out kernel threads and special entries
-                if path.to_string_lossy().contains(" (deleted)")
-                    || !path.exists()
-                {
+                if path.to_string_lossy().contains(" (deleted)") || !path.exists() {
                     None
                 } else {
                     Some(path)
@@ -558,7 +564,13 @@ fn get_exe_path_macos(pid: u32) -> Option<PathBuf> {
     const PROC_PIDPATHINFO_MAXSIZE: u32 = 4096;
     let mut buffer: Vec<u8> = vec![0; PROC_PIDPATHINFO_MAXSIZE as usize];
 
-    let ret = unsafe { proc_pidpath(pid as i32, buffer.as_mut_ptr() as *mut libc::c_char, PROC_PIDPATHINFO_MAXSIZE) };
+    let ret = unsafe {
+        proc_pidpath(
+            pid as i32,
+            buffer.as_mut_ptr() as *mut libc::c_char,
+            PROC_PIDPATHINFO_MAXSIZE,
+        )
+    };
 
     if ret > 0 {
         buffer.truncate(ret as usize);

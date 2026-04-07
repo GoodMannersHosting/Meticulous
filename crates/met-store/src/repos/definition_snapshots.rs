@@ -12,8 +12,7 @@ impl DefinitionSnapshotRepo {
     /// SHA-256 of `serde_json` canonical UTF-8 bytes (key order as serialized).
     #[must_use]
     pub fn digest_json(value: &serde_json::Value) -> Result<[u8; 32]> {
-        let bytes =
-            serde_json::to_vec(value).map_err(|e| StoreError::validation(e.to_string()))?;
+        let bytes = serde_json::to_vec(value).map_err(|e| StoreError::validation(e.to_string()))?;
         Ok(Sha256::digest(bytes).into())
     }
 
@@ -35,7 +34,10 @@ impl DefinitionSnapshotRepo {
     }
 
     /// Load a stored JSON body by content hash (UTF-8 pipeline / workflow snapshot).
-    pub async fn get_json(pool: &PgPool, content_sha256: &[u8; 32]) -> Result<Option<serde_json::Value>> {
+    pub async fn get_json(
+        pool: &PgPool,
+        content_sha256: &[u8; 32],
+    ) -> Result<Option<serde_json::Value>> {
         sqlx::query_scalar::<_, serde_json::Value>(
             r#"
             SELECT body FROM definition_snapshots WHERE content_sha256 = $1

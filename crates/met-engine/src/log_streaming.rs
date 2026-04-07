@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use met_core::ids::{JobRunId, RunId, StepRunId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, instrument, warn};
 
 use crate::error::{EngineError, Result};
@@ -53,11 +53,20 @@ impl std::fmt::Display for LogStream {
 #[async_trait]
 pub trait LogStorage: Send + Sync {
     /// Append log content to storage.
-    async fn append(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>, chunk: &LogChunk) -> Result<()>;
-    
+    async fn append(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+        chunk: &LogChunk,
+    ) -> Result<()>;
+
     /// Finalize and close the log file.
-    async fn finalize(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>) -> Result<String>;
-    
+    async fn finalize(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+    ) -> Result<String>;
+
     /// Read log content from storage.
     async fn read(&self, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>>;
 }
@@ -90,12 +99,17 @@ impl ObjectStoreLogStorage {
 
 #[async_trait]
 impl LogStorage for ObjectStoreLogStorage {
-    async fn append(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>, chunk: &LogChunk) -> Result<()> {
+    async fn append(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+        chunk: &LogChunk,
+    ) -> Result<()> {
         let key = self.log_key(job_run_id, step_run_id);
         let mut buffers = self.buffers.write().await;
-        
+
         let buffer = buffers.entry(key).or_insert_with(Vec::new);
-        
+
         let line = format!(
             "[{}] [{}] {}\n",
             chunk.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
@@ -103,31 +117,35 @@ impl LogStorage for ObjectStoreLogStorage {
             chunk.content
         );
         buffer.extend_from_slice(line.as_bytes());
-        
+
         Ok(())
     }
 
-    async fn finalize(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>) -> Result<String> {
+    async fn finalize(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+    ) -> Result<String> {
         let key = self.log_key(job_run_id, step_run_id);
         let path = self.full_path(&key);
-        
+
         let mut buffers = self.buffers.write().await;
         if let Some(_buffer) = buffers.remove(&key) {
             debug!(path = %path, "finalized log file");
         }
-        
+
         Ok(path)
     }
 
     async fn read(&self, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>> {
         let buffers = self.buffers.read().await;
-        
+
         for (key, buffer) in buffers.iter() {
             if self.full_path(key) == path {
                 let start = offset as usize;
                 let end = (offset + limit) as usize;
                 let end = end.min(buffer.len());
-                
+
                 if start < buffer.len() {
                     return Ok(buffer[start..end].to_vec());
                 } else {
@@ -135,7 +153,7 @@ impl LogStorage for ObjectStoreLogStorage {
                 }
             }
         }
-        
+
         Ok(Vec::new())
     }
 }
@@ -161,14 +179,23 @@ impl Default for MemoryLogStorage {
 
 #[async_trait]
 impl LogStorage for MemoryLogStorage {
-    async fn append(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>, chunk: &LogChunk) -> Result<()> {
+    async fn append(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+        chunk: &LogChunk,
+    ) -> Result<()> {
         let key = format!("{}:{:?}", job_run_id, step_run_id);
         let mut logs = self.logs.write().await;
         logs.entry(key).or_default().push(chunk.clone());
         Ok(())
     }
 
-    async fn finalize(&self, job_run_id: JobRunId, step_run_id: Option<StepRunId>) -> Result<String> {
+    async fn finalize(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: Option<StepRunId>,
+    ) -> Result<String> {
         let key = format!("{}:{:?}", job_run_id, step_run_id);
         Ok(format!("memory://{}", key))
     }
@@ -211,16 +238,18 @@ impl<S: LogStorage> LogStreamRelay<S> {
     /// Process a log chunk.
     #[instrument(skip(self, chunk), fields(run_id = %chunk.run_id, job_run_id = %chunk.job_run_id))]
     pub async fn process_chunk(&self, chunk: LogChunk) -> Result<()> {
-        self.storage.append(chunk.job_run_id, chunk.step_run_id, &chunk).await?;
-        
-        if let Err(e) = self.events.log_chunk(
-            chunk.job_run_id,
-            chunk.step_run_id,
-            &chunk.content,
-        ).await {
+        self.storage
+            .append(chunk.job_run_id, chunk.step_run_id, &chunk)
+            .await?;
+
+        if let Err(e) = self
+            .events
+            .log_chunk(chunk.job_run_id, chunk.step_run_id, &chunk.content)
+            .await
+        {
             warn!(error = %e, "failed to broadcast log chunk");
         }
-        
+
         Ok(())
     }
 
@@ -238,7 +267,11 @@ impl<S: LogStorage> LogStreamRelay<S> {
     }
 
     /// Finalize logs for a step run.
-    pub async fn finalize_step(&self, job_run_id: JobRunId, step_run_id: StepRunId) -> Result<String> {
+    pub async fn finalize_step(
+        &self,
+        job_run_id: JobRunId,
+        step_run_id: StepRunId,
+    ) -> Result<String> {
         self.storage.finalize(job_run_id, Some(step_run_id)).await
     }
 
@@ -248,10 +281,7 @@ impl<S: LogStorage> LogStreamRelay<S> {
     }
 
     /// Start processing log chunks from a receiver.
-    pub async fn start_processing(
-        self: Arc<Self>,
-        mut receiver: mpsc::Receiver<LogChunk>,
-    ) {
+    pub async fn start_processing(self: Arc<Self>, mut receiver: mpsc::Receiver<LogChunk>) {
         while let Some(chunk) = receiver.recv().await {
             if let Err(e) = self.process_chunk(chunk).await {
                 warn!(error = %e, "failed to process log chunk");
@@ -318,10 +348,10 @@ mod tests {
     #[tokio::test]
     async fn test_memory_log_storage() {
         let storage = MemoryLogStorage::new();
-        
+
         let run_id = RunId::new();
         let job_run_id = JobRunId::new();
-        
+
         let chunk = LogChunk {
             run_id,
             job_run_id,
@@ -331,10 +361,10 @@ mod tests {
             stream: LogStream::Stdout,
             sequence: 0,
         };
-        
+
         storage.append(job_run_id, None, &chunk).await.unwrap();
         let path = storage.finalize(job_run_id, None).await.unwrap();
-        
+
         let content = storage.read(&path, 0, 1000).await.unwrap();
         let content_str = String::from_utf8_lossy(&content);
         assert!(content_str.contains("Hello, world!"));
@@ -345,13 +375,12 @@ mod tests {
         let run_id = RunId::new();
         let job_run_id = JobRunId::new();
         let step_run_id = StepRunId::new();
-        
-        let mut builder = LogChunkBuilder::new(run_id, job_run_id)
-            .with_step(step_run_id);
-        
+
+        let mut builder = LogChunkBuilder::new(run_id, job_run_id).with_step(step_run_id);
+
         let chunk1 = builder.stdout("line 1");
         let chunk2 = builder.stderr("error");
-        
+
         assert_eq!(chunk1.sequence, 0);
         assert_eq!(chunk2.sequence, 1);
         assert_eq!(chunk1.stream, LogStream::Stdout);

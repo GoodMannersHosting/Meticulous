@@ -51,8 +51,8 @@ impl Default for ControllerConfig {
             jwt_validity: Duration::from_secs(24 * 60 * 60), // 24 hours
             jwt_renewable: true,
             heartbeat_interval: Duration::from_secs(15),
-            stale_threshold: Duration::from_secs(45),   // 3x heartbeat
-            dead_threshold: Duration::from_secs(120),   // 8x heartbeat
+            stale_threshold: Duration::from_secs(45), // 3x heartbeat
+            dead_threshold: Duration::from_secs(120), // 8x heartbeat
             health_check_interval: Duration::from_secs(10),
             require_ntp_sync: true,
             allowed_platforms: Vec::new(),

@@ -29,7 +29,7 @@ pub mod tracing;
 
 pub use config::{MetricsConfig, OtlpConfig, OtlpProtocol, TelemetryConfig, TracingConfig};
 pub use exporters::ExporterError;
-pub use metrics::{init_metrics, meter, metrics, MeticulousMetrics};
+pub use metrics::{MeticulousMetrics, init_metrics, meter, metrics};
 pub use middleware::{PropagationLayer, TelemetryLayer};
 pub use propagation::{
     extract_http, extract_http_context, extract_nats, extract_nats_context, inject_http,
@@ -46,7 +46,7 @@ use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::{metrics::SdkMeterProvider, trace::TracerProvider};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Guard that holds the telemetry providers for shutdown.
 pub struct TelemetryGuard {
@@ -59,7 +59,10 @@ impl TelemetryGuard {
         tracer_provider: Option<TracerProvider>,
         meter_provider: Option<SdkMeterProvider>,
     ) -> Self {
-        Self { tracer_provider, meter_provider }
+        Self {
+            tracer_provider,
+            meter_provider,
+        }
     }
 }
 
@@ -120,7 +123,10 @@ pub fn init_telemetry(
                     .init();
             }
             met_core::config::LogFormat::Text => {
-                registry.with(telemetry_layer).with(tracing_subscriber::fmt::layer()).init();
+                registry
+                    .with(telemetry_layer)
+                    .with(tracing_subscriber::fmt::layer())
+                    .init();
             }
         }
     } else {
@@ -145,10 +151,14 @@ pub fn init_tracing_only(
 
     match config.format {
         met_core::config::LogFormat::Json => {
-            subscriber.with(tracing_subscriber::fmt::layer().json()).init();
+            subscriber
+                .with(tracing_subscriber::fmt::layer().json())
+                .init();
         }
         met_core::config::LogFormat::Compact => {
-            subscriber.with(tracing_subscriber::fmt::layer().compact()).init();
+            subscriber
+                .with(tracing_subscriber::fmt::layer().compact())
+                .init();
         }
         met_core::config::LogFormat::Text => {
             subscriber.with(tracing_subscriber::fmt::layer()).init();

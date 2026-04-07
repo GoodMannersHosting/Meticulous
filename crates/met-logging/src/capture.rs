@@ -73,12 +73,7 @@ pub struct LogCapture {
 
 impl LogCapture {
     /// Create a new log capture instance.
-    pub fn new(
-        config: LogCaptureConfig,
-        run_id: RunId,
-        job_id: JobId,
-        step_id: StepId,
-    ) -> Self {
+    pub fn new(config: LogCaptureConfig, run_id: RunId, job_id: JobId, step_id: StepId) -> Self {
         Self {
             config,
             run_id,
@@ -168,12 +163,7 @@ mod tests {
     #[tokio::test]
     async fn test_capture_line() {
         let config = LogCaptureConfig::default();
-        let capture = LogCapture::new(
-            config,
-            RunId::new(),
-            JobId::new(),
-            StepId::new(),
-        );
+        let capture = LogCapture::new(config, RunId::new(), JobId::new(), StepId::new());
 
         let line = capture.capture_line("Hello, world!".to_string(), LogSource::Stdout);
         assert_eq!(line.content, "Hello, world!");
@@ -190,12 +180,7 @@ mod tests {
             max_line_length: 10,
             ..Default::default()
         };
-        let capture = LogCapture::new(
-            config,
-            RunId::new(),
-            JobId::new(),
-            StepId::new(),
-        );
+        let capture = LogCapture::new(config, RunId::new(), JobId::new(), StepId::new());
 
         let line = capture.capture_line("This is a very long line".to_string(), LogSource::Stdout);
         assert!(line.content.ends_with("... [truncated]"));
@@ -204,12 +189,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_reader() {
         let config = LogCaptureConfig::default();
-        let capture = LogCapture::new(
-            config,
-            RunId::new(),
-            JobId::new(),
-            StepId::new(),
-        );
+        let capture = LogCapture::new(config, RunId::new(), JobId::new(), StepId::new());
 
         let data = "Line 1\nLine 2\nLine 3\n";
         let reader = Cursor::new(data);

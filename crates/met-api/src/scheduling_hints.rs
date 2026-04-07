@@ -126,8 +126,8 @@ impl WorkflowProvider for StoreWorkflowProvider {
             name,
             WorkflowVersionListMode::Execution,
         )
-            .await
-            .map_err(|e| WorkflowFetchError::Network(e.to_string()))
+        .await
+        .map_err(|e| WorkflowFetchError::Network(e.to_string()))
     }
 }
 

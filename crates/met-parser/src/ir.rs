@@ -174,6 +174,8 @@ pub struct JobIR {
     pub share_workspace: bool,
     /// Pipeline `workflows[].id` when this job was expanded from a reusable workflow.
     pub workflow_invocation_id: Option<String>,
+    /// Pipeline `workflows[].name` when this job was expanded from a reusable workflow.
+    pub workflow_invocation_name: Option<String>,
 }
 
 impl JobIR {

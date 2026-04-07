@@ -1,10 +1,6 @@
 //! Core trait definitions for object storage.
 
-use crate::{
-    error::Result,
-    multipart::MultipartUpload,
-    paths::ObjectKey,
-};
+use crate::{error::Result, multipart::MultipartUpload, paths::ObjectKey};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};

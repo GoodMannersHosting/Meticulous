@@ -76,7 +76,10 @@ where
                 let response = inner.call(req).await;
 
                 let duration = start.elapsed().as_secs_f64();
-                let status = response.as_ref().map(|r| r.status().as_u16()).unwrap_or(500);
+                let status = response
+                    .as_ref()
+                    .map(|r| r.status().as_u16())
+                    .unwrap_or(500);
 
                 crate::tracing::record_http_status(status);
                 metrics().api_request_finished();
@@ -129,7 +132,9 @@ where
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
         inject_http(req.headers_mut());
-        PropagationFuture { inner: self.inner.call(req) }
+        PropagationFuture {
+            inner: self.inner.call(req),
+        }
     }
 }
 

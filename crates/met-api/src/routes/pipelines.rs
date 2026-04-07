@@ -18,8 +18,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
     extractors::{Auth, PaginatedResponse, Pagination},
-    github_scm,
-    pipeline_execution,
+    github_scm, pipeline_execution,
     state::AppState,
     workflow_diagnostics::{self, WorkflowDiagnosticItem},
 };

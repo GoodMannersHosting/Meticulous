@@ -1,21 +1,18 @@
 //! Agent registration with the controller.
 
 use met_proto::agent::v1::{
-    agent_service_client::AgentServiceClient, AgentCapabilities, RegisterRequest, SecurityBundle,
+    AgentCapabilities, RegisterRequest, SecurityBundle, agent_service_client::AgentServiceClient,
 };
 use tonic::transport::Channel;
 use tracing::{debug, info, warn};
 
 use crate::config::{AgentConfig, AgentIdentity};
 use crate::error::{AgentError, Result};
-use crate::security::{normalize_arch, SecurityBundleCollector};
+use crate::security::{SecurityBundleCollector, normalize_arch};
 
 /// Returns `true` if a join token is required to proceed (interactive prompt or env/CLI) before
 /// connecting to the controller.
-pub fn registration_needs_join_token(
-    config: &AgentConfig,
-    force_register: bool,
-) -> Result<bool> {
+pub fn registration_needs_join_token(config: &AgentConfig, force_register: bool) -> Result<bool> {
     if config.join_token.is_some() {
         return Ok(false);
     }
@@ -115,11 +112,9 @@ impl AgentRegistration {
 
     /// Register the agent with the controller.
     async fn register(&mut self) -> Result<AgentIdentity> {
-        let join_token = self
-            .config
-            .join_token
-            .clone()
-            .ok_or_else(|| AgentError::Config("join_token required for registration".to_string()))?;
+        let join_token = self.config.join_token.clone().ok_or_else(|| {
+            AgentError::Config("join_token required for registration".to_string())
+        })?;
 
         info!("registering agent with controller");
 
@@ -205,10 +200,7 @@ impl AgentRegistration {
             agent_id: response.agent_id,
             org_id: response.organization_id,
             jwt_token: response.jwt_token,
-            jwt_expires_at: response
-                .jwt_expires_at
-                .map(|t| t.seconds)
-                .unwrap_or(0),
+            jwt_expires_at: response.jwt_expires_at.map(|t| t.seconds).unwrap_or(0),
             renewable: response.renewable,
             nats_subjects: response.nats_subjects,
             nats_url: creds

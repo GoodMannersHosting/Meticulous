@@ -1,6 +1,8 @@
 //! Decode `met-output` frames from a byte buffer (one job step or aggregated read).
 
-use met_core::output_ipc::{decode_frame, OUTPUT_AGGREGATE_MAX_BYTES, OUTPUT_MSG_SECRET, OUTPUT_MSG_VAR};
+use met_core::output_ipc::{
+    OUTPUT_AGGREGATE_MAX_BYTES, OUTPUT_MSG_SECRET, OUTPUT_MSG_VAR, decode_frame,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -24,7 +26,8 @@ pub fn decode_output_bytes(data: &[u8]) -> Result<DrainedOutputs, DrainError> {
 
     while pos < data.len() {
         let slice = &data[pos..];
-        let (msg_ty, key, value, consumed) = decode_frame(slice).map_err(|_| DrainError::MalformedFrame)?;
+        let (msg_ty, key, value, consumed) =
+            decode_frame(slice).map_err(|_| DrainError::MalformedFrame)?;
         pos += consumed;
 
         let add_len = match msg_ty {

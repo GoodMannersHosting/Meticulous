@@ -22,13 +22,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use chrono::Utc;
     use met_controller::config::ControllerConfig;
     use met_controller::jwt::{AgentClaims, JwtManager};
     use met_controller::nats::NatsDispatcher;
     use met_controller::registry::{AgentRegistry, AgentState, ResourceSnapshot};
     use met_core::ids::{AgentId, JobRunId, OrganizationId};
     use met_core::models::AgentStatus;
-    use chrono::Utc;
     use std::time::Instant;
 
     fn test_config() -> ControllerConfig {
@@ -49,7 +49,11 @@ mod tests {
     #[test]
     fn test_jwt_issue_and_validate() {
         let config = test_config();
-        let jwt = JwtManager::new(&config.jwt_secret, config.jwt_validity, config.jwt_renewable);
+        let jwt = JwtManager::new(
+            &config.jwt_secret,
+            config.jwt_validity,
+            config.jwt_renewable,
+        );
 
         let agent_id = AgentId::new();
         let org_id = OrganizationId::new();
@@ -116,7 +120,9 @@ mod tests {
 
         // Update status to online
         registry.update_status(agent_id, AgentStatus::Online).await;
-        registry.heartbeat(agent_id, AgentStatus::Online, 0, None, None).await;
+        registry
+            .heartbeat(agent_id, AgentStatus::Online, 0, None, None)
+            .await;
 
         // Now should be available
         let available = registry
@@ -208,9 +214,7 @@ mod tests {
         assert_eq!(native_agents.len(), 2);
 
         // Filter by non-existent tag
-        let no_agents = registry
-            .list_available(org_id, &["gpu".to_string()])
-            .await;
+        let no_agents = registry.list_available(org_id, &["gpu".to_string()]).await;
         assert_eq!(no_agents.len(), 0);
     }
 
@@ -267,7 +271,11 @@ mod tests {
     #[test]
     fn test_jwt_renewal_check() {
         let config = test_config();
-        let jwt = JwtManager::new(&config.jwt_secret, config.jwt_validity, config.jwt_renewable);
+        let jwt = JwtManager::new(
+            &config.jwt_secret,
+            config.jwt_validity,
+            config.jwt_renewable,
+        );
 
         let agent_id = AgentId::new();
         let org_id = OrganizationId::new();
@@ -301,7 +309,11 @@ mod tests {
     #[test]
     fn test_jwt_pool_tags_preserved() {
         let config = test_config();
-        let jwt = JwtManager::new(&config.jwt_secret, config.jwt_validity, config.jwt_renewable);
+        let jwt = JwtManager::new(
+            &config.jwt_secret,
+            config.jwt_validity,
+            config.jwt_renewable,
+        );
 
         let agent_id = AgentId::new();
         let org_id = OrganizationId::new();
@@ -354,7 +366,13 @@ mod tests {
         };
 
         registry
-            .heartbeat(agent_id, AgentStatus::Online, 0, None, Some(resources.clone()))
+            .heartbeat(
+                agent_id,
+                AgentStatus::Online,
+                0,
+                None,
+                Some(resources.clone()),
+            )
             .await
             .unwrap();
 
@@ -593,22 +611,20 @@ mod tests {
             org_id: org_id.to_string(),
             pipeline_name: "test-pipeline".to_string(),
             job_name: "test-job".to_string(),
-            steps: vec![
-                met_proto::controller::v1::StepSpec {
-                    step_run_id: uuid::Uuid::new_v4().to_string(),
-                    step_id: "step-1".to_string(),
-                    name: "build".to_string(),
-                    kind: 1, // COMMAND
-                    command: "echo hello".to_string(),
-                    image: "alpine:latest".to_string(),
-                    working_dir: "/workspace".to_string(),
-                    shell: "/bin/sh".to_string(),
-                    environment: Default::default(),
-                    sequence: 1,
-                    continue_on_error: false,
-                    timeout_secs: 300,
-                },
-            ],
+            steps: vec![met_proto::controller::v1::StepSpec {
+                step_run_id: uuid::Uuid::new_v4().to_string(),
+                step_id: "step-1".to_string(),
+                name: "build".to_string(),
+                kind: 1, // COMMAND
+                command: "echo hello".to_string(),
+                image: "alpine:latest".to_string(),
+                working_dir: "/workspace".to_string(),
+                shell: "/bin/sh".to_string(),
+                environment: Default::default(),
+                sequence: 1,
+                continue_on_error: false,
+                timeout_secs: 300,
+            }],
             variables: Default::default(),
             secrets: vec![],
             timeout_secs: 3600,

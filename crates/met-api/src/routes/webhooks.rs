@@ -8,7 +8,7 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId, UserId};
-use met_core::models::{TriggerKind, WebhookConfig, WEBHOOK_MAX_BODY_BYTES};
+use met_core::models::{TriggerKind, WEBHOOK_MAX_BODY_BYTES, WebhookConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -24,9 +24,9 @@ use crate::{
     state::AppState,
 };
 use met_store::repos::{
-    get_trigger_for_webhook_dispatch, CreateWebhookTarget, PipelineRepo, ProjectRepo,
-    UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext, WebhookRegistrationSummary,
-    WebhookRegistrationTarget, WebhookRepo,
+    CreateWebhookTarget, PipelineRepo, ProjectRepo, UpdateWebhookTarget, WebhookDeliveryClaim,
+    WebhookRegistrationContext, WebhookRegistrationSummary, WebhookRegistrationTarget, WebhookRepo,
+    get_trigger_for_webhook_dispatch,
 };
 
 /// Prefer proxy headers (when present); otherwise use the direct TCP peer address.
@@ -34,7 +34,12 @@ fn webhook_client_ip(headers: &HeaderMap, connect: &SocketAddr) -> String {
     const XFF: &str = "x-forwarded-for";
     const XREAL: &str = "x-real-ip";
     if let Some(raw) = headers.get(XFF).and_then(|v| v.to_str().ok()) {
-        if let Some(first) = raw.split(',').next().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(first) = raw
+            .split(',')
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             return first.to_string();
         }
     }
@@ -63,7 +68,10 @@ pub fn router() -> Router<AppState> {
             post(handle_bitbucket_webhook),
         )
         .route("/projects/{project_id}/scm/setup", post(setup_scm_webhook))
-        .route("/projects/{project_id}/webhooks", get(list_project_webhooks))
+        .route(
+            "/projects/{project_id}/webhooks",
+            get(list_project_webhooks),
+        )
         .route(
             "/projects/{project_id}/webhooks/{registration_id}/rotate-inbound-secret",
             post(rotate_project_webhook_inbound_secret),
@@ -285,7 +293,9 @@ async fn dispatch_registered_webhook_fanout(
 
     if !event_ok {
         target_errors.push("event type ignored by registration filters".to_string());
-        hook_repo.set_delivery_run_ids(provider, delivery_id, &[]).await?;
+        hook_repo
+            .set_delivery_run_ids(provider, delivery_id, &[])
+            .await?;
         return Ok(scm_webhook_response_dispatched(
             run_ids,
             matched,
@@ -298,7 +308,9 @@ async fn dispatch_registered_webhook_fanout(
     let had_targets = !targets.is_empty();
     if targets.is_empty() {
         target_errors.push("no pipeline targets configured for this webhook".to_string());
-        hook_repo.set_delivery_run_ids(provider, delivery_id, &[]).await?;
+        hook_repo
+            .set_delivery_run_ids(provider, delivery_id, &[])
+            .await?;
         return Ok(scm_webhook_response_dispatched(
             run_ids,
             matched,
@@ -500,11 +512,12 @@ async fn handle_webhook(
 
     let client_ip = webhook_client_ip(&headers, &addr);
 
-    let pipeline_trigger = match get_trigger_for_webhook_dispatch(state.db(), org_id, trigger_id).await {
-        Ok(t) => Some(t),
-        Err(e) if e.is_not_found() => None,
-        Err(e) => return Err(e.into()),
-    };
+    let pipeline_trigger =
+        match get_trigger_for_webhook_dispatch(state.db(), org_id, trigger_id).await {
+            Ok(t) => Some(t),
+            Err(e) if e.is_not_found() => None,
+            Err(e) => return Err(e.into()),
+        };
 
     if let Some(trigger) = pipeline_trigger {
         if trigger.kind != TriggerKind::Webhook {
@@ -514,9 +527,8 @@ async fn handle_webhook(
             return Err(ApiError::bad_request("trigger is disabled"));
         }
 
-        let cfg: WebhookConfig = serde_json::from_value(trigger.config.clone()).map_err(|_| {
-            ApiError::bad_request("trigger has invalid webhook configuration JSON")
-        })?;
+        let cfg: WebhookConfig = serde_json::from_value(trigger.config.clone())
+            .map_err(|_| ApiError::bad_request("trigger has invalid webhook configuration JSON"))?;
 
         verify_pipeline_trigger_inbound_auth(&cfg, &uri, &headers, &body)?;
 
@@ -608,7 +620,8 @@ async fn handle_webhook(
         }
     }
 
-    vars.entry("webhook_event".into()).or_insert(event_type.clone());
+    vars.entry("webhook_event".into())
+        .or_insert(event_type.clone());
 
     let delivery_id = github_delivery_id(&headers, &body);
     let trigger_data = serde_json::json!({
@@ -1238,11 +1251,7 @@ async fn handle_bitbucket_webhook(
             .map(|t| t.hash.clone());
         (branch, commit_sha, "push")
     } else if let Some(ref pr) = payload.pullrequest {
-        (
-            Some(pr.source.branch.name.clone()),
-            None,
-            "pull_request",
-        )
+        (Some(pr.source.branch.name.clone()), None, "pull_request")
     } else {
         (None, None, event)
     };
@@ -1409,9 +1418,8 @@ async fn setup_scm_webhook(
         )
     } else if matches!(provider.as_str(), "github" | "gitlab" | "bitbucket") {
         (
-            req.events.unwrap_or_else(|| {
-                vec!["push".to_string(), "pull_request".to_string()]
-            }),
+            req.events
+                .unwrap_or_else(|| vec!["push".to_string(), "pull_request".to_string()]),
             serde_json::json!({}),
         )
     } else {
@@ -1661,7 +1669,8 @@ async fn patch_project_webhook(
 
         let (secret_to_store, revealed): (String, Option<String>) = if new_auth == "none" {
             (String::new(), None)
-        } else if current_secret.is_empty() || summary.generic_inbound_auth.eq_ignore_ascii_case("none")
+        } else if current_secret.is_empty()
+            || summary.generic_inbound_auth.eq_ignore_ascii_case("none")
         {
             let h = generate_inbound_secret_hash();
             (h.clone(), Some(h))
@@ -1747,12 +1756,8 @@ async fn rotate_project_webhook_inbound_secret(
     }
 
     let signing_secret = generate_inbound_secret_hash();
-    repo.update_registration_secret_hash(
-        project_id,
-        registration_id,
-        &signing_secret,
-    )
-    .await?;
+    repo.update_registration_secret_hash(project_id, registration_id, &signing_secret)
+        .await?;
 
     Ok(Json(RotateInboundSecretResponse { signing_secret }))
 }
@@ -1783,12 +1788,8 @@ async fn clear_project_webhook_inbound_secret(
     let summary = repo
         .get_registration_summary_for_project(project_id, registration_id)
         .await?;
-    repo.clear_registration_inbound_secret(
-        project_id,
-        registration_id,
-        &summary.provider,
-    )
-    .await?;
+    repo.clear_registration_inbound_secret(project_id, registration_id, &summary.provider)
+        .await?;
 
     let summary = repo
         .get_registration_summary_for_project(project_id, registration_id)
@@ -1852,9 +1853,7 @@ async fn create_webhook_target(
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
 
-    let pipeline = PipelineRepo::new(state.db())
-        .get(req.pipeline_id)
-        .await?;
+    let pipeline = PipelineRepo::new(state.db()).get(req.pipeline_id).await?;
     if pipeline.project_id != project_id {
         return Err(ApiError::unprocessable(
             "pipeline does not belong to this project",

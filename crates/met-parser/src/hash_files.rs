@@ -160,13 +160,13 @@ fn hash_single_file(
 /// Extracts the glob pattern from expressions like `hashFiles('**/*.lock')`.
 pub fn parse_hash_files_expr(expr: &str) -> Option<&str> {
     let expr = expr.trim();
-    
+
     if !expr.starts_with("hashFiles(") || !expr.ends_with(')') {
         return None;
     }
 
     let inner = &expr[10..expr.len() - 1].trim();
-    
+
     let pattern = if (inner.starts_with('\'') && inner.ends_with('\''))
         || (inner.starts_with('"') && inner.ends_with('"'))
     {
@@ -186,8 +186,7 @@ pub fn evaluate_cache_key(
 ) -> String {
     let mut result = template.to_string();
 
-    let hash_pattern = regex::Regex::new(r#"hashFiles\(['"]([^'"]+)['"]\)"#)
-        .expect("valid regex");
+    let hash_pattern = regex::Regex::new(r#"hashFiles\(['"]([^'"]+)['"]\)"#).expect("valid regex");
 
     for cap in hash_pattern.captures_iter(template) {
         let full_match = cap.get(0).unwrap().as_str();
@@ -196,8 +195,7 @@ pub fn evaluate_cache_key(
         result = result.replace(full_match, &hash);
     }
 
-    let var_pattern = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
-        .expect("valid regex");
+    let var_pattern = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").expect("valid regex");
 
     for cap in var_pattern.captures_iter(template) {
         let full_match = cap.get(0).unwrap().as_str();
@@ -228,7 +226,7 @@ mod tests {
 
     fn create_test_files(dir: &Path) {
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        
+
         std::fs::write(dir.join("Cargo.lock"), b"lock file content").unwrap();
         std::fs::write(dir.join("Cargo.toml"), b"toml file content").unwrap();
         std::fs::write(dir.join("src/main.rs"), b"fn main() {}").unwrap();

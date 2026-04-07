@@ -7,8 +7,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{ArtifactId, RunId};
-use met_store::repos::RunRepo;
 use met_store::StoreError;
+use met_store::repos::RunRepo;
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing::instrument;

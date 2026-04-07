@@ -166,10 +166,7 @@ pub async fn emit_new_network_flows(
         }
 
         let (binary_path, binary_sha256) = if let Some((p, s)) = exe_by_pid.get(&pid) {
-            (
-                Some(redact_path(&p.to_string_lossy())),
-                Some(s.as_str()),
-            )
+            (Some(redact_path(&p.to_string_lossy())), Some(s.as_str()))
         } else {
             (None, None)
         };
@@ -189,7 +186,8 @@ pub async fn emit_new_network_flows(
             "binary_sha256": binary_sha256,
         });
 
-        pipe.send_telemetry(LogStream::NetworkFlow, &v.to_string()).await?;
+        pipe.send_telemetry(LogStream::NetworkFlow, &v.to_string())
+            .await?;
     }
 
     Ok(())

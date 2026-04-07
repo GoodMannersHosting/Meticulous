@@ -79,38 +79,38 @@ impl<'a> AgentRepo<'a> {
             AGENT_ROW_SELECT = AGENT_ROW_SELECT
         );
         let registered = sqlx::query_as::<_, Agent>(&sql)
-        .bind(agent.id.as_uuid())
-        .bind(agent.org_id.as_uuid())
-        .bind(&agent.name)
-        .bind(&agent.status)
-        .bind(&agent.pool)
-        .bind(&agent.pool_tags)
-        .bind(&agent.tags)
-        .bind(&agent.capabilities)
-        .bind(&agent.os)
-        .bind(&agent.arch)
-        .bind(&agent.version)
-        .bind(&agent.ip_address)
-        .bind(agent.max_jobs)
-        .bind(agent.running_jobs)
-        .bind(agent.last_heartbeat_at)
-        .bind(agent.created_at)
-        .bind(&agent.environment_type)
-        .bind(&agent.kernel_version)
-        .bind(&agent.public_ips)
-        .bind(&agent.private_ips)
-        .bind(agent.ntp_synchronized)
-        .bind(&agent.container_runtime)
-        .bind(&agent.container_runtime_version)
-        .bind(&agent.x509_public_key)
-        .bind(agent.join_token_id.map(|j| j.as_uuid()))
-        .bind(agent.jwt_expires_at)
-        .bind(agent.jwt_renewable)
-        .bind(agent.drain_missed_heartbeats)
-        .bind(agent.deregistered_at)
-        .bind(&agent.last_security_bundle)
-        .fetch_one(self.pool)
-        .await?;
+            .bind(agent.id.as_uuid())
+            .bind(agent.org_id.as_uuid())
+            .bind(&agent.name)
+            .bind(&agent.status)
+            .bind(&agent.pool)
+            .bind(&agent.pool_tags)
+            .bind(&agent.tags)
+            .bind(&agent.capabilities)
+            .bind(&agent.os)
+            .bind(&agent.arch)
+            .bind(&agent.version)
+            .bind(&agent.ip_address)
+            .bind(agent.max_jobs)
+            .bind(agent.running_jobs)
+            .bind(agent.last_heartbeat_at)
+            .bind(agent.created_at)
+            .bind(&agent.environment_type)
+            .bind(&agent.kernel_version)
+            .bind(&agent.public_ips)
+            .bind(&agent.private_ips)
+            .bind(agent.ntp_synchronized)
+            .bind(&agent.container_runtime)
+            .bind(&agent.container_runtime_version)
+            .bind(&agent.x509_public_key)
+            .bind(agent.join_token_id.map(|j| j.as_uuid()))
+            .bind(agent.jwt_expires_at)
+            .bind(agent.jwt_renewable)
+            .bind(agent.drain_missed_heartbeats)
+            .bind(agent.deregistered_at)
+            .bind(&agent.last_security_bundle)
+            .fetch_one(self.pool)
+            .await?;
 
         Ok(registered)
     }
@@ -570,12 +570,11 @@ impl<'a> AgentRepo<'a> {
         .await?;
 
         if result.rows_affected() == 0 {
-            let exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)",
-            )
-            .bind(id.as_uuid())
-            .fetch_one(self.pool)
-            .await?;
+            let exists =
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)")
+                    .bind(id.as_uuid())
+                    .fetch_one(self.pool)
+                    .await?;
 
             if exists {
                 return Err(StoreError::Constraint(

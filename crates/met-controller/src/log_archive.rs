@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use met_core::ids::{JobRunId, RunId, StepRunId};
-use met_logging::{gunzip_jsonl, gzip_jsonl, job_run_archive_key, ArchivedLogLine};
+use met_logging::{ArchivedLogLine, gunzip_jsonl, gzip_jsonl, job_run_archive_key};
 use met_objstore::{ObjectKey, ObjectStore};
-use met_store::repos::{project_run_for_job_run, LazyCacheLine, LogCacheRepo};
 use met_store::PgPool;
+use met_store::repos::{LazyCacheLine, LogCacheRepo, project_run_for_job_run};
 
 use crate::error::ControllerError;
 use sha2::{Digest, Sha256};
@@ -73,11 +73,7 @@ pub async fn finalize_job_logs(
     };
 
     let checksum = hex::encode(Sha256::digest(&payload));
-    let key_str = job_run_archive_key(
-        project_id.as_uuid(),
-        run_id.as_uuid(),
-        job_run_id.as_uuid(),
-    );
+    let key_str = job_run_archive_key(project_id.as_uuid(), run_id.as_uuid(), job_run_id.as_uuid());
     let key = ObjectKey::new(&key_str);
 
     if let Err(e) = store
@@ -135,10 +131,9 @@ pub async fn rehydrate_job_logs_from_store(
     };
 
     let key = ObjectKey::new(archive.storage_key.as_str());
-    let body = store
-        .get_object(&key)
-        .await
-        .map_err(|e| ControllerError::Internal(format!("object store get for log rehydrate: {e}")))?;
+    let body = store.get_object(&key).await.map_err(|e| {
+        ControllerError::Internal(format!("object store get for log rehydrate: {e}"))
+    })?;
 
     if let Some(expected) = archive.sha256_checksum.as_deref() {
         let actual = hex::encode(Sha256::digest(&body.body));
@@ -149,9 +144,8 @@ pub async fn rehydrate_job_logs_from_store(
         }
     }
 
-    let lines = gunzip_jsonl(&body.body).map_err(|e| {
-        ControllerError::Internal(format!("log archive decode: {e}"))
-    })?;
+    let lines = gunzip_jsonl(&body.body)
+        .map_err(|e| ControllerError::Internal(format!("log archive decode: {e}")))?;
 
     let lazy: Vec<LazyCacheLine> = lines
         .into_iter()

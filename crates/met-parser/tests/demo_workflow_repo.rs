@@ -9,7 +9,10 @@ async fn demo_cross_platform_pipeline_parses() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../meticulous-ci-workflows");
     let yaml_path = repo.join(".stable/demo-cross-platform.yaml");
     if !yaml_path.is_file() {
-        eprintln!("skip demo_cross_platform_pipeline_parses: {} not found", yaml_path.display());
+        eprintln!(
+            "skip demo_cross_platform_pipeline_parses: {} not found",
+            yaml_path.display()
+        );
         return;
     }
     let yaml = std::fs::read_to_string(&yaml_path).expect("read demo yaml");
@@ -30,8 +33,14 @@ async fn demo_cross_platform_pipeline_parses() {
     let mac_job = ir.jobs.iter().find(|j| {
         matches!(j.pool_selector.required_tags.get("os"), Some(TagValue::String(s)) if s == "macos")
     });
-    assert!(linux_job.is_some(), "expected a job with runs-on tag os: linux");
-    assert!(mac_job.is_some(), "expected a job with runs-on tag os: macos");
+    assert!(
+        linux_job.is_some(),
+        "expected a job with runs-on tag os: linux"
+    );
+    assert!(
+        mac_job.is_some(),
+        "expected a job with runs-on tag os: macos"
+    );
 }
 
 #[tokio::test]

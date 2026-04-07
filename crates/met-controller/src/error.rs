@@ -83,9 +83,7 @@ impl From<ControllerError> for tonic::Status {
             ControllerError::InvalidJoinToken
             | ControllerError::JoinTokenExpired
             | ControllerError::JoinTokenExhausted
-            | ControllerError::JoinTokenRevoked => {
-                tonic::Status::unauthenticated(err.to_string())
-            }
+            | ControllerError::JoinTokenRevoked => tonic::Status::unauthenticated(err.to_string()),
             ControllerError::AgentNotFound(_) => tonic::Status::not_found(err.to_string()),
             ControllerError::AgentAlreadyRegistered(_) => {
                 tonic::Status::already_exists(err.to_string())

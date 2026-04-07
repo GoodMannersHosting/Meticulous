@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use met_core::ids::JobRunId;
 use met_core::models::AgentStatus;
-use met_store::repos::{AgentRepo, JobRunRepo};
 use met_store::PgPool;
+use met_store::repos::{AgentRepo, JobRunRepo};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -90,7 +90,7 @@ impl HealthMonitor {
                         job_run_id = %job_run_id,
                         "requeuing job from dead agent"
                     );
-                    
+
                     // Requeue the job via NATS
                     if let Err(e) = self.requeue_job(agent.org_id, job_run_id).await {
                         error!(

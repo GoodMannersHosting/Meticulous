@@ -59,7 +59,10 @@ impl<'a> RoleRepo<'a> {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(StoreError::not_found("user_role", format!("{user_id}/{role:?}")));
+            return Err(StoreError::not_found(
+                "user_role",
+                format!("{user_id}/{role:?}"),
+            ));
         }
 
         Ok(())
@@ -83,7 +86,12 @@ impl<'a> RoleRepo<'a> {
     }
 
     /// Get all users with a specific role.
-    pub async fn get_users_with_role(&self, role: PermissionRole, limit: i64, offset: i64) -> Result<Vec<UserRole>> {
+    pub async fn get_users_with_role(
+        &self,
+        role: PermissionRole,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<UserRole>> {
         let roles = sqlx::query_as::<_, UserRole>(
             r#"
             SELECT user_id, role, granted_by, granted_at
@@ -156,10 +164,16 @@ impl<'a> RoleRepo<'a> {
     /// Get aggregated permissions for a user based on their roles.
     pub async fn get_permissions(&self, user_id: UserId) -> Result<Vec<String>> {
         let roles = self.get_user_roles(user_id).await?;
-        
+
         let mut permissions = Vec::new();
         for user_role in roles {
-            permissions.extend(user_role.role.permissions().iter().map(|s| (*s).to_string()));
+            permissions.extend(
+                user_role
+                    .role
+                    .permissions()
+                    .iter()
+                    .map(|s| (*s).to_string()),
+            );
         }
 
         // Deduplicate

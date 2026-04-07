@@ -8,16 +8,16 @@
 //! 5. DAG construction
 //! 6. IR emission
 
-use crate::dag::{build_dag, DagNode};
+use crate::dag::{DagNode, build_dag};
 use crate::error::{ErrorCode, ParseDiagnostics, ParseError, SourceLocation};
 use crate::ir::{
-    defaults, CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, PipelineIR,
-    PoolSelector, RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand,
-    StepIR, TagTrigger, TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef,
+    CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, PipelineIR, PoolSelector,
+    RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
+    TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, defaults,
 };
 use crate::schema::{
-    RawCacheConfig, RawHealthCheck, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy,
-    RawSecretRef, RawService, RawStep, RawWorkflowDef, RawWorkflowInvocation,
+    RawCacheConfig, RawHealthCheck, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef,
+    RawService, RawStep, RawWorkflowDef, RawWorkflowInvocation,
 };
 use crate::span::{SpanTracker, SpannedYamlParser};
 use crate::variable::VariableContext;
@@ -32,7 +32,9 @@ use tracing::{debug, instrument};
 /// Used by the controller to load secret names for job key exchange; workflow providers are not
 /// required because secrets are declared only on the pipeline root.
 #[must_use]
-pub fn secret_refs_from_raw_secrets(secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
+pub fn secret_refs_from_raw_secrets(
+    secrets: &IndexMap<String, RawSecretRef>,
+) -> IndexMap<String, SecretRef> {
     secrets
         .iter()
         .filter_map(|(name, raw)| {
@@ -324,7 +326,10 @@ impl<'a> PipelineParser<'a> {
             if !is_valid_id(name) {
                 diagnostics.error_at(
                     ErrorCode::E2006,
-                    format!("invalid secret name '{}': must be alphanumeric with underscores", name),
+                    format!(
+                        "invalid secret name '{}': must be alphanumeric with underscores",
+                        name
+                    ),
                     self.get_location(name),
                 );
             }
@@ -406,6 +411,45 @@ impl<'a> PipelineParser<'a> {
         resolved
     }
 
+    /// Workflow input names/values for validating `${{ inputs.* }}` inside the workflow body.
+    ///
+    /// Includes declared inputs with defaults even when the pipeline omits them (optional inputs).
+    fn workflow_inputs_for_validation(
+        invocation: &RawWorkflowInvocation,
+        definition: &RawWorkflowDef,
+    ) -> IndexMap<String, String> {
+        fn yaml_to_string(v: &serde_yaml::Value) -> String {
+            match v {
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Bool(b) => b.to_string(),
+                serde_yaml::Value::Number(n) => n.to_string(),
+                serde_yaml::Value::Null => String::new(),
+                other => serde_yaml::to_string(other).unwrap_or_default(),
+            }
+        }
+
+        let mut inputs = IndexMap::new();
+
+        for (name, def) in &definition.inputs {
+            let value = if let Some(v) = invocation.inputs.get(name) {
+                yaml_to_string(v)
+            } else if let Some(d) = &def.default {
+                yaml_to_string(d)
+            } else {
+                String::new()
+            };
+            inputs.insert(name.clone(), value);
+        }
+
+        for (name, v) in &invocation.inputs {
+            if !inputs.contains_key(name) {
+                inputs.insert(name.clone(), yaml_to_string(v));
+            }
+        }
+
+        inputs
+    }
+
     /// Build variable context for validation.
     fn build_variable_context(&self, pipeline: &RawPipeline) -> VariableContext {
         let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
@@ -441,19 +485,8 @@ impl<'a> PipelineParser<'a> {
         for (idx, resolved) in workflows.iter().enumerate() {
             let workflow_location = self.get_workflow_location(idx, &resolved.invocation.id);
 
-            // Build context with workflow inputs
-            let inputs: IndexMap<String, String> = resolved
-                .invocation
-                .inputs
-                .iter()
-                .map(|(k, v)| {
-                    let value = match v {
-                        serde_yaml::Value::String(s) => s.clone(),
-                        other => serde_yaml::to_string(other).unwrap_or_default(),
-                    };
-                    (k.clone(), value)
-                })
-                .collect();
+            let inputs =
+                Self::workflow_inputs_for_validation(&resolved.invocation, &resolved.definition);
 
             let workflow_ctx = VariableContext::new(ctx.vars.clone(), ctx.secrets.clone())
                 .with_inputs(inputs)
@@ -464,7 +497,11 @@ impl<'a> PipelineParser<'a> {
             for (name, value) in &resolved.invocation.inputs {
                 if let serde_yaml::Value::String(s) = value {
                     let loc = self.get_location(name).clone();
-                    let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                    let loc = if loc.line == 0 {
+                        workflow_location.clone()
+                    } else {
+                        loc
+                    };
                     crate::variable::validate_refs(s, &workflow_ctx, diagnostics, loc);
                 }
             }
@@ -472,21 +509,33 @@ impl<'a> PipelineParser<'a> {
             // Validate condition
             if let Some(condition) = &resolved.invocation.condition {
                 let loc = self.get_location("condition");
-                let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                let loc = if loc.line == 0 {
+                    workflow_location.clone()
+                } else {
+                    loc
+                };
                 crate::variable::validate_refs(condition, &workflow_ctx, diagnostics, loc);
             }
 
             // Validate cache key
             if let Some(cache) = &resolved.invocation.cache {
                 let loc = self.get_location("cache");
-                let loc = if loc.line == 0 { workflow_location.clone() } else { loc };
+                let loc = if loc.line == 0 {
+                    workflow_location.clone()
+                } else {
+                    loc
+                };
                 crate::variable::validate_refs(&cache.key, &workflow_ctx, diagnostics, loc);
             }
 
             // Validate steps in workflow definition
             for job in &resolved.definition.jobs {
                 let job_location = self.get_location(&job.id);
-                let job_location = if job_location.line == 0 { workflow_location.clone() } else { job_location };
+                let job_location = if job_location.line == 0 {
+                    workflow_location.clone()
+                } else {
+                    job_location
+                };
 
                 for step in &job.steps {
                     let step_location = step
@@ -494,7 +543,11 @@ impl<'a> PipelineParser<'a> {
                         .as_ref()
                         .map(|id| self.get_location(id))
                         .unwrap_or_else(|| job_location.clone());
-                    let step_location = if step_location.line == 0 { job_location.clone() } else { step_location };
+                    let step_location = if step_location.line == 0 {
+                        job_location.clone()
+                    } else {
+                        step_location
+                    };
 
                     // Validate run command
                     if let Some(run) = &step.run {
@@ -508,7 +561,12 @@ impl<'a> PipelineParser<'a> {
 
                     // Validate env values
                     for value in step.env.values() {
-                        crate::variable::validate_refs(value, &workflow_ctx, diagnostics, step_location.clone());
+                        crate::variable::validate_refs(
+                            value,
+                            &workflow_ctx,
+                            diagnostics,
+                            step_location.clone(),
+                        );
                     }
                 }
             }
@@ -538,13 +596,14 @@ impl<'a> PipelineParser<'a> {
     ) -> PipelineIR {
         let triggers = self.convert_triggers(&pipeline.triggers);
         let secret_refs = self.convert_secrets(&pipeline.secrets);
-        let default_pool = pipeline.runs_on.as_ref().map(|p| self.convert_pool_selector(p));
+        let default_pool = pipeline
+            .runs_on
+            .as_ref()
+            .map(|p| self.convert_pool_selector(p));
 
         let mut jobs: Vec<JobIR> = workflows
             .into_iter()
-            .flat_map(|w| {
-                self.expand_workflow_to_jobs(w, default_pool.clone(), pipeline)
-            })
+            .flat_map(|w| self.expand_workflow_to_jobs(w, default_pool.clone(), pipeline))
             .collect();
 
         expand_cross_invocation_depends_on(&mut jobs);
@@ -619,7 +678,10 @@ impl<'a> PipelineParser<'a> {
     }
 
     /// Convert raw secrets to IR.
-    fn convert_secrets(&self, secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
+    fn convert_secrets(
+        &self,
+        secrets: &IndexMap<String, RawSecretRef>,
+    ) -> IndexMap<String, SecretRef> {
         secret_refs_from_raw_secrets(secrets)
     }
 
@@ -733,12 +795,9 @@ impl<'a> PipelineParser<'a> {
                     pool_selector: pool,
                     steps,
                     services,
-                    timeout: job.timeout.unwrap_or(
-                        workflow
-                            .invocation
-                            .timeout
-                            .unwrap_or(defaults::JOB_TIMEOUT),
-                    ),
+                    timeout: job
+                        .timeout
+                        .unwrap_or(workflow.invocation.timeout.unwrap_or(defaults::JOB_TIMEOUT)),
                     retry_policy: job
                         .retry
                         .as_ref()
@@ -758,6 +817,7 @@ impl<'a> PipelineParser<'a> {
                     affinity_group,
                     share_workspace,
                     workflow_invocation_id: Some(workflow.invocation.id.clone()),
+                    workflow_invocation_name: Some(workflow.invocation.name.clone()),
                 }
             })
             .collect()
@@ -765,10 +825,7 @@ impl<'a> PipelineParser<'a> {
 
     /// Convert a raw step to IR.
     fn convert_step(&self, step: &RawStep, idx: usize) -> StepIR {
-        let step_id = step
-            .id
-            .clone()
-            .unwrap_or_else(|| format!("step_{}", idx));
+        let step_id = step.id.clone().unwrap_or_else(|| format!("step_{}", idx));
 
         let command = if let Some(run) = &step.run {
             let shell = step
@@ -842,17 +899,33 @@ impl<'a> PipelineParser<'a> {
     ) -> IndexMap<String, String> {
         let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
         let wf_ids: HashSet<String> = pipeline.workflows.iter().map(|w| w.id.clone()).collect();
-        let base_ctx = VariableContext::new(pipeline.vars.clone(), secrets).with_workflow_invocations(wf_ids);
-        workflow
-            .invocation
-            .inputs
-            .iter()
-            .map(|(k, v)| {
+        let base_ctx =
+            VariableContext::new(pipeline.vars.clone(), secrets).with_workflow_invocations(wf_ids);
+
+        // Must include declared workflow defaults (e.g. buildx_platform) when the pipeline omits
+        // them — otherwise `${{ inputs.* }}` in the catalog body is left for bash and triggers
+        // "bad substitution" on `${{`.
+        let mut inputs = IndexMap::new();
+        for (name, def) in &workflow.definition.inputs {
+            let value = if let Some(v) = workflow.invocation.inputs.get(name) {
+                let raw = Self::invocation_yaml_to_string(v);
+                crate::variable::interpolate(&raw, &base_ctx)
+            } else if let Some(d) = &def.default {
+                let raw = Self::invocation_yaml_to_string(d);
+                crate::variable::interpolate(&raw, &base_ctx)
+            } else {
+                String::new()
+            };
+            inputs.insert(name.clone(), value);
+        }
+        for (name, v) in &workflow.invocation.inputs {
+            if !inputs.contains_key(name) {
                 let raw = Self::invocation_yaml_to_string(v);
                 let resolved = crate::variable::interpolate(&raw, &base_ctx);
-                (k.clone(), resolved)
-            })
-            .collect()
+                inputs.insert(name.clone(), resolved);
+            }
+        }
+        inputs
     }
 
     fn invocation_yaml_to_string(v: &serde_yaml::Value) -> String {
@@ -897,7 +970,10 @@ impl<'a> PipelineParser<'a> {
             ports: service.ports.clone(),
             env: service.env.clone(),
             command: service.command.clone(),
-            health_check: service.health_check.as_ref().map(|h| self.convert_health_check(h)),
+            health_check: service
+                .health_check
+                .as_ref()
+                .map(|h| self.convert_health_check(h)),
         }
     }
 
@@ -986,11 +1062,11 @@ fn expand_cross_invocation_depends_on(jobs: &mut [JobIR]) {
 fn make_job_id(s: &str) -> JobId {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     let hash = hasher.finish();
-    
+
     // Create a UUID-like value from the hash (using v4 format with custom bits)
     let bytes = [
         (hash >> 56) as u8,
@@ -1010,7 +1086,7 @@ fn make_job_id(s: &str) -> JobId {
         (hash >> 8) as u8,
         hash as u8,
     ];
-    
+
     JobId::from_uuid(uuid::Uuid::from_bytes(bytes))
 }
 
@@ -1018,11 +1094,11 @@ fn make_job_id(s: &str) -> JobId {
 fn make_step_id(s: &str) -> StepId {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     let hash = hasher.finish();
-    
+
     let bytes = [
         (hash >> 56) as u8,
         (hash >> 48) as u8,
@@ -1041,7 +1117,7 @@ fn make_step_id(s: &str) -> StepId {
         (hash >> 8) as u8,
         hash as u8,
     ];
-    
+
     StepId::from_uuid(uuid::Uuid::from_bytes(bytes))
 }
 
@@ -1063,6 +1139,7 @@ fn is_valid_id(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::RawJob;
     use crate::workflow::MockWorkflowProvider;
 
     fn mock_workflow() -> RawWorkflowDef {
@@ -1140,11 +1217,7 @@ workflows:
 "#;
 
         let mut provider = MockWorkflowProvider::new();
-        provider.add_workflow(
-            crate::ir::WorkflowScope::Global,
-            "test",
-            mock_workflow(),
-        );
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "test", mock_workflow());
 
         let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
@@ -1173,11 +1246,7 @@ workflows:
 "#;
 
         let mut provider = MockWorkflowProvider::new();
-        provider.add_workflow(
-            crate::ir::WorkflowScope::Global,
-            "test",
-            mock_workflow(),
-        );
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "test", mock_workflow());
 
         let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
@@ -1209,11 +1278,7 @@ workflows:
 "#;
 
         let mut provider = MockWorkflowProvider::new();
-        provider.add_workflow(
-            crate::ir::WorkflowScope::Global,
-            "test",
-            mock_workflow(),
-        );
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "test", mock_workflow());
 
         let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
@@ -1242,6 +1307,92 @@ workflows:
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.code == ErrorCode::E3001));
+    }
+
+    /// Optional workflow inputs with defaults must be considered defined when validating `${{
+    /// inputs.* }}` in the catalog workflow body, even if the pipeline omits them.
+    #[tokio::test]
+    async fn test_parse_undefined_input_uses_workflow_default() {
+        use crate::schema::RawInputDef;
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            "buildx_platform".to_string(),
+            RawInputDef {
+                input_type: "string".to_string(),
+                required: false,
+                default: Some(serde_yaml::Value::String("linux/amd64".to_string())),
+                description: None,
+            },
+        );
+
+        let wf = RawWorkflowDef {
+            name: "Buildx".to_string(),
+            description: None,
+            version: None,
+            inputs,
+            outputs: IndexMap::new(),
+            jobs: vec![RawJob {
+                name: "Push".to_string(),
+                id: "push".to_string(),
+                runs_on: None,
+                steps: vec![RawStep {
+                    name: "Docker".to_string(),
+                    id: Some("docker".to_string()),
+                    run: Some(
+                        r#"docker buildx build --platform "${{ inputs.buildx_platform }}" ."#
+                            .to_string(),
+                    ),
+                    shell: None,
+                    uses: None,
+                    action_inputs: IndexMap::new(),
+                    env: IndexMap::new(),
+                    working_directory: None,
+                    timeout: None,
+                    continue_on_error: false,
+                    outputs: IndexMap::new(),
+                }],
+                services: vec![],
+                depends_on: vec![],
+                condition: None,
+                timeout: None,
+                retry: None,
+            }],
+        };
+
+        let yaml = r#"
+name: Test Pipeline
+triggers:
+  manual: {}
+workflows:
+  - name: Image
+    id: image
+    workflow: global/docker-buildx
+"#;
+
+        let mut provider = MockWorkflowProvider::new();
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "docker-buildx", wf);
+
+        let mut parser = PipelineParser::new(&provider);
+        let result = parser.parse(yaml).await;
+        assert!(result.is_ok(), "parse error: {:?}", result.as_ref().err());
+        let ir = result.unwrap();
+        let script = ir.jobs[0]
+            .steps
+            .iter()
+            .find_map(|s| match &s.command {
+                crate::ir::StepCommand::Run { script, .. } => Some(script.as_str()),
+                _ => None,
+            })
+            .expect("run step");
+        assert!(
+            script.contains("--platform \"linux/amd64\""),
+            "optional input default must be interpolated for ${{ inputs.* }}: {script}"
+        );
+        assert!(
+            !script.contains("${{"),
+            "unsubstituted expressions must not reach the agent: {script}"
+        );
     }
 
     #[test]

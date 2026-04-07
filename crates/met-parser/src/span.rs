@@ -56,11 +56,11 @@ impl SpanTracker {
 
         for (line_num, line) in yaml.lines().enumerate() {
             let trimmed = line.trim();
-            
+
             if let Some(key) = extract_yaml_key(trimmed) {
                 let col = line.find(&key).unwrap_or(0) + 1;
                 let offset = line_offsets.get(line_num).copied().unwrap_or(0);
-                
+
                 let location = SourceLocation {
                     file: self.source_file.clone(),
                     line: line_num + 1,
@@ -68,7 +68,7 @@ impl SpanTracker {
                     offset,
                     length: key.len(),
                 };
-                
+
                 self.spans.insert(key, location);
             }
         }
@@ -81,12 +81,13 @@ impl SpanTracker {
 
     /// Get a source location with a fallback to unknown.
     pub fn get_span_or_unknown(&self, key: &str) -> SourceLocation {
-        self.spans.get(key).cloned().unwrap_or_else(|| {
-            SourceLocation {
+        self.spans
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| SourceLocation {
                 file: self.source_file.clone(),
                 ..Default::default()
-            }
-        })
+            })
     }
 
     /// Register a span for a key.
@@ -98,11 +99,11 @@ impl SpanTracker {
 /// Extract a YAML key from a line.
 fn extract_yaml_key(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    
+
     if trimmed.starts_with('#') || trimmed.starts_with('-') || trimmed.is_empty() {
         return None;
     }
-    
+
     if let Some(colon_pos) = trimmed.find(':') {
         let key = &trimmed[..colon_pos];
         let key = key.trim().trim_matches('"').trim_matches('\'');
@@ -110,7 +111,7 @@ fn extract_yaml_key(line: &str) -> Option<String> {
             return Some(key.to_string());
         }
     }
-    
+
     None
 }
 
@@ -140,18 +141,16 @@ impl SpannedYamlParser {
         yaml: &str,
     ) -> Result<(T, &SpanTracker), SpannedParseError> {
         self.tracker.extract_spans(yaml);
-        
+
         match serde_yaml::from_str(yaml) {
             Ok(value) => Ok((value, &self.tracker)),
             Err(e) => {
-                let location = e.location().map(|loc| {
-                    SourceLocation {
-                        file: self.tracker.source_file.clone(),
-                        line: loc.line(),
-                        column: loc.column(),
-                        offset: loc.index(),
-                        length: 1,
-                    }
+                let location = e.location().map(|loc| SourceLocation {
+                    file: self.tracker.source_file.clone(),
+                    line: loc.line(),
+                    column: loc.column(),
+                    offset: loc.index(),
+                    length: 1,
                 });
                 Err(SpannedParseError {
                     message: e.to_string(),
@@ -198,7 +197,7 @@ impl std::error::Error for SpannedParseError {}
 pub fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
     let mut col = 1;
-    
+
     for (i, c) in source.char_indices() {
         if i >= offset {
             break;
@@ -210,7 +209,7 @@ pub fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
             col += 1;
         }
     }
-    
+
     (line, col)
 }
 
@@ -218,7 +217,7 @@ pub fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
 pub fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize {
     let mut current_line = 1;
     let mut current_col = 1;
-    
+
     for (i, c) in source.char_indices() {
         if current_line == line && current_col == col {
             return i;
@@ -230,7 +229,7 @@ pub fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize {
             current_col += 1;
         }
     }
-    
+
     source.len()
 }
 
@@ -264,7 +263,7 @@ name: test
 id: abc123
 version: "1.0"
 "#;
-        
+
         let mut parser = SpannedYamlParser::with_file("test.yaml");
         let result = parser.parse::<serde_yaml::Value>(yaml);
 

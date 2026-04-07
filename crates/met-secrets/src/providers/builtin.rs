@@ -1,8 +1,8 @@
 //! Built-in encrypted secrets provider using AES-256-GCM envelope encryption.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng},
 };
 use async_trait::async_trait;
 use hkdf::Hkdf;
@@ -30,7 +30,10 @@ pub struct BuiltinConfig {
 
 impl Default for BuiltinConfig {
     fn default() -> Self {
-        Self { master_key: None, key_id: None }
+        Self {
+            master_key: None,
+            key_id: None,
+        }
     }
 }
 
@@ -64,7 +67,9 @@ pub struct BuiltinSecretsProvider {
 
 impl std::fmt::Debug for DerivedKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DerivedKey").field("key_id", &self.key_id).finish()
+        f.debug_struct("DerivedKey")
+            .field("key_id", &self.key_id)
+            .finish()
     }
 }
 
@@ -80,14 +85,14 @@ struct StoredSecret {
 impl BuiltinSecretsProvider {
     pub async fn new(config: BuiltinConfig) -> Result<Self> {
         let derived_key = if let Some(master_key_b64) = &config.master_key {
-            let master_key_bytes = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                master_key_b64,
-            )
-            .map_err(|e| SecretsError::Crypto(format!("invalid master key base64: {e}")))?;
+            let master_key_bytes =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, master_key_b64)
+                    .map_err(|e| SecretsError::Crypto(format!("invalid master key base64: {e}")))?;
 
             if master_key_bytes.len() < 16 {
-                return Err(SecretsError::Crypto("master key too short (min 16 bytes)".into()));
+                return Err(SecretsError::Crypto(
+                    "master key too short (min 16 bytes)".into(),
+                ));
             }
 
             let hk = Hkdf::<Sha256>::new(None, &master_key_bytes);
@@ -115,9 +120,10 @@ impl BuiltinSecretsProvider {
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, [u8; NONCE_SIZE], String)> {
-        let dk = self.derived_key.as_ref().ok_or_else(|| {
-            SecretsError::Crypto("no encryption key configured".into())
-        })?;
+        let dk = self
+            .derived_key
+            .as_ref()
+            .ok_or_else(|| SecretsError::Crypto("no encryption key configured".into()))?;
 
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         OsRng.fill_bytes(&mut nonce_bytes);
@@ -125,31 +131,40 @@ impl BuiltinSecretsProvider {
 
         let cipher = Aes256Gcm::new_from_slice(dk.key.as_ref())
             .map_err(|e| SecretsError::Crypto(format!("AES init: {e}")))?;
-        let ciphertext = cipher.encrypt(nonce, plaintext)
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
             .map_err(|e| SecretsError::Crypto(format!("encryption failed: {e}")))?;
 
         Ok((ciphertext, nonce_bytes, dk.key_id.clone()))
     }
 
     fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; NONCE_SIZE]) -> Result<Zeroizing<Vec<u8>>> {
-        let dk = self.derived_key.as_ref().ok_or_else(|| {
-            SecretsError::Crypto("no encryption key configured".into())
-        })?;
+        let dk = self
+            .derived_key
+            .as_ref()
+            .ok_or_else(|| SecretsError::Crypto("no encryption key configured".into()))?;
 
         let n = Nonce::from_slice(nonce);
         let cipher = Aes256Gcm::new_from_slice(dk.key.as_ref())
             .map_err(|e| SecretsError::Crypto(format!("AES init: {e}")))?;
-        let plaintext = cipher.decrypt(n, ciphertext)
+        let plaintext = cipher
+            .decrypt(n, ciphertext)
             .map_err(|e| SecretsError::Crypto(format!("decryption failed: {e}")))?;
 
         Ok(Zeroizing::new(plaintext))
     }
 
     /// Rotate to a new master key. Re-encrypts all stored secrets.
-    pub async fn rotate_master_key(&mut self, new_master_key_b64: &str, new_key_id: &str) -> Result<u64> {
+    pub async fn rotate_master_key(
+        &mut self,
+        new_master_key_b64: &str,
+        new_key_id: &str,
+    ) -> Result<u64> {
         let new_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD, new_master_key_b64,
-        ).map_err(|e| SecretsError::Crypto(format!("invalid new key: {e}")))?;
+            &base64::engine::general_purpose::STANDARD,
+            new_master_key_b64,
+        )
+        .map_err(|e| SecretsError::Crypto(format!("invalid new key: {e}")))?;
 
         let hk = Hkdf::<Sha256>::new(None, &new_bytes);
         let mut new_key = Zeroizing::new([0u8; 32]);
@@ -166,7 +181,8 @@ impl BuiltinSecretsProvider {
             let nonce = Nonce::from_slice(&nonce_bytes);
             let cipher = Aes256Gcm::new_from_slice(new_key.as_ref())
                 .map_err(|e| SecretsError::Crypto(format!("AES init: {e}")))?;
-            let new_ct = cipher.encrypt(nonce, plaintext.as_ref())
+            let new_ct = cipher
+                .encrypt(nonce, plaintext.as_ref())
                 .map_err(|e| SecretsError::Crypto(format!("re-encryption: {e}")))?;
             stored.encrypted_value = new_ct;
             stored.nonce = nonce_bytes;
@@ -190,23 +206,39 @@ impl BuiltinSecretsProvider {
 impl SecretsProvider for BuiltinSecretsProvider {
     async fn get_secret(&self, path: &str) -> Result<SecretValue> {
         let store = self.store.read().await;
-        let stored = store.get(path).ok_or_else(|| SecretsError::not_found(path))?;
+        let stored = store
+            .get(path)
+            .ok_or_else(|| SecretsError::not_found(path))?;
         let plaintext = self.decrypt(&stored.encrypted_value, &stored.nonce)?;
-        let value = String::from_utf8(plaintext.to_vec())
-            .map_err(|e| SecretsError::InvalidFormat { message: format!("UTF-8: {e}") })?;
+        let value =
+            String::from_utf8(plaintext.to_vec()).map_err(|e| SecretsError::InvalidFormat {
+                message: format!("UTF-8: {e}"),
+            })?;
         Ok(SecretValue::with_metadata(value, stored.metadata.clone()))
     }
 
     async fn list_secrets(&self, prefix: &str) -> Result<Vec<String>> {
         let store = self.store.read().await;
-        Ok(store.keys().filter(|k| k.starts_with(prefix)).cloned().collect())
+        Ok(store
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect())
     }
 
-    fn provider_type(&self) -> ProviderType { ProviderType::Builtin }
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::Builtin
+    }
 
     async fn health_check(&self) -> Result<()> {
-        if self.derived_key.is_some() { Ok(()) }
-        else { Err(SecretsError::provider_unavailable("builtin", "no encryption key")) }
+        if self.derived_key.is_some() {
+            Ok(())
+        } else {
+            Err(SecretsError::provider_unavailable(
+                "builtin",
+                "no encryption key",
+            ))
+        }
     }
 }
 
@@ -221,16 +253,25 @@ impl SecretsWriter for BuiltinSecretsProvider {
             created_at: Some(chrono::Utc::now()),
             ..Default::default()
         };
-        store.insert(path.to_string(), StoredSecret {
-            encrypted_value: encrypted, nonce, key_id, version, metadata: metadata.clone(),
-        });
+        store.insert(
+            path.to_string(),
+            StoredSecret {
+                encrypted_value: encrypted,
+                nonce,
+                key_id,
+                version,
+                metadata: metadata.clone(),
+            },
+        );
         debug!(path, version, "stored encrypted secret");
         Ok(metadata)
     }
 
     async fn delete_secret(&self, path: &str) -> Result<()> {
         let mut store = self.store.write().await;
-        store.remove(path).ok_or_else(|| SecretsError::not_found(path))?;
+        store
+            .remove(path)
+            .ok_or_else(|| SecretsError::not_found(path))?;
         Ok(())
     }
 }
@@ -240,7 +281,10 @@ mod tests {
     use super::*;
 
     fn test_master_key() -> String {
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"0123456789abcdef0123456789abcdef")
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"0123456789abcdef0123456789abcdef",
+        )
     }
 
     #[tokio::test]
@@ -248,7 +292,9 @@ mod tests {
         let provider = BuiltinSecretsProvider::new(BuiltinConfig {
             master_key: Some(test_master_key()),
             key_id: Some("v1".into()),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let secret = SecretValue::new("my-secret-value");
         provider.put_secret("app/api-key", &secret).await.unwrap();
@@ -262,7 +308,9 @@ mod tests {
         let mut provider = BuiltinSecretsProvider::new(BuiltinConfig {
             master_key: Some(test_master_key()),
             key_id: Some("v1".into()),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let secret = SecretValue::new("rotate-me");
         provider.put_secret("test/secret", &secret).await.unwrap();
@@ -283,7 +331,9 @@ mod tests {
         let provider = BuiltinSecretsProvider::new(BuiltinConfig {
             master_key: Some(test_master_key()),
             ..Default::default()
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert!(provider.get_secret("nonexistent").await.is_err());
     }
 
@@ -292,15 +342,22 @@ mod tests {
         let provider = BuiltinSecretsProvider::new(BuiltinConfig {
             master_key: Some(test_master_key()),
             ..Default::default()
-        }).await.unwrap();
-        provider.put_secret("to-delete", &SecretValue::new("val")).await.unwrap();
+        })
+        .await
+        .unwrap();
+        provider
+            .put_secret("to-delete", &SecretValue::new("val"))
+            .await
+            .unwrap();
         provider.delete_secret("to-delete").await.unwrap();
         assert!(provider.get_secret("to-delete").await.is_err());
     }
 
     #[tokio::test]
     async fn test_no_key_fails() {
-        let provider = BuiltinSecretsProvider::new(BuiltinConfig::default()).await.unwrap();
+        let provider = BuiltinSecretsProvider::new(BuiltinConfig::default())
+            .await
+            .unwrap();
         assert!(provider.health_check().await.is_err());
     }
 }

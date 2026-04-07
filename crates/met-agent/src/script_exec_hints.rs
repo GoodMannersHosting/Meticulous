@@ -252,7 +252,12 @@ trivy version
             total_processes_spawned: 1,
             execution_tree_depth: 1,
         };
-        merge_command_hints_into_metadata("curl -V", "s1", "srun_00000000-0000-0000-0000-000000000001", &mut meta);
+        merge_command_hints_into_metadata(
+            "curl -V",
+            "s1",
+            "srun_00000000-0000-0000-0000-000000000001",
+            &mut meta,
+        );
         assert_eq!(meta.executed_binaries.len(), 1);
     }
 }

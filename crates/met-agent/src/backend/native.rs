@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info};
 
-use super::{poll_watcher_emit_telemetry, ExecutionBackend, StepResult, StepSpec};
+use super::{ExecutionBackend, StepResult, StepSpec, poll_watcher_emit_telemetry};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
 use crate::step_log::StepLogPipe;
@@ -43,17 +43,26 @@ impl NativeBackend {
 
         if cfg!(windows) {
             if shell == "cmd" || shell.ends_with("cmd.exe") {
-                (shell.to_string(), vec!["/C".to_string(), step.command.clone()])
+                (
+                    shell.to_string(),
+                    vec!["/C".to_string(), step.command.clone()],
+                )
             } else if shell == "powershell" || shell.ends_with("powershell.exe") {
                 (
                     shell.to_string(),
                     vec!["-Command".to_string(), step.command.clone()],
                 )
             } else {
-                (shell.to_string(), vec!["-c".to_string(), step.command.clone()])
+                (
+                    shell.to_string(),
+                    vec!["-c".to_string(), step.command.clone()],
+                )
             }
         } else {
-            (shell.to_string(), vec!["-c".to_string(), step.command.clone()])
+            (
+                shell.to_string(),
+                vec!["-c".to_string(), step.command.clone()],
+            )
         }
     }
 }
@@ -153,6 +162,10 @@ impl ExecutionBackend for NativeBackend {
         // Set environment - only pass explicitly declared variables
         command.env_clear();
 
+        // Non-interactive defaults: git/SSH must not open /dev/tty for credentials (stdin is already null).
+        command.env("GIT_TERMINAL_PROMPT", "0");
+        command.env("CI", "true");
+
         // Add minimal required environment
         #[cfg(unix)]
         {
@@ -163,7 +176,10 @@ impl ExecutionBackend for NativeBackend {
         #[cfg(windows)]
         {
             command.env("PATH", std::env::var("PATH").unwrap_or_default());
-            command.env("SYSTEMROOT", std::env::var("SYSTEMROOT").unwrap_or_default());
+            command.env(
+                "SYSTEMROOT",
+                std::env::var("SYSTEMROOT").unwrap_or_default(),
+            );
             command.env("TEMP", std::env::var("TEMP").unwrap_or_default());
         }
 
@@ -189,9 +205,8 @@ impl ExecutionBackend for NativeBackend {
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
 
-            let (read_pipe, write_pipe) = nix::unistd::pipe2(OFlag::O_CLOEXEC).map_err(|e| {
-                AgentError::ProcessExecution(format!("output ipc pipe: {e}"))
-            })?;
+            let (read_pipe, write_pipe) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
+                .map_err(|e| AgentError::ProcessExecution(format!("output ipc pipe: {e}")))?;
             let r = read_pipe.as_raw_fd();
             let w = write_pipe.as_raw_fd();
             command.env("METICULOUS_OUTPUT_FD", "3");
@@ -199,6 +214,8 @@ impl ExecutionBackend for NativeBackend {
             #[allow(unsafe_code)]
             unsafe {
                 command.as_std_mut().pre_exec(move || {
+                    // New session without a controlling terminal so children cannot prompt on /dev/tty.
+                    let _ = libc::setsid();
                     if libc::dup2(w, 3) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }
@@ -218,9 +235,9 @@ impl ExecutionBackend for NativeBackend {
         let ipc_ends: Option<()> = None;
 
         // Spawn the process
-        let mut child = command.spawn().map_err(|e| {
-            AgentError::ProcessExecution(format!("failed to spawn process: {e}"))
-        })?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| AgentError::ProcessExecution(format!("failed to spawn process: {e}")))?;
 
         #[cfg(unix)]
         let mut ipc_read_file = if let Some((read_f, write_fd)) = ipc_ends {

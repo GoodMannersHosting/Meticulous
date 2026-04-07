@@ -17,11 +17,11 @@ pub mod github_scm;
 pub mod middleware;
 pub mod openapi;
 pub mod pipeline_execution;
-pub mod trigger_sync;
 pub mod routes;
-pub mod workflow_diagnostics;
 pub mod scheduling_hints;
 pub mod state;
+pub mod trigger_sync;
+pub mod workflow_diagnostics;
 
 pub use config::ApiConfig;
 pub use error::{ApiError, ApiResult};

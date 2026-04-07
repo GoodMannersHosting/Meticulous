@@ -51,7 +51,10 @@ impl AgentPoolReconciler {
 
     /// Reconcile a single AgentPool.
     #[instrument(skip(pool, ctx), fields(pool = %pool.name_any()))]
-    async fn reconcile(pool: Arc<AgentPool>, ctx: Arc<Context>) -> std::result::Result<Action, OperatorError> {
+    async fn reconcile(
+        pool: Arc<AgentPool>,
+        ctx: Arc<Context>,
+    ) -> std::result::Result<Action, OperatorError> {
         let name = pool.name_any();
         let namespace = pool.namespace().unwrap_or_default();
 
@@ -102,12 +105,18 @@ impl AgentPoolReconciler {
 
         // Determine desired count
         let spec = &pool.spec;
-        let desired = Self::calculate_desired_replicas(spec, ready, busy, idle, ctx.as_ref(), &name).await;
+        let desired =
+            Self::calculate_desired_replicas(spec, ready, busy, idle, ctx.as_ref(), &name).await;
 
         // Scale up or down
         if current_count < desired {
             let to_create = desired - current_count;
-            info!(current = current_count, desired, creating = to_create, "scaling up");
+            info!(
+                current = current_count,
+                desired,
+                creating = to_create,
+                "scaling up"
+            );
 
             for i in 0..to_create {
                 if let Err(e) = Self::create_agent_pod(&pool, &pods, i as usize).await {
@@ -116,7 +125,12 @@ impl AgentPoolReconciler {
             }
         } else if current_count > desired {
             let to_delete = current_count - desired;
-            info!(current = current_count, desired, deleting = to_delete, "scaling down");
+            info!(
+                current = current_count,
+                desired,
+                deleting = to_delete,
+                "scaling down"
+            );
 
             // Delete idle pods first
             let mut deleted = 0;
@@ -271,17 +285,14 @@ impl AgentPoolReconciler {
             .and_then(|a| a.queue_depth_scale_down_threshold)
             .unwrap_or(0) as u64;
 
-        let scale_up_step = autoscaler
-            .and_then(|a| a.scale_up_step)
-            .unwrap_or(1);
+        let scale_up_step = autoscaler.and_then(|a| a.scale_up_step).unwrap_or(1);
 
-        let scale_down_step = autoscaler
-            .and_then(|a| a.scale_down_step)
-            .unwrap_or(1);
+        let scale_down_step = autoscaler.and_then(|a| a.scale_down_step).unwrap_or(1);
 
         let adjustment = if pending_messages > scale_up_threshold {
             // Scale up: more jobs waiting than threshold
-            let multiplier = ((pending_messages - scale_up_threshold) / scale_up_threshold.max(1) + 1) as i32;
+            let multiplier =
+                ((pending_messages - scale_up_threshold) / scale_up_threshold.max(1) + 1) as i32;
             (scale_up_step * multiplier).min(10) // Cap at 10 per cycle
         } else if pending_messages <= scale_down_threshold {
             // Scale down: queue is empty or below threshold
@@ -321,21 +332,29 @@ impl AgentPoolReconciler {
 
         let labels = pod.metadata.labels.get_or_insert_with(Default::default);
         labels.insert("meticulous.dev/pool".to_string(), name.clone());
-        labels.insert("meticulous.dev/managed-by".to_string(), "met-operator".to_string());
+        labels.insert(
+            "meticulous.dev/managed-by".to_string(),
+            "met-operator".to_string(),
+        );
 
-        let annotations = pod.metadata.annotations.get_or_insert_with(Default::default);
+        let annotations = pod
+            .metadata
+            .annotations
+            .get_or_insert_with(Default::default);
         annotations.insert("meticulous.dev/busy".to_string(), "false".to_string());
 
         // Add owner reference
         if let Some(uid) = &pool.metadata.uid {
-            pod.metadata.owner_references = Some(vec![k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
-                api_version: "meticulous.dev/v1alpha1".to_string(),
-                kind: "AgentPool".to_string(),
-                name: name.clone(),
-                uid: uid.clone(),
-                controller: Some(true),
-                block_owner_deletion: Some(true),
-            }]);
+            pod.metadata.owner_references = Some(vec![
+                k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+                    api_version: "meticulous.dev/v1alpha1".to_string(),
+                    kind: "AgentPool".to_string(),
+                    name: name.clone(),
+                    uid: uid.clone(),
+                    controller: Some(true),
+                    block_owner_deletion: Some(true),
+                },
+            ]);
         }
 
         // Add environment variables for controller URL and join token

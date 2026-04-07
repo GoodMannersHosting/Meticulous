@@ -74,9 +74,9 @@ impl From<met_secret_resolve::ResolveError> for EngineError {
             met_secret_resolve::ResolveError::MissingProjectId => {
                 Self::SecretResolution("pipeline is missing project_id".into())
             }
-            met_secret_resolve::ResolveError::MissingMasterKey => Self::SecretResolution(
-                "built-in secrets master key is not configured".into(),
-            ),
+            met_secret_resolve::ResolveError::MissingMasterKey => {
+                Self::SecretResolution("built-in secrets master key is not configured".into())
+            }
             met_secret_resolve::ResolveError::ExternalNotConfigured(msg) => {
                 Self::SecretResolution(format!("external secret provider not available: {msg}"))
             }
@@ -93,9 +93,7 @@ impl EngineError {
     pub fn is_retriable(&self) -> bool {
         matches!(
             self,
-            Self::NoAvailableAgents { .. }
-                | Self::Nats(_)
-                | Self::Database(_)
+            Self::NoAvailableAgents { .. } | Self::Nats(_) | Self::Database(_)
         )
     }
 }

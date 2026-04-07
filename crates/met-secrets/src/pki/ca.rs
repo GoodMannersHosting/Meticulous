@@ -80,13 +80,19 @@ impl std::fmt::Debug for CertificateAuthority {
 impl CertificateAuthority {
     /// Create a new intermediate CA.
     pub fn new(config: CaConfig) -> Result<Self, SecretsError> {
-        let ca_key_pair =
-            KeyPair::generate().map_err(|e| SecretsError::Crypto(format!("CA key generation failed: {e}")))?;
+        let ca_key_pair = KeyPair::generate()
+            .map_err(|e| SecretsError::Crypto(format!("CA key generation failed: {e}")))?;
 
         let mut params = CertificateParams::default();
         let mut dn = DistinguishedName::new();
-        dn.push(DnType::OrganizationName, DnValue::Utf8String(config.organization.clone()));
-        dn.push(DnType::CommonName, DnValue::Utf8String(config.common_name.clone()));
+        dn.push(
+            DnType::OrganizationName,
+            DnValue::Utf8String(config.organization.clone()),
+        );
+        dn.push(
+            DnType::CommonName,
+            DnValue::Utf8String(config.common_name.clone()),
+        );
         params.distinguished_name = dn;
         params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
         params.key_usages = vec![
@@ -143,7 +149,10 @@ impl CertificateAuthority {
 
         let mut params = CertificateParams::default();
         let mut dn = DistinguishedName::new();
-        dn.push(DnType::OrganizationName, DnValue::Utf8String(self.config.organization.clone()));
+        dn.push(
+            DnType::OrganizationName,
+            DnValue::Utf8String(self.config.organization.clone()),
+        );
         dn.push(DnType::CommonName, DnValue::Utf8String(subject_cn.clone()));
         params.distinguished_name = dn;
         params.is_ca = IsCa::NoCa;
@@ -211,7 +220,10 @@ mod tests {
         let agent_kp = KeyPair::generate().unwrap();
         let key_pair_der = agent_kp.serialize_der().to_vec();
 
-        let cert = ca.sign_csr("agent-1", "job-1", &key_pair_der).await.unwrap();
+        let cert = ca
+            .sign_csr("agent-1", "job-1", &key_pair_der)
+            .await
+            .unwrap();
 
         assert!(cert.certificate_pem.contains("BEGIN CERTIFICATE"));
         assert!(cert.subject_cn.contains("agent:agent-1"));

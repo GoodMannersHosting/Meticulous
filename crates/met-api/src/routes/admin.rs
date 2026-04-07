@@ -20,7 +20,7 @@ use met_core::models::{
     PermissionRole, UpdateAuthProvider, User, UserRole, generate_join_token,
 };
 use met_store::repos::{
-    AuthProviderRepo, GroupRepo, JoinTokenRepo, JobRunRepo, ProjectRepo, RoleRepo, UserRepo,
+    AuthProviderRepo, GroupRepo, JobRunRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;

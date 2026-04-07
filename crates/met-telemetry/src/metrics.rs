@@ -3,9 +3,8 @@
 //! All metrics use the `met_` prefix for consistent naming across the platform.
 
 use opentelemetry::{
-    global,
+    KeyValue, global,
     metrics::{Counter, Histogram, Meter, UpDownCounter},
-    KeyValue,
 };
 use std::sync::OnceLock;
 
@@ -17,7 +16,9 @@ static METRICS: OnceLock<MeticulousMetrics> = OnceLock::new();
 ///
 /// Panics if metrics have not been initialized via `init_metrics()`.
 pub fn metrics() -> &'static MeticulousMetrics {
-    METRICS.get().expect("Metrics not initialized. Call init_metrics() first.")
+    METRICS
+        .get()
+        .expect("Metrics not initialized. Call init_metrics() first.")
 }
 
 /// Initialize the global metrics instance.
@@ -249,17 +250,20 @@ impl MeticulousMetrics {
 
     /// Record agent connection.
     pub fn agent_connected(&self, pool: &str) {
-        self.agents_connected.add(1, &[KeyValue::new("pool", pool.to_string())]);
+        self.agents_connected
+            .add(1, &[KeyValue::new("pool", pool.to_string())]);
     }
 
     /// Record agent disconnection.
     pub fn agent_disconnected(&self, pool: &str) {
-        self.agents_connected.add(-1, &[KeyValue::new("pool", pool.to_string())]);
+        self.agents_connected
+            .add(-1, &[KeyValue::new("pool", pool.to_string())]);
     }
 
     /// Record agent heartbeat.
     pub fn agent_heartbeat(&self, agent_id: &str) {
-        self.agent_heartbeats_total.add(1, &[KeyValue::new("agent_id", agent_id.to_string())]);
+        self.agent_heartbeats_total
+            .add(1, &[KeyValue::new("agent_id", agent_id.to_string())]);
     }
 
     /// Record job assignment to agent.
@@ -277,7 +281,8 @@ impl MeticulousMetrics {
             KeyValue::new("bucket", bucket.to_string()),
         ];
         self.storage_operations_total.add(1, &attrs);
-        self.storage_operation_duration.record(duration_secs, &attrs);
+        self.storage_operation_duration
+            .record(duration_secs, &attrs);
     }
 
     /// Record bytes transferred to/from storage.

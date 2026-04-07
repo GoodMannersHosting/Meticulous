@@ -35,13 +35,11 @@ where
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ApiError::unauthorized("missing authorization header"))?;
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| {
-                ApiError::unauthorized(
-                    "Meticulous App integration routes require Authorization: Bearer <jwt>",
-                )
-            })?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            ApiError::unauthorized(
+                "Meticulous App integration routes require Authorization: Bearer <jwt>",
+            )
+        })?;
 
         let principal =
             verify_app_installation_jwt(token, &app_state.config().jwt, app_state.db()).await?;

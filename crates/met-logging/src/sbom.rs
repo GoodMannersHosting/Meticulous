@@ -178,11 +178,11 @@ impl Sbom {
     /// Compute SHA256 hash of the SBOM content.
     pub fn content_hash(&self) -> String {
         let mut hasher = Sha256::new();
-        
+
         // Hash components in sorted order for determinism
         let mut keys: Vec<_> = self.components.keys().collect();
         keys.sort();
-        
+
         for key in keys {
             if let Some(component) = self.components.get(key) {
                 hasher.update(component.name.as_bytes());
@@ -192,7 +192,7 @@ impl Sbom {
                 }
             }
         }
-        
+
         format!("{:x}", hasher.finalize())
     }
 
@@ -287,21 +287,20 @@ impl SbomDiff {
         let mut summary = DiffSummary::default();
 
         // Build maps by component name
-        let left_by_name: HashMap<&str, Vec<&SbomComponent>> = left
-            .components
-            .values()
-            .fold(HashMap::new(), |mut acc, c| {
+        let left_by_name: HashMap<&str, Vec<&SbomComponent>> =
+            left.components.values().fold(HashMap::new(), |mut acc, c| {
                 acc.entry(c.name.as_str()).or_default().push(c);
                 acc
             });
 
-        let right_by_name: HashMap<&str, Vec<&SbomComponent>> = right
-            .components
-            .values()
-            .fold(HashMap::new(), |mut acc, c| {
-                acc.entry(c.name.as_str()).or_default().push(c);
-                acc
-            });
+        let right_by_name: HashMap<&str, Vec<&SbomComponent>> =
+            right
+                .components
+                .values()
+                .fold(HashMap::new(), |mut acc, c| {
+                    acc.entry(c.name.as_str()).or_default().push(c);
+                    acc
+                });
 
         let all_names: HashSet<&str> = left_by_name
             .keys()

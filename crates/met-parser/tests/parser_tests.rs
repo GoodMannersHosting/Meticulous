@@ -10,8 +10,8 @@
 
 use indexmap::IndexMap;
 use met_parser::{
-    MockWorkflowProvider, PipelineParser, ParserConfig, RawJob, RawStep, RawWorkflowDef,
-    WorkflowScope, ErrorCode, SourceLocation,
+    ErrorCode, MockWorkflowProvider, ParserConfig, PipelineParser, RawJob, RawStep, RawWorkflowDef,
+    SourceLocation, WorkflowScope,
 };
 
 fn mock_docker_workflow() -> RawWorkflowDef {
@@ -21,18 +21,24 @@ fn mock_docker_workflow() -> RawWorkflowDef {
         version: Some("1.0.0".to_string()),
         inputs: {
             let mut m = IndexMap::new();
-            m.insert("image".to_string(), met_parser::schema::RawInputDef {
-                input_type: "string".to_string(),
-                required: true,
-                default: None,
-                description: Some("Docker image name".to_string()),
-            });
-            m.insert("tag".to_string(), met_parser::schema::RawInputDef {
-                input_type: "string".to_string(),
-                required: false,
-                default: Some(serde_yaml::Value::String("latest".to_string())),
-                description: Some("Image tag".to_string()),
-            });
+            m.insert(
+                "image".to_string(),
+                met_parser::schema::RawInputDef {
+                    input_type: "string".to_string(),
+                    required: true,
+                    default: None,
+                    description: Some("Docker image name".to_string()),
+                },
+            );
+            m.insert(
+                "tag".to_string(),
+                met_parser::schema::RawInputDef {
+                    input_type: "string".to_string(),
+                    required: false,
+                    default: Some(serde_yaml::Value::String("latest".to_string())),
+                    description: Some("Image tag".to_string()),
+                },
+            );
             m
         },
         outputs: IndexMap::new(),
@@ -97,7 +103,11 @@ fn mock_test_workflow() -> RawWorkflowDef {
 
 fn create_provider() -> MockWorkflowProvider {
     let mut provider = MockWorkflowProvider::new();
-    provider.add_workflow(WorkflowScope::Global, "docker-build", mock_docker_workflow());
+    provider.add_workflow(
+        WorkflowScope::Global,
+        "docker-build",
+        mock_docker_workflow(),
+    );
     provider.add_workflow(WorkflowScope::Global, "test", mock_test_workflow());
     provider
 }
@@ -122,7 +132,7 @@ workflows:
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
     let ir = result.unwrap();
-    
+
     assert_eq!(ir.name, "Minimal Pipeline");
     assert!(!ir.jobs.is_empty());
 }
@@ -151,9 +161,12 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     assert_eq!(ir.variables.get("VERSION"), Some(&"1.0.0".to_string()));
-    assert_eq!(ir.variables.get("ENVIRONMENT"), Some(&"production".to_string()));
+    assert_eq!(
+        ir.variables.get("ENVIRONMENT"),
+        Some(&"production".to_string())
+    );
 }
 
 #[tokio::test]
@@ -184,7 +197,7 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     assert_eq!(ir.secret_refs.len(), 2);
     assert!(ir.secret_refs.contains_key("AWS_ACCESS_KEY"));
     assert!(ir.secret_refs.contains_key("VAULT_SECRET"));
@@ -220,9 +233,9 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     assert_eq!(ir.jobs.len(), 3);
-    
+
     let deploy_job = ir.jobs.iter().find(|j| j.name == "Build").unwrap();
     assert!(deploy_job.depends_on.is_empty());
 }
@@ -252,7 +265,7 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     assert!(ir.triggers.len() >= 3);
 }
 
@@ -307,7 +320,7 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     assert!(ir.default_pool_selector.is_some());
 }
 
@@ -337,7 +350,7 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     let job = &ir.jobs[0];
     assert!(job.cache_config.is_some());
 }
@@ -365,7 +378,7 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     let job = &ir.jobs[0];
     assert!(job.retry_policy.is_some());
     let retry = job.retry_policy.as_ref().unwrap();
@@ -399,9 +412,12 @@ workflows:
 
     assert!(result.is_ok());
     let ir = result.unwrap();
-    
+
     let deploy_job = ir.jobs.iter().find(|j| j.name == "Build").unwrap();
-    assert!(deploy_job.condition.is_none() || deploy_job.condition.as_deref() == Some("trigger.branch == 'main'"));
+    assert!(
+        deploy_job.condition.is_none()
+            || deploy_job.condition.as_deref() == Some("trigger.branch == 'main'")
+    );
 }
 
 #[tokio::test]
@@ -543,7 +559,11 @@ workflows:
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
-    assert!(errors.iter().any(|e| e.code == ErrorCode::E2001 && e.message.contains("image")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.code == ErrorCode::E2001 && e.message.contains("image"))
+    );
 }
 
 #[tokio::test]
@@ -630,7 +650,7 @@ workflows:
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
     let ir = result.unwrap();
-    
+
     assert_eq!(ir.name, "Full CI/CD Pipeline");
     assert_eq!(ir.jobs.len(), 4);
     assert_eq!(ir.variables.len(), 2);

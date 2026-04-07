@@ -80,11 +80,11 @@ impl RetryPolicy {
             return Duration::ZERO;
         }
 
-        let base_backoff = self.initial_backoff.as_secs_f64() 
-            * self.multiplier.powi((attempt - 1) as i32);
-        
+        let base_backoff =
+            self.initial_backoff.as_secs_f64() * self.multiplier.powi((attempt - 1) as i32);
+
         let backoff_secs = base_backoff.min(self.max_backoff.as_secs_f64());
-        
+
         let final_backoff = if self.jitter {
             let jitter_factor = 0.5 + (rand_jitter() * 0.5);
             backoff_secs * jitter_factor
@@ -93,7 +93,11 @@ impl RetryPolicy {
         };
 
         let duration = Duration::from_secs_f64(final_backoff);
-        debug!(attempt, backoff_ms = duration.as_millis(), "calculated retry backoff");
+        debug!(
+            attempt,
+            backoff_ms = duration.as_millis(),
+            "calculated retry backoff"
+        );
         duration
     }
 
@@ -197,11 +201,12 @@ impl RetryState {
     /// Record a failure and prepare for retry.
     pub fn record_failure(&mut self, error: &str, policy: &RetryPolicy) -> Option<Duration> {
         self.last_error = Some(error.to_string());
-        
+
         if self.can_retry() {
             self.attempt += 1;
             let backoff = policy.calculate_backoff(self.attempt);
-            self.next_retry_at = Some(chrono::Utc::now() + chrono::Duration::from_std(backoff).unwrap_or_default());
+            self.next_retry_at =
+                Some(chrono::Utc::now() + chrono::Duration::from_std(backoff).unwrap_or_default());
             Some(backoff)
         } else {
             self.next_retry_at = None;
@@ -225,7 +230,7 @@ fn rand_jitter() -> f64 {
     let mut hasher = DefaultHasher::new();
     SystemTime::now().hash(&mut hasher);
     std::thread::current().id().hash(&mut hasher);
-    
+
     let hash = hasher.finish();
     (hash as f64) / (u64::MAX as f64)
 }
@@ -244,7 +249,7 @@ pub enum RetryDecision {
 /// Determine if an error is retryable.
 pub fn is_retryable_error(error_message: &str) -> RetryDecision {
     let message_lower = error_message.to_lowercase();
-    
+
     let transient_patterns = [
         "timeout",
         "connection refused",
@@ -258,13 +263,13 @@ pub fn is_retryable_error(error_message: &str) -> RetryDecision {
         "dns",
         "socket",
     ];
-    
+
     for pattern in transient_patterns {
         if message_lower.contains(pattern) {
             return RetryDecision::Retry;
         }
     }
-    
+
     let permanent_patterns = [
         "permission denied",
         "access denied",
@@ -275,13 +280,13 @@ pub fn is_retryable_error(error_message: &str) -> RetryDecision {
         "authorization failed",
         "configuration error",
     ];
-    
+
     for pattern in permanent_patterns {
         if message_lower.contains(pattern) {
             return RetryDecision::NoRetry;
         }
     }
-    
+
     RetryDecision::Retry
 }
 
@@ -300,7 +305,7 @@ mod tests {
     #[test]
     fn test_should_retry() {
         let policy = RetryPolicy::new(3);
-        
+
         assert!(policy.should_retry(1));
         assert!(policy.should_retry(2));
         assert!(!policy.should_retry(3));
@@ -355,9 +360,18 @@ mod tests {
 
     #[test]
     fn test_is_retryable_error() {
-        assert_eq!(is_retryable_error("Connection timeout"), RetryDecision::Retry);
-        assert_eq!(is_retryable_error("Rate limit exceeded"), RetryDecision::Retry);
-        assert_eq!(is_retryable_error("Permission denied"), RetryDecision::NoRetry);
+        assert_eq!(
+            is_retryable_error("Connection timeout"),
+            RetryDecision::Retry
+        );
+        assert_eq!(
+            is_retryable_error("Rate limit exceeded"),
+            RetryDecision::Retry
+        );
+        assert_eq!(
+            is_retryable_error("Permission denied"),
+            RetryDecision::NoRetry
+        );
         assert_eq!(is_retryable_error("Unknown error"), RetryDecision::Retry);
     }
 }

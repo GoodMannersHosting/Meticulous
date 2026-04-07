@@ -101,7 +101,10 @@ impl WorkflowProvider for GitWorkflowProvider {
 
         let resolved_version = if version == "latest" {
             let versions = self.list_versions(scope, name).await?;
-            versions.first().cloned().unwrap_or_else(|| "latest".to_string())
+            versions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "latest".to_string())
         } else if let Ok(constraint) = parse_version_constraint(version) {
             let versions = self.list_versions(scope, name).await?;
             resolve_version(&constraint, &versions).unwrap_or_else(|| version.to_string())
@@ -112,7 +115,7 @@ impl WorkflowProvider for GitWorkflowProvider {
         debug!(name, version = %resolved_version, "fetching workflow from git");
 
         let path = self.workflow_path(name, Some(&resolved_version));
-        
+
         if path.exists() {
             let mut workflow = self.read_workflow(&path).await?;
             if workflow.version.is_none() {
@@ -148,7 +151,7 @@ impl WorkflowProvider for GitWorkflowProvider {
 
         let workflows = self.list_workflow_files(name);
         let mut versions: Vec<String> = workflows.into_iter().map(|(v, _)| v).collect();
-        
+
         let base_path = self.workflow_path(name, None);
         if base_path.exists() && !versions.contains(&"latest".to_string()) {
             versions.push("latest".to_string());
@@ -175,13 +178,13 @@ fn extract_version_from_filename(filename: &str, name: &str) -> Option<String> {
     if filename == name {
         return Some("latest".to_string());
     }
-    
+
     let prefix = format!("{}@", name);
     if filename.starts_with(&prefix) {
         let version = &filename[prefix.len()..];
         return Some(version.to_string());
     }
-    
+
     None
 }
 
@@ -193,10 +196,14 @@ fn semver_compare(a: &str, b: &str) -> std::cmp::Ordering {
         (
             parts.first().and_then(|p| p.parse().ok()).unwrap_or(0),
             parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0),
-            parts.get(2).and_then(|p| p.split('-').next()).and_then(|p| p.parse().ok()).unwrap_or(0),
+            parts
+                .get(2)
+                .and_then(|p| p.split('-').next())
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(0),
         )
     };
-    
+
     parse(a).cmp(&parse(b))
 }
 
@@ -317,9 +324,18 @@ mod tests {
     #[test]
     fn test_semver_compare() {
         assert_eq!(semver_compare("1.0.0", "1.0.0"), std::cmp::Ordering::Equal);
-        assert_eq!(semver_compare("2.0.0", "1.0.0"), std::cmp::Ordering::Greater);
-        assert_eq!(semver_compare("1.1.0", "1.0.0"), std::cmp::Ordering::Greater);
-        assert_eq!(semver_compare("1.0.1", "1.0.0"), std::cmp::Ordering::Greater);
+        assert_eq!(
+            semver_compare("2.0.0", "1.0.0"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            semver_compare("1.1.0", "1.0.0"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            semver_compare("1.0.1", "1.0.0"),
+            std::cmp::Ordering::Greater
+        );
         assert_eq!(semver_compare("v1.0.0", "1.0.0"), std::cmp::Ordering::Equal);
     }
 }

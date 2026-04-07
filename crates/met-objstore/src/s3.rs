@@ -10,10 +10,10 @@ use crate::{
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::{
+    Client,
     config::{Credentials, Region},
     operation::get_object::GetObjectError,
     primitives::ByteStream,
-    Client,
 };
 use bytes::Bytes;
 use std::time::Duration;
@@ -66,18 +66,16 @@ async fn create_s3_client(config: &ObjectStoreConfig) -> Result<Client> {
 
     sdk_config_builder = sdk_config_builder.region(Region::new(config.region.clone()));
 
-    if let (Some(access_key), Some(secret_key)) =
-        (&config.access_key_id, &config.secret_access_key)
+    if let (Some(access_key), Some(secret_key)) = (&config.access_key_id, &config.secret_access_key)
     {
-        let credentials =
-            Credentials::new(access_key, secret_key, None, None, "meticulous-static");
+        let credentials = Credentials::new(access_key, secret_key, None, None, "meticulous-static");
         sdk_config_builder = sdk_config_builder.credentials_provider(credentials);
     }
 
     let sdk_config = sdk_config_builder.load().await;
 
-    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config)
-        .force_path_style(config.path_style);
+    let mut s3_config_builder =
+        aws_sdk_s3::config::Builder::from(&sdk_config).force_path_style(config.path_style);
 
     if !config.endpoint.is_empty() {
         s3_config_builder = s3_config_builder.endpoint_url(&config.endpoint);
@@ -138,8 +136,7 @@ impl ObjectStore for S3ObjectStore {
             size: output.content_length().unwrap_or(0) as u64,
             etag: output.e_tag().map(|s| s.trim_matches('"').to_string()),
             last_modified: output.last_modified().map(|t| {
-                chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos())
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos()).unwrap_or_default()
             }),
             content_type: output.content_type().map(String::from),
             version_id: output.version_id().map(String::from),
@@ -181,8 +178,7 @@ impl ObjectStore for S3ObjectStore {
             size: output.content_length().unwrap_or(0) as u64,
             etag: output.e_tag().map(|s| s.trim_matches('"').to_string()),
             last_modified: output.last_modified().map(|t| {
-                chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos())
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos()).unwrap_or_default()
             }),
             content_type: output.content_type().map(String::from),
             version_id: output.version_id().map(String::from),
@@ -244,7 +240,9 @@ impl ObjectStore for S3ObjectStore {
     }
 
     async fn list_objects(&self, prefix: &str) -> Result<Vec<ObjectMeta>> {
-        let result = self.list_objects_with_options(prefix, ListOptions::default()).await?;
+        let result = self
+            .list_objects_with_options(prefix, ListOptions::default())
+            .await?;
         Ok(result.objects)
     }
 
@@ -253,7 +251,11 @@ impl ObjectStore for S3ObjectStore {
         prefix: &str,
         options: ListOptions,
     ) -> Result<ListResult> {
-        let mut request = self.client.list_objects_v2().bucket(&self.bucket).prefix(prefix);
+        let mut request = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(prefix);
 
         if let Some(max_keys) = options.max_keys {
             request = request.max_keys(max_keys);
@@ -265,7 +267,10 @@ impl ObjectStore for S3ObjectStore {
             request = request.delimiter(delimiter);
         }
 
-        let output = request.send().await.map_err(|e| map_sdk_error("list_objects", e))?;
+        let output = request
+            .send()
+            .await
+            .map_err(|e| map_sdk_error("list_objects", e))?;
 
         let objects: Vec<_> = output
             .contents()
@@ -275,8 +280,7 @@ impl ObjectStore for S3ObjectStore {
                 size: obj.size().unwrap_or(0) as u64,
                 etag: obj.e_tag().map(|s| s.trim_matches('"').to_string()),
                 last_modified: obj.last_modified().map(|t| {
-                    chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos())
-                        .unwrap_or_default()
+                    chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos()).unwrap_or_default()
                 }),
                 content_type: None,
                 version_id: None,
@@ -375,7 +379,11 @@ impl ObjectStore for S3ObjectStore {
             .ok_or_else(|| ObjectStoreError::multipart("No upload ID returned"))?
             .to_string();
 
-        Ok(MultipartUpload::new(key.clone(), upload_id, self.bucket.clone()))
+        Ok(MultipartUpload::new(
+            key.clone(),
+            upload_id,
+            self.bucket.clone(),
+        ))
     }
 
     fn bucket(&self) -> &str {

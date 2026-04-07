@@ -58,9 +58,7 @@ impl SecretValue {
 
     /// Check if this secret has expired based on its metadata.
     pub fn is_expired(&self) -> bool {
-        self.metadata
-            .expires_at
-            .is_some_and(|exp| exp < Utc::now())
+        self.metadata.expires_at.is_some_and(|exp| exp < Utc::now())
     }
 
     /// Get the length of the secret value.
@@ -292,9 +290,18 @@ mod tests {
 
     #[test]
     fn test_provider_type_from_str() {
-        assert_eq!("vault".parse::<ProviderType>().unwrap(), ProviderType::Vault);
-        assert_eq!("aws_sm".parse::<ProviderType>().unwrap(), ProviderType::AwsSecretsManager);
-        assert_eq!("k8s".parse::<ProviderType>().unwrap(), ProviderType::Kubernetes);
+        assert_eq!(
+            "vault".parse::<ProviderType>().unwrap(),
+            ProviderType::Vault
+        );
+        assert_eq!(
+            "aws_sm".parse::<ProviderType>().unwrap(),
+            ProviderType::AwsSecretsManager
+        );
+        assert_eq!(
+            "k8s".parse::<ProviderType>().unwrap(),
+            ProviderType::Kubernetes
+        );
         assert!("unknown".parse::<ProviderType>().is_err());
     }
 

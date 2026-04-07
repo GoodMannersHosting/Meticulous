@@ -2,7 +2,8 @@
 # Dockerfiles: Dockerfile.agent, Dockerfile.met-api, Dockerfile.met-controller, Dockerfile.sqlx-migrate.
 #
 # Import catalog workflows first; set pipeline secrets: GITHUB_TOKEN (or catalog credential),
-# REGISTRY_USERNAME, REGISTRY_PASSWORD. Agents need Docker/Podman + buildx (global/docker-buildx-push),
+# REGISTRY_USERNAME / REGISTRY_PASSWORD (global/docker-buildx-push and global/trivy-scan read these env names).
+# Map them to your Harbor robot credentials via stored: name — do not rename to HARBOR_* or login will not see them.
 # Trivy on PATH (global/trivy-scan ≥ 1.1.0), and git for checkout.
 #
 # share-workspace + agent-affinity require a total depends-on order (no concurrent jobs in the group).
@@ -14,15 +15,28 @@ name: meticulous self-build
 agent-affinity:
   default-group: ci
   share-workspace: true
+
+secrets:
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+  REGISTRY_PASSWORD:
+    stored:
+      name: harbor-mar-operator-password
+  REGISTRY_USERNAME:
+    stored:
+      name: harbor-mar-operator-username
+
 vars:
   METICULOUS_REPO: GoodMannersHosting/Meticulous
   IMAGE_TAG: latest
   REGISTRY_PREFIX: harbor.cloud.danmanners.com/meticulous
+
 workflows:
   - name: Checkout Meticulous
     id: checkout
     workflow: global/git-checkout
-    version: "1.0.0"
+    version: "1.0.1"
     inputs:
       repo: "${METICULOUS_REPO}"
       ref: main
@@ -30,7 +44,7 @@ workflows:
   - name: Build and push met-agent
     id: push-agent
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [checkout]
     inputs:
       context_path: meticulous
@@ -50,7 +64,7 @@ workflows:
   - name: Build and push met-api
     id: push-api
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-agent]
     inputs:
       context_path: meticulous
@@ -70,7 +84,7 @@ workflows:
   - name: Build and push met-controller
     id: push-controller
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-api]
     inputs:
       context_path: meticulous
@@ -90,7 +104,7 @@ workflows:
   - name: Build and push sqlx-migrate
     id: push-sqlx-migrate
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-controller]
     inputs:
       context_path: meticulous

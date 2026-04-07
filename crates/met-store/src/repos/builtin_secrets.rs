@@ -91,14 +91,8 @@ impl<'a> BuiltinSecretsRepo<'a> {
         pipeline_id: PipelineId,
         path: &str,
     ) -> Result<Option<BuiltinSecretCipherRow>> {
-        self.get_current_cipher_row_impl(
-            org_id,
-            project_id,
-            pipeline_id,
-            path,
-            false,
-        )
-        .await
+        self.get_current_cipher_row_impl(org_id, project_id, pipeline_id, path, false)
+            .await
     }
 
     /// Like [`Self::get_current_cipher_row`], but org-wide secrets that do not propagate are included
@@ -155,14 +149,16 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .fetch_optional(self.pool)
         .await?;
 
-        Ok(row.map(|(id, encrypted_value, nonce, key_id, kind, version)| BuiltinSecretCipherRow {
-            id,
-            encrypted_value,
-            nonce,
-            key_id,
-            kind,
-            version,
-        }))
+        Ok(row.map(
+            |(id, encrypted_value, nonce, key_id, kind, version)| BuiltinSecretCipherRow {
+                id,
+                encrypted_value,
+                nonce,
+                key_id,
+                kind,
+                version,
+            },
+        ))
     }
 
     /// Whether a resolvable row exists (validation, no decrypt).
@@ -259,7 +255,11 @@ impl<'a> BuiltinSecretsRepo<'a> {
     }
 
     /// List metadata for secrets visible under a project (propagating org-wide + project-scoped).
-    pub async fn list_for_project(&self, org_id: OrganizationId, project_id: ProjectId) -> Result<Vec<BuiltinSecretMetaRow>> {
+    pub async fn list_for_project(
+        &self,
+        org_id: OrganizationId,
+        project_id: ProjectId,
+    ) -> Result<Vec<BuiltinSecretMetaRow>> {
         let rows = sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
             SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
@@ -325,7 +325,10 @@ impl<'a> BuiltinSecretsRepo<'a> {
     }
 
     /// Metadata by primary key, including soft-deleted rows (for admin purge).
-    pub async fn get_meta_by_id_including_deleted(&self, id: Uuid) -> Result<Option<BuiltinSecretMetaRow>> {
+    pub async fn get_meta_by_id_including_deleted(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<BuiltinSecretMetaRow>> {
         sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
             SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
@@ -390,7 +393,10 @@ impl<'a> BuiltinSecretsRepo<'a> {
     }
 
     /// Soft-delete newer versions so resolver picks `anchor` (same scope + path as anchor row).
-    pub async fn soft_delete_versions_newer_than(&self, anchor: &BuiltinSecretMetaRow) -> Result<u64> {
+    pub async fn soft_delete_versions_newer_than(
+        &self,
+        anchor: &BuiltinSecretMetaRow,
+    ) -> Result<u64> {
         let r = sqlx::query(
             r#"
             UPDATE builtin_secrets

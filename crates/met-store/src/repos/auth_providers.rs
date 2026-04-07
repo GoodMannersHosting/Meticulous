@@ -256,7 +256,10 @@ impl<'a> AuthProviderRepo<'a> {
     }
 
     /// List group mappings for a provider.
-    pub async fn list_group_mappings(&self, provider_id: AuthProviderId) -> Result<Vec<OidcGroupMapping>> {
+    pub async fn list_group_mappings(
+        &self,
+        provider_id: AuthProviderId,
+    ) -> Result<Vec<OidcGroupMapping>> {
         let mappings = sqlx::query_as::<_, OidcGroupMapping>(
             r#"
             SELECT id, provider_id, oidc_group_claim, meticulous_group_id, role, created_at

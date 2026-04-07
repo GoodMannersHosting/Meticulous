@@ -180,7 +180,9 @@ async fn create_variable(
             .await
             .map_err(met_store::StoreError::from)?;
         if pl.project_id.as_uuid() != project_id.as_uuid() {
-            return Err(ApiError::bad_request("pipeline does not belong to this project"));
+            return Err(ApiError::bad_request(
+                "pipeline does not belong to this project",
+            ));
         }
     }
 

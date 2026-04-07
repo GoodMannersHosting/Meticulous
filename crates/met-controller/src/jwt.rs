@@ -1,7 +1,7 @@
 //! JWT token management for agent authentication.
 
 use chrono::{DateTime, Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use met_core::ids::{AgentId, OrganizationId};
 use serde::{Deserialize, Serialize};
 

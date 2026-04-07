@@ -132,7 +132,10 @@ pub struct WorkspaceStoredSecretListItem {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workspace/variables", get(list_workspace_variables))
-        .route("/workspace/stored-secrets", get(list_workspace_stored_secrets))
+        .route(
+            "/workspace/stored-secrets",
+            get(list_workspace_stored_secrets),
+        )
 }
 
 fn ilike_pattern(raw: &str) -> String {
@@ -144,7 +147,11 @@ fn ilike_pattern(raw: &str) -> String {
 }
 
 fn encode_cursor(t: DateTime<Utc>, id: Uuid) -> String {
-    let s = format!("{}|{}", t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true), id);
+    let s = format!(
+        "{}|{}",
+        t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        id
+    );
     STANDARD.encode(s.as_bytes())
 }
 
@@ -152,12 +159,16 @@ fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
     let bytes = STANDARD
         .decode(cursor.trim())
         .map_err(|_| ApiError::bad_request("invalid pagination cursor"))?;
-    let text = String::from_utf8(bytes).map_err(|_| ApiError::bad_request("invalid pagination cursor"))?;
-    let (ts, id_str) = text.split_once('|').ok_or_else(|| ApiError::bad_request("invalid pagination cursor"))?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| ApiError::bad_request("invalid pagination cursor"))?;
+    let (ts, id_str) = text
+        .split_once('|')
+        .ok_or_else(|| ApiError::bad_request("invalid pagination cursor"))?;
     let t = DateTime::parse_from_rfc3339(ts)
         .map_err(|_| ApiError::bad_request("invalid pagination cursor"))?
         .with_timezone(&Utc);
-    let id = Uuid::parse_str(id_str).map_err(|_| ApiError::bad_request("invalid pagination cursor"))?;
+    let id =
+        Uuid::parse_str(id_str).map_err(|_| ApiError::bad_request("invalid pagination cursor"))?;
     Ok((t, id))
 }
 
@@ -187,7 +198,10 @@ async fn resolve_project_pipeline_filters(
 ) -> Result<(Option<ProjectId>, Option<PipelineId>), ApiError> {
     let mut pipeline_id = pipeline_id;
     if let Some(pid) = pipeline_id {
-        let pl = PipelineRepo::new(state.db()).get(pid).await.map_err(ApiError::from)?;
+        let pl = PipelineRepo::new(state.db())
+            .get(pid)
+            .await
+            .map_err(ApiError::from)?;
         let proj = ProjectRepo::new(state.db())
             .get(pl.project_id)
             .await
@@ -242,10 +256,15 @@ async fn list_workspace_variables(
         return Ok(Json(PaginatedResponse::empty()));
     }
 
-    let (fp, fpl) = resolve_project_pipeline_filters(&state, &user, q.project_id, q.pipeline_id).await?;
+    let (fp, fpl) =
+        resolve_project_pipeline_filters(&state, &user, q.project_id, q.pipeline_id).await?;
 
     let plan = project_access_plan(&user);
-    let pattern = q.q.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()).map(ilike_pattern);
+    let pattern =
+        q.q.as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(ilike_pattern);
 
     let (cursor_t, cursor_id) = match &pagination.cursor {
         None => (None, None),
@@ -348,7 +367,8 @@ async fn list_workspace_stored_secrets(
     pagination: Pagination,
     Query(q): Query<WorkspaceListQuery>,
 ) -> ApiResult<Json<PaginatedResponse<WorkspaceStoredSecretListItem>>> {
-    let (fp, fpl) = resolve_project_pipeline_filters(&state, &user, q.project_id, q.pipeline_id).await?;
+    let (fp, fpl) =
+        resolve_project_pipeline_filters(&state, &user, q.project_id, q.pipeline_id).await?;
 
     if state.stored_secret_crypto.is_none() {
         return Err(ApiError::unavailable(
@@ -357,7 +377,11 @@ async fn list_workspace_stored_secrets(
     }
 
     let plan = project_access_plan(&user);
-    let pattern = q.q.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()).map(ilike_pattern);
+    let pattern =
+        q.q.as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(ilike_pattern);
 
     let (cursor_t, cursor_id) = match &pagination.cursor {
         None => (None, None),

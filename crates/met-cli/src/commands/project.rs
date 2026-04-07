@@ -1,8 +1,8 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::config::CliConfig;
 use crate::context::ResolvedContext;
 use crate::output::{build_table, print_kv, print_serialized, print_success, print_table};
-use crate::OutputFormat;
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 
@@ -30,11 +30,7 @@ pub struct CreateProjectResponse {
     pub slug: String,
 }
 
-pub async fn list(
-    client: &ApiClient,
-    ctx: &ResolvedContext,
-    format: OutputFormat,
-) -> Result<()> {
+pub async fn list(client: &ApiClient, ctx: &ResolvedContext, format: OutputFormat) -> Result<()> {
     let org = ctx.require_org()?;
 
     #[derive(Serialize)]
@@ -42,9 +38,7 @@ pub async fn list(
         org: &'a str,
     }
 
-    let resp: ProjectListResponse = client
-        .get_with_query("/projects", &Query { org })
-        .await?;
+    let resp: ProjectListResponse = client.get_with_query("/projects", &Query { org }).await?;
 
     match format {
         OutputFormat::Table => {
@@ -125,10 +119,7 @@ pub async fn info(
             println!("Project: {}", project.name);
             print_kv("ID", &project.id);
             print_kv("Slug", &project.slug);
-            print_kv(
-                "Description",
-                project.description.as_deref().unwrap_or("-"),
-            );
+            print_kv("Description", project.description.as_deref().unwrap_or("-"));
             print_kv("Repo", project.repo_url.as_deref().unwrap_or("-"));
             print_kv(
                 "Default Branch",
