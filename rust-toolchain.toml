@@ -1,3 +1,4 @@
 [toolchain]
-channel = "stable"
+# async-nats >= 0.47 requires rustc 1.88+ (see crates.io package metadata).
+channel = "1.88.0"
 components = ["rustfmt", "clippy"]
