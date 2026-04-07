@@ -19,6 +19,12 @@ secrets:
   GITHUB_TOKEN:
     stored:
       name: meticulous-ci
+  HARBOR_PASSWORD:
+    stored:
+      name: harbor-mar-operator-password
+  HARBOR_USERNAME:
+    stored:
+      name: harbor-mar-operator-username
 
 vars:
   METICULOUS_REPO: GoodMannersHosting/Meticulous
