@@ -17,6 +17,7 @@
 		type TabItem
 	} from '$components/ui';
 	import HighlightedCodeBlock from '$lib/components/code/HighlightedCodeBlock.svelte';
+	import YamlCodeBlock from '$lib/components/code/YamlCodeBlock.svelte';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type {
@@ -24,6 +25,7 @@
 		PipelineJob,
 		PipelineTrigger,
 		ProjectVariable,
+		ProjectWorkflowsAvailable,
 		Run,
 		StoredSecret,
 		UpdatePipelineInput,
@@ -69,10 +71,12 @@
 	import DagViewer from '$components/pipeline/DagViewer.svelte';
 	import { stringify } from 'yaml';
 	import {
+		catalogWorkflowIdForPipelineSourceRow,
 		collectPipelineSourceRows,
 		githubRepoTreeUrl,
 		pipelineGithubBlobRef,
-		upstreamLinkForRow
+		upstreamLinkForRow,
+		type PipelineSourceRow
 	} from '$utils/pipelineSourceFiles';
 	import {
 		WEBHOOK_HELP_BASH,
@@ -130,6 +134,9 @@
 	let workflowDiagnostics = $state<WorkflowDiagnosticItem[]>([]);
 	let wfDiagLoading = $state(false);
 	let wfDiagError = $state<string | null>(null);
+
+	let projectWorkflowsAvailable = $state<ProjectWorkflowsAvailable | null>(null);
+	let projectWorkflowsAvailableLoading = $state(false);
 
 	const workflowTriggerBlocked = $derived(workflowDiagnostics.some((d) => d.blocking));
 
@@ -571,6 +578,33 @@
 		}
 	}
 
+	async function loadProjectWorkflowsAvailable() {
+		const p = pipeline;
+		if (!p) return;
+		projectWorkflowsAvailableLoading = true;
+		try {
+			projectWorkflowsAvailable = await apiMethods.wfCatalog.listAvailableForProject(p.project_id);
+		} catch {
+			projectWorkflowsAvailable = null;
+		} finally {
+			projectWorkflowsAvailableLoading = false;
+		}
+	}
+
+	function sourceFilesRowDisabledTitle(row: PipelineSourceRow): string {
+		const p = pipeline;
+		if (!p) return '';
+		if (row.kind === 'pipeline') {
+			if (p.scm_provider !== 'github') return 'Upstream links are only built for GitHub-backed pipelines.';
+			return 'No Git ref available to build an upstream URL.';
+		}
+		if (projectWorkflowsAvailableLoading) return 'Loading catalog…';
+		if (row.kind === 'workflow_global') {
+			return 'Global workflows are not stored as files in this repository. Sync the workflow to the catalog to open its detail page.';
+		}
+		return 'Could not match this reference to a catalog workflow version (try diagnostics or sync from Git).';
+	}
+
 	async function loadPipeline() {
 		loading = true;
 		error = null;
@@ -650,6 +684,11 @@
 	$effect(() => {
 		if (activeTab !== 'secrets' || !pipeline || loading) return;
 		void loadPipelineSecrets();
+	});
+
+	$effect(() => {
+		if (activeTab !== 'definition' || !pipeline || loading) return;
+		void loadProjectWorkflowsAvailable();
 	});
 
 	function storedSecretScopeLabel(s: StoredSecret): string {
@@ -1755,6 +1794,11 @@
 									<tbody class="divide-y divide-[var(--border-primary)]">
 										{#each pipelineSourceRows as row, i (row.kind + (row.repoPath ?? row.workflowRef ?? '') + row.label + String(i))}
 											{@const upstream = upstreamLinkForRow(pipeline, row)}
+											{@const catalogWorkflowId = catalogWorkflowIdForPipelineSourceRow(
+												row,
+												projectWorkflowsAvailable,
+												workflowDiagnostics
+											)}
 											<tr class="bg-[var(--bg-primary)]">
 												<td class="px-3 py-2 text-[var(--text-primary)]">
 													<div class="max-w-[16rem] truncate font-medium sm:max-w-md" title={row.label}>
@@ -1776,7 +1820,14 @@
 													{/if}
 												</td>
 												<td class="px-3 py-2 text-right">
-													{#if upstream}
+													{#if row.kind !== 'pipeline' && catalogWorkflowId}
+														<a
+															href="/workflows/{catalogWorkflowId}"
+															class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-secondary-300 px-3 text-sm font-medium text-secondary-700 hover:bg-secondary-100 dark:border-secondary-600 dark:text-secondary-300 dark:hover:bg-secondary-800"
+														>
+															View workflow
+														</a>
+													{:else if upstream}
 														<a
 															href={upstream}
 															target="_blank"
@@ -1791,13 +1842,9 @@
 															variant="outline"
 															size="sm"
 															disabled
-															title={row.kind === 'workflow_global'
-																? 'Global workflows are not stored as files in this repository.'
-																: pipeline.scm_provider !== 'github'
-																	? 'Upstream links are only built for GitHub-backed pipelines.'
-																	: 'No Git ref available to build an upstream URL.'}
+															title={sourceFilesRowDisabledTitle(row)}
 														>
-															View upstream
+															{row.kind !== 'pipeline' ? 'View workflow' : 'View upstream'}
 														</Button>
 													{/if}
 												</td>
@@ -1812,8 +1859,7 @@
 					<div>
 						<h4 class="mb-2 text-sm font-medium text-[var(--text-primary)]">Definition (YAML)</h4>
 						{#if pipelineDefinitionYaml}
-							<pre class="overflow-x-auto rounded-lg bg-[var(--bg-tertiary)] p-4 text-sm"><code
-								>{pipelineDefinitionYaml}</code></pre>
+							<YamlCodeBlock source={pipelineDefinitionYaml} ariaLabel="Pipeline definition YAML" />
 						{:else}
 							<p class="text-sm text-[var(--text-secondary)]">Could not render definition as YAML.</p>
 						{/if}

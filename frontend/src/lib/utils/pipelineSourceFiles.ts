@@ -1,4 +1,4 @@
-import type { Pipeline } from '$api/types';
+import type { Pipeline, ProjectWorkflowsAvailable, WorkflowDiagnosticItem } from '$api/types';
 
 export type PipelineSourceRow = {
 	kind: 'pipeline' | 'workflow_project' | 'workflow_global';
@@ -163,4 +163,52 @@ export function upstreamLinkForRow(pipeline: Pipeline, row: PipelineSourceRow): 
 	const gitRef = pipelineGithubBlobRef(pipeline);
 	if (!slug || !gitRef || !row.repoPath) return null;
 	return githubBlobUrl(slug.owner, slug.name, gitRef, row.repoPath);
+}
+
+/** Workflow name segment from a reference like `project/linux-check` → `linux-check`. */
+export function workflowStemFromRef(ref: string | undefined): string | null {
+	if (!ref?.includes('/')) return null;
+	const parts = ref.split('/').filter((s) => s.length > 0);
+	const stem = parts[parts.length - 1];
+	return stem ?? null;
+}
+
+/**
+ * Resolve a catalog workflow id for a reusable workflow row so the UI can link to `/workflows/{id}`.
+ * Uses diagnostics (resolved version) and the project "available workflows" list (one row per name).
+ * Avoids linking to the wrong version when the pipeline pins something other than the catalog row
+ * returned by `DISTINCT ON (name)`.
+ */
+export function catalogWorkflowIdForPipelineSourceRow(
+	row: PipelineSourceRow,
+	available: ProjectWorkflowsAvailable | null,
+	diagnostics: WorkflowDiagnosticItem[]
+): string | null {
+	if (row.kind === 'pipeline' || !available) return null;
+	const stem = workflowStemFromRef(row.workflowRef);
+	if (!stem) return null;
+
+	const pool =
+		row.kind === 'workflow_global' ? available.global_workflows : available.project_workflows;
+
+	const candidates = pool.filter((w) => w.name === stem);
+	if (candidates.length !== 1) return null;
+	const catalogRow = candidates[0]!;
+
+	const diag = diagnostics.find((d) => d.reference === row.workflowRef);
+	const versionResolved = diag?.version_resolved?.trim();
+	const versionRequested = diag?.version_requested?.trim();
+	const rowVer = row.version?.trim();
+
+	if (versionResolved && catalogRow.version === versionResolved) return catalogRow.id;
+	if (versionRequested && versionRequested !== 'latest' && catalogRow.version === versionRequested) {
+		return catalogRow.id;
+	}
+	if (rowVer && rowVer !== 'latest' && catalogRow.version === rowVer) return catalogRow.id;
+
+	const implicitLatest =
+		(!versionRequested || versionRequested === 'latest') && (!rowVer || rowVer === 'latest');
+	if (implicitLatest) return catalogRow.id;
+
+	return null;
 }

@@ -8,7 +8,13 @@
 	/** Match code line-height so gutters align (13px × 1.45). */
 	const LINE_STYLE = 'text-[13px] leading-[1.45]';
 
-	let { source }: { source: string } = $props();
+	let {
+		source,
+		ariaLabel = 'Workflow YAML'
+	}: {
+		source: string;
+		ariaLabel?: string;
+	} = $props();
 
 	let html = $state('');
 
@@ -35,7 +41,7 @@
 <div
 	class="overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[#0d1117] shadow-inner"
 	role="region"
-	aria-label="Workflow YAML"
+	aria-label={ariaLabel}
 >
 	{#if !(source ?? '').trim()}
 		<p class="px-3 py-4 text-center text-sm text-[var(--text-tertiary)]">No definition to display.</p>
