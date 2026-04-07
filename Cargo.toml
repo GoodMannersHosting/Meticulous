@@ -85,7 +85,8 @@ indexmap = { version = "2", features = ["serde"] }
 regex = "1"
 
 # Auth
-jsonwebtoken = "10.3"
+# jsonwebtoken 10+ requires exactly one of `rust_crypto` or `aws_lc_rs` (see CryptoProvider in crate docs).
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 base64 = "0.22"
 argon2 = "0.5"
 
