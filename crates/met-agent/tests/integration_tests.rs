@@ -25,12 +25,10 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use met_agent::backend::{create_execution_backend, ExecutionBackend, NativeBackend, StepSpec};
+    use met_agent::backend::{ExecutionBackend, NativeBackend, StepSpec, create_execution_backend};
     use met_agent::config::{AgentConfig, AgentIdentity, ExecutionRuntime};
     use met_agent::heartbeat::HeartbeatState;
-    use met_agent::security::{
-        normalize_arch, EnvironmentType, JobPki, SecurityBundleCollector,
-    };
+    use met_agent::security::{EnvironmentType, JobPki, SecurityBundleCollector, normalize_arch};
     use met_proto::AgentStatus;
     use tokio::sync::RwLock;
 
@@ -50,10 +48,7 @@ mod tests {
 
         // Verify OS/arch match Rust constants
         assert_eq!(bundle.os, std::env::consts::OS);
-        assert_eq!(
-            bundle.arch,
-            normalize_arch(std::env::consts::ARCH)
-        );
+        assert_eq!(bundle.arch, normalize_arch(std::env::consts::ARCH));
 
         // Verify environment type is set
         assert!(matches!(
@@ -164,14 +159,7 @@ mod tests {
         config.controller_url = String::new();
 
         // Validation should fail for empty controller URL
-        let result = AgentConfig::load(
-            None,
-            Some(String::new()),
-            None,
-            None,
-            None,
-            vec![],
-        );
+        let result = AgentConfig::load(None, Some(String::new()), None, None, None, vec![]);
         assert!(result.is_err());
     }
 
@@ -560,11 +548,7 @@ mod tests {
         std::fs::write(ws1.join("test.txt"), "ws1 content").ok();
 
         // Try to access it from ws2 (should not be visible)
-        let command = if cfg!(windows) {
-            "dir"
-        } else {
-            "ls -la"
-        };
+        let command = if cfg!(windows) { "dir" } else { "ls -la" };
 
         let step = StepSpec {
             step_id: "isolation-test".to_string(),

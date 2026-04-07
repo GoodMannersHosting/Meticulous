@@ -9,8 +9,8 @@ use met_core::ids::{AppInstallationId, ProjectId};
 use met_core::models::{MeticulousApp, MeticulousAppInstallation};
 use met_store::repos::{MeticulousAppRepo, ProjectRepo};
 use rand::rngs::OsRng;
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::RsaPrivateKey;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -24,10 +24,7 @@ use crate::state::AppState;
 pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/admin/meticulous-apps", get(list_apps).post(create_app))
-        .route(
-            "/admin/meticulous-apps/{application_id}",
-            get(get_app),
-        )
+        .route("/admin/meticulous-apps/{application_id}", get(get_app))
         .route(
             "/admin/meticulous-apps/{application_id}/keys",
             post(add_app_key),
@@ -48,8 +45,7 @@ pub fn admin_router() -> Router<AppState> {
 
 fn generate_rsa_key_material() -> Result<(String, String, String), String> {
     let mut rng = OsRng;
-    let private_key =
-        RsaPrivateKey::new(&mut rng, 2048).map_err(|e| e.to_string())?;
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).map_err(|e| e.to_string())?;
     let public_key = rsa::RsaPublicKey::from(&private_key);
     let private_pem = private_key
         .to_pkcs8_pem(LineEnding::LF)
@@ -109,8 +105,7 @@ async fn create_app(
         return Err(ApiError::bad_request("name is required"));
     }
 
-    let (kid, private_pem, public_pem) =
-        generate_rsa_key_material().map_err(ApiError::internal)?;
+    let (kid, private_pem, public_pem) = generate_rsa_key_material().map_err(ApiError::internal)?;
 
     let repo = MeticulousAppRepo::new(state.db());
     let (app, _key) = repo
@@ -175,8 +170,7 @@ async fn add_app_key(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_admin(&admin)?;
     let app = app_for_application_id(state.db(), &application_id).await?;
-    let (kid, private_pem, public_pem) =
-        generate_rsa_key_material().map_err(ApiError::internal)?;
+    let (kid, private_pem, public_pem) = generate_rsa_key_material().map_err(ApiError::internal)?;
     MeticulousAppRepo::new(state.db())
         .add_key(app.id, &kid, &public_pem)
         .await?;
@@ -321,5 +315,7 @@ async fn revoke_installation(
     MeticulousAppRepo::new(state.db())
         .revoke_installation(installation_id)
         .await?;
-    Ok(Json(serde_json::json!({ "message": "installation revoked" })))
+    Ok(Json(
+        serde_json::json!({ "message": "installation revoked" }),
+    ))
 }

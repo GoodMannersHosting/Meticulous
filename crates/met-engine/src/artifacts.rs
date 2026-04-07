@@ -133,13 +133,16 @@ impl<B: ArtifactBackend> ArtifactManager<B> {
         artifact_id: ArtifactId,
         expires_in: std::time::Duration,
     ) -> Result<String> {
-        self.backend.presigned_download_url(artifact_id, expires_in).await
+        self.backend
+            .presigned_download_url(artifact_id, expires_in)
+            .await
     }
 }
 
 /// In-memory artifact store for testing.
 pub struct MemoryArtifactStore {
-    artifacts: std::sync::RwLock<std::collections::HashMap<ArtifactId, (ArtifactMetadata, Vec<u8>)>>,
+    artifacts:
+        std::sync::RwLock<std::collections::HashMap<ArtifactId, (ArtifactMetadata, Vec<u8>)>>,
 }
 
 impl MemoryArtifactStore {
@@ -165,10 +168,10 @@ impl ArtifactBackend for MemoryArtifactStore {
     ) -> Result<ArtifactMetadata> {
         let id = ArtifactId::new();
         let now = chrono::Utc::now();
-        
-        let expires_at = request.retention_days.map(|days| {
-            now + chrono::Duration::days(i64::from(days))
-        });
+
+        let expires_at = request
+            .retention_days
+            .map(|days| now + chrono::Duration::days(i64::from(days)));
 
         let metadata = ArtifactMetadata {
             id,
@@ -194,7 +197,8 @@ impl ArtifactBackend for MemoryArtifactStore {
     }
 
     async fn download(&self, artifact_id: ArtifactId) -> Result<Vec<u8>> {
-        let artifacts = self.artifacts
+        let artifacts = self
+            .artifacts
             .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
 
@@ -205,7 +209,8 @@ impl ArtifactBackend for MemoryArtifactStore {
     }
 
     async fn get_metadata(&self, artifact_id: ArtifactId) -> Result<ArtifactMetadata> {
-        let artifacts = self.artifacts
+        let artifacts = self
+            .artifacts
             .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
 
@@ -216,7 +221,8 @@ impl ArtifactBackend for MemoryArtifactStore {
     }
 
     async fn list_by_job_run(&self, job_run_id: JobRunId) -> Result<Vec<ArtifactMetadata>> {
-        let artifacts = self.artifacts
+        let artifacts = self
+            .artifacts
             .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
 
@@ -228,7 +234,8 @@ impl ArtifactBackend for MemoryArtifactStore {
     }
 
     async fn list_by_run(&self, run_id: RunId) -> Result<Vec<ArtifactMetadata>> {
-        let artifacts = self.artifacts
+        let artifacts = self
+            .artifacts
             .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
 

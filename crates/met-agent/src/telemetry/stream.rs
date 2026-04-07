@@ -58,7 +58,8 @@ async fn maybe_emit_syscall_observe(pipe: &StepLogPipe, b: &ExecutedBinary) -> R
         "tid": b.pid,
         "metadata": { "via": "proc_poll" }
     });
-    pipe.send_telemetry(LogStream::Syscall, &v.to_string()).await?;
+    pipe.send_telemetry(LogStream::Syscall, &v.to_string())
+        .await?;
     Ok(())
 }
 
@@ -93,14 +94,18 @@ async fn maybe_emit_runtime_script(
     }
 
     let mut file = File::open(exe_path).await.map_err(|e| {
-        crate::error::AgentError::Workspace(format!("runtime script open {}: {e}", exe_path.display()))
+        crate::error::AgentError::Workspace(format!(
+            "runtime script open {}: {e}",
+            exe_path.display()
+        ))
     })?;
 
     let per_file_cap = MAX_RUNTIME_SCRIPT_BYTES_PER_FILE.min(*budget) as usize;
     let mut buf = vec![0u8; per_file_cap.saturating_add(1)];
-    let got = file.read(&mut buf).await.map_err(|e| {
-        crate::error::AgentError::Workspace(format!("runtime script read: {e}"))
-    })?;
+    let got = file
+        .read(&mut buf)
+        .await
+        .map_err(|e| crate::error::AgentError::Workspace(format!("runtime script read: {e}")))?;
     if got >= 4 && buf[..4] == [0x7f, b'E', b'L', b'F'] {
         return Ok(());
     }
@@ -124,7 +129,8 @@ async fn maybe_emit_runtime_script(
         "audit": "runtime_script_capture"
     });
 
-    pipe.send_telemetry(LogStream::RuntimeScript, &v.to_string()).await?;
+    pipe.send_telemetry(LogStream::RuntimeScript, &v.to_string())
+        .await?;
     Ok(())
 }
 

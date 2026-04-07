@@ -5,9 +5,7 @@ use utoipa::OpenApi;
 use crate::error::{ErrorBody, ErrorResponse};
 use crate::extractors::pagination::PaginationMeta;
 use crate::routes::{
-    admin_workflows::{
-        AdminWorkflowDeleteResponse, AdminWorkflowOpResponse,
-    },
+    admin_workflows::{AdminWorkflowDeleteResponse, AdminWorkflowOpResponse},
     agents::{AgentActionResponse, AgentResponse},
     artifacts::{ArtifactResponse, AttestationResponse, SbomResponse},
     auth::{
@@ -16,6 +14,7 @@ use crate::routes::{
         MeResponse, PublicAuthProvider, SetupRequest, SetupResponse, SetupStatusResponse,
         UserResponse,
     },
+    dashboard::{DashboardStatsResponse, RecentRunResponse},
     debug::{CreateDebugSessionRequest, DebugSecretResponse, DebugSessionResponse},
     health::{CheckStatus, HealthResponse, ReadyChecks, ReadyResponse},
     orgs::{CreateOrgRequest, OrgResponse, UpdateOrgRequest},
@@ -25,7 +24,6 @@ use crate::routes::{
         ValidatePipelineRequest, ValidatePipelineResponse,
     },
     projects::{CreateProjectRequest, ProjectResponse, UpdateProjectRequest},
-    dashboard::{DashboardStatsResponse, RecentRunResponse},
     runs::{
         CancelRunResponse, DagNodeResponse, ExecutedBinarySummary, FootprintBinaryRow,
         FootprintDirectoryEntry, FootprintDirectoryGroup, FootprintNetworkRow,
@@ -35,11 +33,8 @@ use crate::routes::{
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
     stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
     tokens::{CreateTokenRequest, CreateTokenResponseBody, TokenResponse},
-    triggers::{
-        CreateTriggerRequest, TriggerPublicResponse, UpdateTriggerRequest,
-    },
+    triggers::{CreateTriggerRequest, TriggerPublicResponse, UpdateTriggerRequest},
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
-    workspace_config::{WorkspaceStoredSecretListItem, WorkspaceVariableListItem},
     webhooks::{
         CreateWebhookTargetRequest, PatchProjectWebhookRequest, ProjectWebhookRegistrationResponse,
         RotateInboundSecretResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
@@ -54,6 +49,7 @@ use crate::routes::{
         CatalogCommitPreview, CatalogRefItem, CatalogUpstreamRefSearchRequest,
         CatalogUpstreamRefSearchResponse, CatalogVersionsPage, ImportCatalogWorkflowGitRequest,
     },
+    workspace_config::{WorkspaceStoredSecretListItem, WorkspaceVariableListItem},
 };
 use crate::workflow_diagnostics::WorkflowDiagnosticItem;
 

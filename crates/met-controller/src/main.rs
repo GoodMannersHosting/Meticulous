@@ -10,7 +10,7 @@ use met_controller::nats::NatsDispatcher;
 use met_controller::registry::AgentRegistry;
 use met_core::MetConfig;
 use met_proto::agent::v1::agent_service_server::AgentServiceServer;
-use met_store::{create_pool, PoolConfig};
+use met_store::{PoolConfig, create_pool};
 use tokio::signal;
 use tonic::transport::Server;
 use tracing::info;
@@ -127,11 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = Arc::new(create_pool(&pool_config).await?);
 
     info!(url = %ctrl.nats_url, "connecting to NATS");
-    let nats = NatsDispatcher::connect(
-        &ctrl.nats_url,
-        ctrl.nats_creds_path.as_deref(),
-    )
-    .await?;
+    let nats = NatsDispatcher::connect(&ctrl.nats_url, ctrl.nats_creds_path.as_deref()).await?;
     nats.spawn_max_deliveries_dlq_forwarder();
 
     let stored_secret_crypto = std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY")

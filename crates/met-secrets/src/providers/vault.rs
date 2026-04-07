@@ -52,11 +52,16 @@ impl VaultConfig {
         let address = config.require("address")?.to_string();
         let namespace = config.get("namespace").map(String::from);
         let mount_path = config.get("mount_path").unwrap_or("secret").to_string();
-        let kv_version = config.get("kv_version").and_then(|v| v.parse().ok()).unwrap_or(2);
+        let kv_version = config
+            .get("kv_version")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
 
         let auth = if let Some(token) = config.get("token") {
             Some(VaultAuth::Token(token.to_string()))
-        } else if let (Some(role_id), Some(secret_id)) = (config.get("role_id"), config.get("secret_id")) {
+        } else if let (Some(role_id), Some(secret_id)) =
+            (config.get("role_id"), config.get("secret_id"))
+        {
             Some(VaultAuth::AppRole {
                 role_id: role_id.to_string(),
                 secret_id: secret_id.to_string(),
@@ -70,7 +75,14 @@ impl VaultConfig {
             None
         };
 
-        Ok(Self { address, auth, namespace, mount_path, kv_version, timeout_secs: 30 })
+        Ok(Self {
+            address,
+            auth,
+            namespace,
+            mount_path,
+            kv_version,
+            timeout_secs: 30,
+        })
     }
 }
 
@@ -125,7 +137,10 @@ impl VaultProvider {
             token: Arc::new(RwLock::new(token)),
         };
 
-        if matches!(&provider.config.auth, Some(VaultAuth::AppRole { .. }) | Some(VaultAuth::Jwt { .. })) {
+        if matches!(
+            &provider.config.auth,
+            Some(VaultAuth::AppRole { .. }) | Some(VaultAuth::Jwt { .. })
+        ) {
             provider.authenticate().await?;
         }
 
@@ -142,23 +157,43 @@ impl VaultProvider {
             Some(VaultAuth::AppRole { role_id, secret_id }) => {
                 let url = format!("{}/v1/auth/approle/login", self.config.address);
                 let body = serde_json::json!({ "role_id": role_id, "secret_id": secret_id });
-                let resp = self.client.post(&url).json(&body).send().await
+                let resp = self
+                    .client
+                    .post(&url)
+                    .json(&body)
+                    .send()
+                    .await
                     .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
-                let auth_resp: serde_json::Value = resp.json().await
+                let auth_resp: serde_json::Value = resp
+                    .json()
+                    .await
                     .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
-                auth_resp["auth"]["client_token"].as_str()
-                    .ok_or_else(|| SecretsError::auth_failed("vault", "no client_token in response"))?
+                auth_resp["auth"]["client_token"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        SecretsError::auth_failed("vault", "no client_token in response")
+                    })?
                     .to_string()
             }
             Some(VaultAuth::Jwt { role, jwt }) => {
                 let url = format!("{}/v1/auth/jwt/login", self.config.address);
                 let body = serde_json::json!({ "role": role, "jwt": jwt });
-                let resp = self.client.post(&url).json(&body).send().await
+                let resp = self
+                    .client
+                    .post(&url)
+                    .json(&body)
+                    .send()
+                    .await
                     .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
-                let auth_resp: serde_json::Value = resp.json().await
+                let auth_resp: serde_json::Value = resp
+                    .json()
+                    .await
                     .map_err(|e| SecretsError::auth_failed("vault", e.to_string()))?;
-                auth_resp["auth"]["client_token"].as_str()
-                    .ok_or_else(|| SecretsError::auth_failed("vault", "no client_token in response"))?
+                auth_resp["auth"]["client_token"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        SecretsError::auth_failed("vault", "no client_token in response")
+                    })?
                     .to_string()
             }
             _ => return Ok(()),
@@ -169,15 +204,24 @@ impl VaultProvider {
     }
 
     async fn get_token(&self) -> Result<String> {
-        self.token.read().await.clone()
+        self.token
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| SecretsError::auth_failed("vault", "no token available"))
     }
 
     fn build_url(&self, path: &str) -> String {
         if self.config.kv_version == 2 {
-            format!("{}/v1/{}/data/{}", self.config.address, self.config.mount_path, path)
+            format!(
+                "{}/v1/{}/data/{}",
+                self.config.address, self.config.mount_path, path
+            )
         } else {
-            format!("{}/v1/{}/{}", self.config.address, self.config.mount_path, path)
+            format!(
+                "{}/v1/{}/{}",
+                self.config.address, self.config.mount_path, path
+            )
         }
     }
 
@@ -187,7 +231,9 @@ impl VaultProvider {
         if let Some(ns) = &self.config.namespace {
             req = req.header("X-Vault-Namespace", ns);
         }
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(SecretsError::not_found(url));
@@ -226,23 +272,36 @@ impl SecretsProvider for VaultProvider {
         debug!(path, url = %url, "Fetching secret from Vault");
 
         let resp = self.request(&url).await?;
-        let body: serde_json::Value = resp.json().await
-            .map_err(|e| SecretsError::ProviderError {
+        let body: serde_json::Value =
+            resp.json().await.map_err(|e| SecretsError::ProviderError {
                 provider: "vault".into(),
                 message: format!("failed to parse response: {e}"),
             })?;
 
         if self.config.kv_version == 2 {
-            let data = body["data"]["data"].as_object().ok_or_else(|| {
-                SecretsError::InvalidFormat { message: "unexpected KV v2 response format".into() }
-            })?;
+            let data =
+                body["data"]["data"]
+                    .as_object()
+                    .ok_or_else(|| SecretsError::InvalidFormat {
+                        message: "unexpected KV v2 response format".into(),
+                    })?;
             let value_str = serde_json::to_string(data).unwrap_or_default();
-            let version = body["data"]["metadata"]["version"].as_u64().map(|v| v.to_string());
-            Ok(SecretValue::with_metadata(value_str, SecretMetadata { version, ..Default::default() }))
+            let version = body["data"]["metadata"]["version"]
+                .as_u64()
+                .map(|v| v.to_string());
+            Ok(SecretValue::with_metadata(
+                value_str,
+                SecretMetadata {
+                    version,
+                    ..Default::default()
+                },
+            ))
         } else {
-            let data = body["data"].as_object().ok_or_else(|| {
-                SecretsError::InvalidFormat { message: "unexpected KV v1 response format".into() }
-            })?;
+            let data = body["data"]
+                .as_object()
+                .ok_or_else(|| SecretsError::InvalidFormat {
+                    message: "unexpected KV v1 response format".into(),
+                })?;
             let value_str = serde_json::to_string(data).unwrap_or_default();
             Ok(SecretValue::new(value_str))
         }
@@ -254,44 +313,80 @@ impl SecretsProvider for VaultProvider {
         }
         let url = format!("{}?version={}", self.build_url(path), version);
         let resp = self.request(&url).await?;
-        let body: serde_json::Value = resp.json().await
-            .map_err(|e| SecretsError::ProviderError { provider: "vault".into(), message: e.to_string() })?;
-        let data = body["data"]["data"].as_object().ok_or_else(|| {
-            SecretsError::InvalidFormat { message: "unexpected response".into() }
-        })?;
+        let body: serde_json::Value =
+            resp.json().await.map_err(|e| SecretsError::ProviderError {
+                provider: "vault".into(),
+                message: e.to_string(),
+            })?;
+        let data = body["data"]["data"]
+            .as_object()
+            .ok_or_else(|| SecretsError::InvalidFormat {
+                message: "unexpected response".into(),
+            })?;
         Ok(SecretValue::with_metadata(
             serde_json::to_string(data).unwrap_or_default(),
-            SecretMetadata { version: Some(version.to_string()), ..Default::default() },
+            SecretMetadata {
+                version: Some(version.to_string()),
+                ..Default::default()
+            },
         ))
     }
 
     async fn list_secrets(&self, prefix: &str) -> Result<Vec<String>> {
         let url = if self.config.kv_version == 2 {
-            format!("{}/v1/{}/metadata/{}?list=true", self.config.address, self.config.mount_path, prefix)
+            format!(
+                "{}/v1/{}/metadata/{}?list=true",
+                self.config.address, self.config.mount_path, prefix
+            )
         } else {
-            format!("{}/v1/{}/{}?list=true", self.config.address, self.config.mount_path, prefix)
+            format!(
+                "{}/v1/{}/{}?list=true",
+                self.config.address, self.config.mount_path, prefix
+            )
         };
         let token = self.get_token().await?;
-        let resp = self.client.get(&url).header("X-Vault-Token", &token).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
             .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
-        let body: serde_json::Value = resp.json().await
-            .map_err(|e| SecretsError::ProviderError { provider: "vault".into(), message: e.to_string() })?;
-        let keys = body["data"]["keys"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        let body: serde_json::Value =
+            resp.json().await.map_err(|e| SecretsError::ProviderError {
+                provider: "vault".into(),
+                message: e.to_string(),
+            })?;
+        let keys = body["data"]["keys"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         Ok(keys)
     }
 
-    fn provider_type(&self) -> ProviderType { ProviderType::Vault }
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::Vault
+    }
 
     async fn health_check(&self) -> Result<()> {
         let url = format!("{}/v1/sys/health", self.config.address);
-        let resp = self.client.get(&url).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| SecretsError::connection_failed("vault", e.to_string()))?;
         if resp.status().is_success() || resp.status().as_u16() == 429 {
             Ok(())
         } else {
-            Err(SecretsError::provider_unavailable("vault", format!("health check returned {}", resp.status())))
+            Err(SecretsError::provider_unavailable(
+                "vault",
+                format!("health check returned {}", resp.status()),
+            ))
         }
     }
 }

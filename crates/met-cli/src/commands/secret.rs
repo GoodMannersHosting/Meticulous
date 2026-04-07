@@ -1,7 +1,7 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::context::ResolvedContext;
 use crate::output::{build_table, format_timestamp, print_serialized, print_success, print_table};
-use crate::OutputFormat;
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 
@@ -18,11 +18,7 @@ pub struct SecretListResponse {
     pub data: Vec<Secret>,
 }
 
-pub async fn list(
-    client: &ApiClient,
-    ctx: &ResolvedContext,
-    format: OutputFormat,
-) -> Result<()> {
+pub async fn list(client: &ApiClient, ctx: &ResolvedContext, format: OutputFormat) -> Result<()> {
     let org = ctx.require_org()?;
     let project = ctx.require_project()?;
 

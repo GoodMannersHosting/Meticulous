@@ -11,8 +11,8 @@ use met_proto::common::v1::Timestamp;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::Channel;
 use tonic::Request;
+use tonic::transport::Channel;
 use tracing::warn;
 
 use crate::error::{AgentError, Result};
@@ -84,7 +84,11 @@ impl StepLogPipe {
 /// Owns the coordinator task; call [`Self::finish`] to await upload and ACK.
 pub struct StepLogSession {
     line_tx: Option<mpsc::Sender<StreamMsg>>,
-    upload: Option<tokio::task::JoinHandle<std::result::Result<tonic::Response<met_proto::agent::v1::LogAck>, tonic::Status>>>,
+    upload: Option<
+        tokio::task::JoinHandle<
+            std::result::Result<tonic::Response<met_proto::agent::v1::LogAck>, tonic::Status>,
+        >,
+    >,
     writer_done: Option<tokio::task::JoinHandle<Result<()>>>,
 }
 
@@ -119,7 +123,9 @@ impl StepLogSession {
     }
 
     pub fn pipe(&self) -> Option<StepLogPipe> {
-        self.line_tx.as_ref().map(|tx| StepLogPipe { tx: tx.clone() })
+        self.line_tx
+            .as_ref()
+            .map(|tx| StepLogPipe { tx: tx.clone() })
     }
 
     /// Waits until all [`StepLogPipe`] clones are dropped, spool is flushed, stream completes, and returns `last_sequence` from `LogAck`.
@@ -138,10 +144,12 @@ impl StepLogSession {
             .upload
             .take()
             .ok_or_else(|| AgentError::Internal("stream_logs task handle missing".to_string()))?;
-        let resp = upload.await.map_err(|e| {
-            AgentError::LogStream(format!("stream_logs task panicked or cancelled: {e}"))
-        })?
-        .map_err(AgentError::Grpc)?;
+        let resp = upload
+            .await
+            .map_err(|e| {
+                AgentError::LogStream(format!("stream_logs task panicked or cancelled: {e}"))
+            })?
+            .map_err(AgentError::Grpc)?;
 
         Ok(resp.into_inner().last_sequence)
     }

@@ -14,12 +14,12 @@ pub use k8s::KubernetesSecretsProvider;
 pub use vault::VaultProvider;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{Result, SecretsError};
 use crate::traits::{SecretRef, SecretsBroker, SecretsProvider};
@@ -168,7 +168,10 @@ impl MultiProviderBroker {
             if !self.providers.contains_key(&provider_type) {
                 return Err(SecretsError::provider_unavailable(
                     provider_type.as_str(),
-                    format!("provider not configured for secret '{}'", secret_ref.env_name),
+                    format!(
+                        "provider not configured for secret '{}'",
+                        secret_ref.env_name
+                    ),
                 ));
             }
 
@@ -216,7 +219,12 @@ impl MultiProviderBroker {
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
                 let delay = self.config.retry_base_delay * 2u32.saturating_pow(attempt - 1);
-                debug!(attempt, delay_ms = delay.as_millis(), path, "retrying secret fetch");
+                debug!(
+                    attempt,
+                    delay_ms = delay.as_millis(),
+                    path,
+                    "retrying secret fetch"
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -227,7 +235,8 @@ impl MultiProviderBroker {
                 ));
             }
 
-            match tokio::time::timeout(self.config.request_timeout, provider.get_secret(path)).await {
+            match tokio::time::timeout(self.config.request_timeout, provider.get_secret(path)).await
+            {
                 Ok(Ok(value)) => {
                     cb.record_success();
                     return Ok(value);
@@ -256,11 +265,9 @@ impl MultiProviderBroker {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            SecretsError::ProviderError {
-                provider: "unknown".into(),
-                message: "retry exhausted".into(),
-            }
+        Err(last_error.unwrap_or_else(|| SecretsError::ProviderError {
+            provider: "unknown".into(),
+            message: "retry exhausted".into(),
         }))
     }
 }
@@ -274,9 +281,9 @@ impl Default for MultiProviderBroker {
 #[async_trait::async_trait]
 impl SecretsBroker for MultiProviderBroker {
     async fn get_secret(&self, path: &str) -> Result<SecretValue> {
-        let provider_type = self.default_provider.ok_or_else(|| {
-            SecretsError::Configuration("no default provider configured".into())
-        })?;
+        let provider_type = self
+            .default_provider
+            .ok_or_else(|| SecretsError::Configuration("no default provider configured".into()))?;
         self.get_secret_from(provider_type, path).await
     }
 
@@ -306,10 +313,7 @@ impl SecretsBroker for MultiProviderBroker {
         }
     }
 
-    async fn resolve_secrets(
-        &self,
-        refs: &[SecretRef],
-    ) -> Result<HashMap<String, SecretValue>> {
+    async fn resolve_secrets(&self, refs: &[SecretRef]) -> Result<HashMap<String, SecretValue>> {
         let mut results = HashMap::with_capacity(refs.len());
 
         for secret_ref in refs {
@@ -323,17 +327,17 @@ impl SecretsBroker for MultiProviderBroker {
                     ))
                 })?;
 
-            let value = self.get_secret_from(provider_type, &secret_ref.path).await?;
+            let value = self
+                .get_secret_from(provider_type, &secret_ref.path)
+                .await?;
 
             if let Some(key) = &secret_ref.key {
-                let json_val: serde_json::Value =
-                    serde_json::from_str(value.expose_secret()).map_err(|e| {
-                        SecretsError::InvalidFormat {
-                            message: format!("secret is not valid JSON for key extraction: {e}"),
-                        }
+                let json_val: serde_json::Value = serde_json::from_str(value.expose_secret())
+                    .map_err(|e| SecretsError::InvalidFormat {
+                        message: format!("secret is not valid JSON for key extraction: {e}"),
                     })?;
                 let extracted = json_val.get(key).ok_or_else(|| SecretsError::NotFound {
-                    path: format!("{}#{}",secret_ref.path, key),
+                    path: format!("{}#{}", secret_ref.path, key),
                 })?;
                 let extracted_str = match extracted {
                     serde_json::Value::String(s) => s.clone(),
@@ -423,7 +427,8 @@ mod tests {
     #[tokio::test]
     async fn test_preflight_no_provider() {
         let broker = MultiProviderBroker::new();
-        let refs = vec![SecretRef::new("MY_SECRET", "secret/path").with_provider(ProviderType::Vault)];
+        let refs =
+            vec![SecretRef::new("MY_SECRET", "secret/path").with_provider(ProviderType::Vault)];
         let result = broker.preflight_check(&refs).await;
         assert!(result.is_err());
     }

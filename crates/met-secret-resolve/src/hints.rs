@@ -35,7 +35,10 @@ pub fn hints_json_from_secret_refs(refs: &IndexMap<String, SecretRef>) -> (bool,
     if v.is_empty() {
         return (false, String::new());
     }
-    let hints = SecretResolutionHints { version: 1, refs: v };
+    let hints = SecretResolutionHints {
+        version: 1,
+        refs: v,
+    };
     (
         true,
         serde_json::to_string(&hints).unwrap_or_else(|_| "{}".to_string()),

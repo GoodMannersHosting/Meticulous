@@ -70,7 +70,10 @@ impl Default for MockSecretEncryption {
 #[async_trait]
 impl SecretEncryption for MockSecretEncryption {
     async fn register_agent_key(&self, agent_id: AgentId, public_key: &[u8]) -> Result<()> {
-        let mut keys = self.keys.write().map_err(|e| EngineError::internal(e.to_string()))?;
+        let mut keys = self
+            .keys
+            .write()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
         keys.insert(agent_id, public_key.to_vec());
         debug!(%agent_id, "registered agent public key");
         Ok(())
@@ -81,10 +84,16 @@ impl SecretEncryption for MockSecretEncryption {
         agent_id: AgentId,
         secrets: &HashMap<String, String>,
     ) -> Result<Vec<EncryptedSecret>> {
-        let keys = self.keys.read().map_err(|e| EngineError::internal(e.to_string()))?;
-        
+        let keys = self
+            .keys
+            .read()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
+
         if !keys.contains_key(&agent_id) {
-            return Err(EngineError::internal(format!("No key registered for agent {}", agent_id)));
+            return Err(EngineError::internal(format!(
+                "No key registered for agent {}",
+                agent_id
+            )));
         }
 
         let mut encrypted = Vec::new();
@@ -92,9 +101,9 @@ impl SecretEncryption for MockSecretEncryption {
             let mut hasher = Sha256::new();
             hasher.update(value.as_bytes());
             let sha256 = hex::encode(hasher.finalize());
-            
+
             let encrypted_value = xor_encrypt(value.as_bytes(), b"mock_key");
-            
+
             encrypted.push(EncryptedSecret {
                 name: name.clone(),
                 encrypted_value,
@@ -118,7 +127,10 @@ impl SecretEncryption for MockSecretEncryption {
     }
 
     async fn clear_agent_key(&self, agent_id: AgentId) -> Result<()> {
-        let mut keys = self.keys.write().map_err(|e| EngineError::internal(e.to_string()))?;
+        let mut keys = self
+            .keys
+            .write()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
         keys.remove(&agent_id);
         debug!(%agent_id, "cleared agent key");
         Ok(())
@@ -161,7 +173,7 @@ impl SecretEncryption for ProductionSecretEncryption {
         secrets: &HashMap<String, String>,
     ) -> Result<Vec<EncryptedSecret>> {
         let keys = self.keys.read().await;
-        
+
         let public_key = keys.get(&agent_id).ok_or_else(|| {
             EngineError::internal(format!("No key registered for agent {}", agent_id))
         })?;
@@ -171,9 +183,9 @@ impl SecretEncryption for ProductionSecretEncryption {
             let mut hasher = Sha256::new();
             hasher.update(value.as_bytes());
             let sha256 = hex::encode(hasher.finalize());
-            
+
             let encrypted_value = encrypt_with_public_key(public_key, value.as_bytes())?;
-            
+
             encrypted.push(EncryptedSecret {
                 name: name.clone(),
                 encrypted_value,
@@ -234,17 +246,23 @@ mod tests {
     async fn test_mock_encryption() {
         let encryption = MockSecretEncryption::new();
         let agent_id = AgentId::new();
-        
-        encryption.register_agent_key(agent_id, b"test_public_key").await.unwrap();
-        
+
+        encryption
+            .register_agent_key(agent_id, b"test_public_key")
+            .await
+            .unwrap();
+
         let mut secrets = HashMap::new();
         secrets.insert("API_KEY".to_string(), "secret123".to_string());
         secrets.insert("DATABASE_URL".to_string(), "postgres://...".to_string());
-        
-        let encrypted = encryption.encrypt_for_agent(agent_id, &secrets).await.unwrap();
-        
+
+        let encrypted = encryption
+            .encrypt_for_agent(agent_id, &secrets)
+            .await
+            .unwrap();
+
         assert_eq!(encrypted.len(), 2);
-        
+
         for es in &encrypted {
             assert!(!es.sha256.is_empty());
             assert!(!es.encrypted_value.is_empty());
@@ -255,10 +273,10 @@ mod tests {
     async fn test_encryption_without_key() {
         let encryption = MockSecretEncryption::new();
         let agent_id = AgentId::new();
-        
+
         let mut secrets = HashMap::new();
         secrets.insert("API_KEY".to_string(), "secret123".to_string());
-        
+
         let result = encryption.encrypt_for_agent(agent_id, &secrets).await;
         assert!(result.is_err());
     }
@@ -267,13 +285,16 @@ mod tests {
     async fn test_clear_agent_key() {
         let encryption = MockSecretEncryption::new();
         let agent_id = AgentId::new();
-        
-        encryption.register_agent_key(agent_id, b"test_key").await.unwrap();
+
+        encryption
+            .register_agent_key(agent_id, b"test_key")
+            .await
+            .unwrap();
         encryption.clear_agent_key(agent_id).await.unwrap();
-        
+
         let mut secrets = HashMap::new();
         secrets.insert("KEY".to_string(), "value".to_string());
-        
+
         let result = encryption.encrypt_for_agent(agent_id, &secrets).await;
         assert!(result.is_err());
     }

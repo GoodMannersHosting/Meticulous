@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use met_core::ids::{AgentId, JobId, JobRunId, RunId, StepRunId};
-use std::collections::hash_map::Entry;
 use met_core::models::{JobStatus, RunStatus};
+use std::collections::hash_map::Entry;
 use tokio::sync::RwLock;
 
 /// State of a single job within a run.
@@ -147,11 +147,11 @@ impl RunState {
     pub async fn set_status(&self, status: RunStatus) {
         let mut s = self.inner.status.write().await;
         *s = status;
-        
+
         if status == RunStatus::Running && self.inner.started_at.read().await.is_none() {
             *self.inner.started_at.write().await = Some(Utc::now());
         }
-        
+
         if status.is_terminal() {
             *self.inner.finished_at.write().await = Some(Utc::now());
         }

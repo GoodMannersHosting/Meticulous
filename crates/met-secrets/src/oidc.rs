@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{
-    Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation,
-};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -136,17 +134,32 @@ pub struct OidcValidator {
 
 impl OidcValidator {
     pub async fn new(config: OidcConfig) -> Result<Self> {
-        let issuers: HashMap<String, IssuerConfig> = config.issuers.iter().map(|c| (c.issuer.clone(), c.clone())).collect();
+        let issuers: HashMap<String, IssuerConfig> = config
+            .issuers
+            .iter()
+            .map(|c| (c.issuer.clone(), c.clone()))
+            .collect();
         info!(issuers = ?issuers.keys().collect::<Vec<_>>(), "OIDC validator initialized");
-        Ok(Self { config, issuers, jwks_cache: Arc::new(RwLock::new(HashMap::new())) })
+        Ok(Self {
+            config,
+            issuers,
+            jwks_cache: Arc::new(RwLock::new(HashMap::new())),
+        })
     }
 
     pub async fn validate_token(&self, token: &str) -> Result<ValidatedClaims> {
-        let header = jsonwebtoken::decode_header(token).map_err(|e| OidcError::MalformedToken(e.to_string()))?;
-        let kid = header.kid.as_ref().ok_or_else(|| OidcError::MalformedToken("missing kid".into()))?;
+        let header = jsonwebtoken::decode_header(token)
+            .map_err(|e| OidcError::MalformedToken(e.to_string()))?;
+        let kid = header
+            .kid
+            .as_ref()
+            .ok_or_else(|| OidcError::MalformedToken("missing kid".into()))?;
         let unvalidated = self.peek_claims(token)?;
         let issuer = &unvalidated.iss;
-        let issuer_config = self.issuers.get(issuer).ok_or_else(|| OidcError::UntrustedIssuer(issuer.clone()))?;
+        let issuer_config = self
+            .issuers
+            .get(issuer)
+            .ok_or_else(|| OidcError::UntrustedIssuer(issuer.clone()))?;
         let decoding_key = self.get_signing_key(issuer, kid).await?;
 
         let mut validation = Validation::new(header.alg);
@@ -154,7 +167,9 @@ impl OidcValidator {
         validation.set_issuer(&[issuer]);
         validation.leeway = self.config.clock_skew_tolerance.as_secs();
 
-        let token_data: TokenData<JwtClaims> = jsonwebtoken::decode(token, &decoding_key, &validation).map_err(|e| self.map_jwt_error(e))?;
+        let token_data: TokenData<JwtClaims> =
+            jsonwebtoken::decode(token, &decoding_key, &validation)
+                .map_err(|e| self.map_jwt_error(e))?;
         let claims = token_data.claims;
 
         if !claims.aud.contains(&issuer_config.audience) {
@@ -172,7 +187,8 @@ impl OidcValidator {
             issuer: claims.iss,
             audience: claims.aud.first().unwrap_or("").to_string(),
             expires_at: DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(Utc::now),
-            issued_at: DateTime::from_timestamp(claims.iat.unwrap_or(0), 0).unwrap_or_else(Utc::now),
+            issued_at: DateTime::from_timestamp(claims.iat.unwrap_or(0), 0)
+                .unwrap_or_else(Utc::now),
             email: claims.email,
             email_verified: claims.email_verified,
             name: claims.name,
@@ -189,10 +205,14 @@ impl OidcValidator {
 
     fn peek_claims(&self, token: &str) -> Result<JwtClaims> {
         let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() != 3 { return Err(OidcError::MalformedToken("invalid format".into())); }
-        let payload = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, parts[1])
-            .map_err(|e| OidcError::MalformedToken(format!("base64: {e}")))?;
-        serde_json::from_slice(&payload).map_err(|e| OidcError::MalformedToken(format!("json: {e}")))
+        if parts.len() != 3 {
+            return Err(OidcError::MalformedToken("invalid format".into()));
+        }
+        let payload =
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, parts[1])
+                .map_err(|e| OidcError::MalformedToken(format!("base64: {e}")))?;
+        serde_json::from_slice(&payload)
+            .map_err(|e| OidcError::MalformedToken(format!("json: {e}")))
     }
 
     async fn get_signing_key(&self, issuer: &str, kid: &str) -> Result<DecodingKey> {
@@ -200,28 +220,45 @@ impl OidcValidator {
             let cache = self.jwks_cache.read().await;
             if let Some(cached) = cache.get(issuer) {
                 if cached.fetched_at.elapsed() < self.config.jwks_cache_duration {
-                    if let Some(key) = cached.keys.get(kid) { return Ok(key.clone()); }
+                    if let Some(key) = cached.keys.get(kid) {
+                        return Ok(key.clone());
+                    }
                 }
             }
         }
         self.refresh_jwks(issuer).await?;
         let cache = self.jwks_cache.read().await;
-        cache.get(issuer).and_then(|c| c.keys.get(kid).cloned()).ok_or_else(|| OidcError::KeyNotFound(kid.to_string()))
+        cache
+            .get(issuer)
+            .and_then(|c| c.keys.get(kid).cloned())
+            .ok_or_else(|| OidcError::KeyNotFound(kid.to_string()))
     }
 
     async fn refresh_jwks(&self, issuer: &str) -> Result<()> {
-        let issuer_config = self.issuers.get(issuer).ok_or_else(|| OidcError::UntrustedIssuer(issuer.to_string()))?;
-        let jwks_uri = issuer_config.jwks_uri.clone()
+        let issuer_config = self
+            .issuers
+            .get(issuer)
+            .ok_or_else(|| OidcError::UntrustedIssuer(issuer.to_string()))?;
+        let jwks_uri = issuer_config
+            .jwks_uri
+            .clone()
             .unwrap_or_else(|| format!("{}/.well-known/jwks.json", issuer.trim_end_matches('/')));
         debug!(issuer, uri = %jwks_uri, "Fetching JWKS");
 
-        let resp = reqwest::get(&jwks_uri).await.map_err(|e| OidcError::JwksFetchFailed(e.to_string()))?;
-        let jwks: serde_json::Value = resp.json().await.map_err(|e| OidcError::JwksFetchFailed(e.to_string()))?;
+        let resp = reqwest::get(&jwks_uri)
+            .await
+            .map_err(|e| OidcError::JwksFetchFailed(e.to_string()))?;
+        let jwks: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| OidcError::JwksFetchFailed(e.to_string()))?;
 
         let mut keys = HashMap::new();
         if let Some(key_array) = jwks["keys"].as_array() {
             for jwk in key_array {
-                if let (Some(kid), Some(n), Some(e)) = (jwk["kid"].as_str(), jwk["n"].as_str(), jwk["e"].as_str()) {
+                if let (Some(kid), Some(n), Some(e)) =
+                    (jwk["kid"].as_str(), jwk["n"].as_str(), jwk["e"].as_str())
+                {
                     if let Ok(key) = DecodingKey::from_rsa_components(n, e) {
                         keys.insert(kid.to_string(), key);
                     }
@@ -230,7 +267,13 @@ impl OidcValidator {
         }
 
         let mut cache = self.jwks_cache.write().await;
-        cache.insert(issuer.to_string(), CachedJwks { keys, fetched_at: Instant::now() });
+        cache.insert(
+            issuer.to_string(),
+            CachedJwks {
+                keys,
+                fetched_at: Instant::now(),
+            },
+        );
         Ok(())
     }
 
@@ -240,7 +283,10 @@ impl OidcValidator {
             ErrorKind::ExpiredSignature => OidcError::TokenExpired,
             ErrorKind::ImmatureSignature => OidcError::TokenNotYetValid,
             ErrorKind::InvalidSignature => OidcError::InvalidSignature,
-            ErrorKind::InvalidAudience => OidcError::InvalidAudience { expected: "configured".into(), actual: "token".into() },
+            ErrorKind::InvalidAudience => OidcError::InvalidAudience {
+                expected: "configured".into(),
+                actual: "token".into(),
+            },
             ErrorKind::InvalidIssuer => OidcError::UntrustedIssuer("from token".into()),
             _ => OidcError::Validation(err.to_string()),
         }
@@ -268,24 +314,46 @@ pub struct OidcValidatorBuilder {
 }
 
 impl OidcValidatorBuilder {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn with_issuer(mut self, config: IssuerConfig) -> Self { self.issuers.push(config); self }
-
-    pub fn with_simple_issuer(mut self, issuer: impl Into<String>, audience: impl Into<String>) -> Self {
-        self.issuers.push(IssuerConfig { issuer: issuer.into(), audience: audience.into(), ..Default::default() });
+    pub fn with_issuer(mut self, config: IssuerConfig) -> Self {
+        self.issuers.push(config);
         self
     }
 
-    pub fn with_cache_duration(mut self, duration: Duration) -> Self { self.jwks_cache_duration = Some(duration); self }
-    pub fn with_clock_skew(mut self, tolerance: Duration) -> Self { self.clock_skew_tolerance = Some(tolerance); self }
+    pub fn with_simple_issuer(
+        mut self,
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+    ) -> Self {
+        self.issuers.push(IssuerConfig {
+            issuer: issuer.into(),
+            audience: audience.into(),
+            ..Default::default()
+        });
+        self
+    }
+
+    pub fn with_cache_duration(mut self, duration: Duration) -> Self {
+        self.jwks_cache_duration = Some(duration);
+        self
+    }
+    pub fn with_clock_skew(mut self, tolerance: Duration) -> Self {
+        self.clock_skew_tolerance = Some(tolerance);
+        self
+    }
 
     pub async fn build(self) -> Result<OidcValidator> {
         OidcValidator::new(OidcConfig {
             issuers: self.issuers,
-            jwks_cache_duration: self.jwks_cache_duration.unwrap_or(Duration::from_secs(3600)),
+            jwks_cache_duration: self
+                .jwks_cache_duration
+                .unwrap_or(Duration::from_secs(3600)),
             clock_skew_tolerance: self.clock_skew_tolerance.unwrap_or(Duration::from_secs(60)),
-        }).await
+        })
+        .await
     }
 }
 
@@ -319,10 +387,21 @@ impl OidcDiscoveryDocument {
             subject_types_supported: vec!["public".into()],
             id_token_signing_alg_values_supported: vec!["RS256".into(), "ES256".into()],
             claims_supported: vec![
-                "sub".into(), "iss".into(), "aud".into(), "exp".into(), "iat".into(),
-                "org_id".into(), "project_id".into(), "pipeline_id".into(), "run_id".into(),
-                "job_id".into(), "ref".into(), "sha".into(), "trigger".into(),
-                "runner_os".into(), "runner_arch".into(),
+                "sub".into(),
+                "iss".into(),
+                "aud".into(),
+                "exp".into(),
+                "iat".into(),
+                "org_id".into(),
+                "project_id".into(),
+                "pipeline_id".into(),
+                "run_id".into(),
+                "job_id".into(),
+                "ref".into(),
+                "sha".into(),
+                "trigger".into(),
+                "runner_os".into(),
+                "runner_arch".into(),
             ],
         }
     }
@@ -387,7 +466,9 @@ pub struct PipelineTokenIssuer {
 impl PipelineTokenIssuer {
     pub fn new(issuer_url: String, audience: String, token_lifetime: Duration) -> Self {
         Self {
-            issuer_url, audience, token_lifetime,
+            issuer_url,
+            audience,
+            token_lifetime,
             signing_keys: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -436,7 +517,10 @@ impl PipelineTokenIssuer {
             sub: format!("pipeline:{org_id}:{project_id}:{pipeline_id}"),
             iss: self.issuer_url.clone(),
             aud: self.audience.clone(),
-            exp: (now + chrono::Duration::from_std(self.token_lifetime).unwrap_or(chrono::Duration::hours(1))).timestamp(),
+            exp: (now
+                + chrono::Duration::from_std(self.token_lifetime)
+                    .unwrap_or(chrono::Duration::hours(1)))
+            .timestamp(),
             iat: now.timestamp(),
             jti: uuid::Uuid::now_v7().to_string(),
             org_id: org_id.to_string(),
@@ -457,14 +541,17 @@ impl PipelineTokenIssuer {
         // In production, this would serialize the public keys in JWK format.
         // For now, return an empty keyset that can be populated.
         let keys = self.signing_keys.read().await;
-        let key_entries: Vec<serde_json::Value> = keys.iter().map(|k| {
-            serde_json::json!({
-                "kid": k.kid,
-                "kty": "RSA",
-                "alg": format!("{:?}", k.algorithm),
-                "use": "sig",
+        let key_entries: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|k| {
+                serde_json::json!({
+                    "kid": k.kid,
+                    "kty": "RSA",
+                    "alg": format!("{:?}", k.algorithm),
+                    "use": "sig",
+                })
             })
-        }).collect();
+            .collect();
         serde_json::json!({ "keys": key_entries })
     }
 }
@@ -482,22 +569,34 @@ mod tests {
     #[tokio::test]
     async fn test_add_issuer() {
         let mut validator = OidcValidator::new(OidcConfig::default()).await.unwrap();
-        validator.add_issuer(IssuerConfig { issuer: "https://auth.example.com".into(), audience: "api".into(), ..Default::default() });
-        assert_eq!(validator.trusted_issuers(), vec!["https://auth.example.com"]);
+        validator.add_issuer(IssuerConfig {
+            issuer: "https://auth.example.com".into(),
+            audience: "api".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            validator.trusted_issuers(),
+            vec!["https://auth.example.com"]
+        );
     }
 
     #[test]
     fn test_discovery_document() {
         let doc = OidcDiscoveryDocument::generate("https://meticulous.example.com");
         assert_eq!(doc.issuer, "https://meticulous.example.com");
-        assert_eq!(doc.jwks_uri, "https://meticulous.example.com/.well-known/jwks.json");
+        assert_eq!(
+            doc.jwks_uri,
+            "https://meticulous.example.com/.well-known/jwks.json"
+        );
         assert!(doc.claims_supported.contains(&"pipeline_id".to_string()));
     }
 
     #[tokio::test]
     async fn test_pipeline_token_issuer_build_claims() {
         let issuer = PipelineTokenIssuer::new(
-            "https://ci.example.com".into(), "sts.amazonaws.com".into(), Duration::from_secs(3600),
+            "https://ci.example.com".into(),
+            "sts.amazonaws.com".into(),
+            Duration::from_secs(3600),
         );
         let claims = issuer.build_claims("org1", "proj1", "pipe1", "run1", "job1");
         assert_eq!(claims.sub, "pipeline:org1:proj1:pipe1");

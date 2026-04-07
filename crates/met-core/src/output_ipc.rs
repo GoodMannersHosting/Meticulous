@@ -43,7 +43,11 @@ pub enum OutputIpcDecodeError {
 }
 
 /// Encode a single frame.
-pub fn encode_frame(msg_type: u8, key: &str, value: &[u8]) -> Result<Vec<u8>, OutputIpcDecodeError> {
+pub fn encode_frame(
+    msg_type: u8,
+    key: &str,
+    value: &[u8],
+) -> Result<Vec<u8>, OutputIpcDecodeError> {
     validate_key(key)?;
     if value.len() > OUTPUT_VALUE_MAX_BYTES {
         return Err(OutputIpcDecodeError::ValueTooLarge);

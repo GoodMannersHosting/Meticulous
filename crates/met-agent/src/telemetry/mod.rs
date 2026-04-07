@@ -13,8 +13,8 @@ mod stream;
 mod net_flow;
 
 pub use stream::{
-    emit_for_discovered_processes, syscall_exec_observe_enabled, MAX_RUNTIME_SCRIPT_BYTES_PER_FILE,
-    MAX_RUNTIME_SCRIPT_BYTES_PER_STEP,
+    MAX_RUNTIME_SCRIPT_BYTES_PER_FILE, MAX_RUNTIME_SCRIPT_BYTES_PER_STEP,
+    emit_for_discovered_processes, syscall_exec_observe_enabled,
 };
 
 #[cfg(target_os = "linux")]

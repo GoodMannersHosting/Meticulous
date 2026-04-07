@@ -101,22 +101,27 @@ pub fn build_dag(nodes: &[DagNode], diagnostics: &mut ParseDiagnostics) -> Optio
                 diagnostics.push(
                     ParseError::new(
                         ErrorCode::E5002,
-                        format!(
-                            "unknown dependency '{}' referenced by '{}'",
-                            dep, node.id
-                        ),
+                        format!("unknown dependency '{}' referenced by '{}'", dep, node.id),
                     )
                     .with_source(node.source.clone())
                     .with_hint(format!(
                         "available IDs: {}",
-                        node_map.keys().take(5).cloned().collect::<Vec<_>>().join(", ")
+                        node_map
+                            .keys()
+                            .take(5)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )),
                 );
                 continue;
             }
 
             // Add edges
-            adjacency.entry(dep.clone()).or_default().push(node.id.clone());
+            adjacency
+                .entry(dep.clone())
+                .or_default()
+                .push(node.id.clone());
             reverse_adjacency
                 .entry(node.id.clone())
                 .or_default()
@@ -151,10 +156,7 @@ pub fn build_dag(nodes: &[DagNode], diagnostics: &mut ParseDiagnostics) -> Optio
             diagnostics.push(
                 ParseError::warning(
                     ErrorCode::E5004,
-                    format!(
-                        "node '{}' is unreachable from entry points",
-                        node.id
-                    ),
+                    format!("node '{}' is unreachable from entry points", node.id),
                 )
                 .with_source(node.source.clone()),
             );
@@ -256,7 +258,13 @@ fn find_cycle(
     // Use reverse adjacency to find cycle in the direction of dependencies
     for node in reverse_adjacency.keys() {
         if !visited.contains(node) {
-            if dfs(node, reverse_adjacency, &mut visited, &mut rec_stack, &mut cycle_path) {
+            if dfs(
+                node,
+                reverse_adjacency,
+                &mut visited,
+                &mut rec_stack,
+                &mut cycle_path,
+            ) {
                 // Trim to just the cycle
                 if let Some(start) = cycle_path.last() {
                     if let Some(pos) = cycle_path.iter().position(|n| n == start) {

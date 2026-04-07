@@ -55,10 +55,7 @@ impl JoinTokenSource {
     /// Whether to write `~/.met/agentconfig.toml` after successful registration.
     #[must_use]
     pub fn should_persist_registration_config(&self) -> bool {
-        matches!(
-            self,
-            Self::FromCli | Self::FromEnv | Self::FromInteractive
-        )
+        matches!(self, Self::FromCli | Self::FromEnv | Self::FromInteractive)
     }
 }
 
@@ -191,9 +188,7 @@ impl AgentConfig {
         let mut config = Self::default();
 
         let explicit_path = config_path.map(PathBuf::from);
-        let config_file = explicit_path
-            .clone()
-            .or_else(Self::default_config_path);
+        let config_file = explicit_path.clone().or_else(Self::default_config_path);
 
         let mut loaded_from_path: Option<PathBuf> = None;
 
@@ -420,12 +415,12 @@ impl AgentConfig {
 
     /// Get the agent name, falling back to hostname.
     pub fn agent_name(&self) -> String {
-        self.name
-            .clone()
-            .unwrap_or_else(|| hostname::get()
+        self.name.clone().unwrap_or_else(|| {
+            hostname::get()
                 .ok()
                 .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "unknown".to_string()))
+                .unwrap_or_else(|| "unknown".to_string())
+        })
     }
 
     /// Get the data directory for storing agent state (e.g. identity file).
@@ -575,7 +570,8 @@ mod tests {
     #[test]
     fn load_extensionless_as_yaml() {
         let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"controller_url: http://extless:9090\n").unwrap();
+        f.write_all(b"controller_url: http://extless:9090\n")
+            .unwrap();
         let (c, _) = AgentConfig::load(Some(f.path()), None, None, None, None, vec![]).unwrap();
         assert_eq!(c.controller_url, "http://extless:9090");
     }

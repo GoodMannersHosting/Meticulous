@@ -1,9 +1,9 @@
 //! Gzip-compressed JSONL encoding for durable log archives (SeaweedFS / S3).
 
 use chrono::{DateTime, Utc};
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use thiserror::Error;

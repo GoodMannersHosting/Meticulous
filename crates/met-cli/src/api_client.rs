@@ -1,5 +1,5 @@
 use reqwest::{Client, StatusCode};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -82,14 +82,7 @@ impl ApiClient {
     fn url(&self, path: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
         // Auth, admin, and OAuth live at the API root (not under `/api/v1`).
-        let root_paths = [
-            "/auth/",
-            "/admin/",
-            "/oauth/",
-            "/health",
-            "/ready",
-            "/live",
-        ];
+        let root_paths = ["/auth/", "/admin/", "/oauth/", "/health", "/ready", "/live"];
         let use_root = root_paths.iter().any(|p| path == *p || path.starts_with(p));
         if use_root {
             format!("{base}{path}")
@@ -231,11 +224,7 @@ impl ApiClient {
         self.handle_response(resp).await
     }
 
-    pub async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T> {
+    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
         let url = self.url(path);
 
         for attempt in 0..=MAX_RETRIES {
@@ -274,11 +263,7 @@ impl ApiClient {
         self.handle_empty_response(resp).await
     }
 
-    pub async fn put<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T> {
+    pub async fn put<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
         let url = self.url(path);
         self.log_request("PUT", &url);
         let req = self.client.put(&url).json(body);

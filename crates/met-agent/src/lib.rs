@@ -33,7 +33,6 @@ pub mod heartbeat;
 pub mod job_claim;
 mod output_drain;
 mod output_seal;
-mod workflow_outputs;
 pub mod process_watcher;
 pub mod registration;
 pub mod script_exec_hints;
@@ -41,12 +40,13 @@ pub mod seccomp_exec;
 pub mod security;
 pub mod step_log;
 pub mod telemetry;
+mod workflow_outputs;
 
 pub use config::{AgentConfig, ExecutionRuntime, JoinTokenSource};
 pub use error::{AgentError, Result};
 pub use executor::JobExecutor;
 pub use process_watcher::{
-    compute_file_sha256, merge_execution_metadata, ExecutedBinary, ExecutedBinaryRecord,
-    JobExecutionMetadata, ProcessWatcher,
+    ExecutedBinary, ExecutedBinaryRecord, JobExecutionMetadata, ProcessWatcher,
+    compute_file_sha256, merge_execution_metadata,
 };
-pub use registration::{registration_needs_join_token, AgentRegistration, RegistrationSource};
+pub use registration::{AgentRegistration, RegistrationSource, registration_needs_join_token};

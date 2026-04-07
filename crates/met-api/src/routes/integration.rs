@@ -6,13 +6,11 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{Duration, Utc};
-use met_core::ids::{AgentId, JoinTokenId};
-use met_core::models::{
-    JoinToken, JoinTokenScope, app_permissions, generate_join_token,
-};
 use met_controller::nats::subjects;
-use met_store::repos::{AgentRepo, JoinTokenRepo, MeticulousAppRepo, ProjectRepo};
+use met_core::ids::{AgentId, JoinTokenId};
+use met_core::models::{JoinToken, JoinTokenScope, app_permissions, generate_join_token};
 use met_store::StoreError;
+use met_store::repos::{AgentRepo, JoinTokenRepo, MeticulousAppRepo, ProjectRepo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -20,15 +18,16 @@ use crate::auth::app_jwt::integration_jwt_audience_for_ingress;
 use crate::auth::hash_token;
 use crate::error::{ApiError, ApiResult};
 use crate::extractors::AppInstallationAuth;
-use crate::routes::admin::{
-    CreateJoinTokenRequest, CreateJoinTokenResponse, enrich_join_tokens,
-};
+use crate::routes::admin::{CreateJoinTokenRequest, CreateJoinTokenResponse, enrich_join_tokens};
 use crate::state::AppState;
 
 /// API routes under `/api/v1/integration`.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/integration/public-context", get(integration_public_context))
+        .route(
+            "/integration/public-context",
+            get(integration_public_context),
+        )
         .route(
             "/integration/join-tokens",
             post(integration_create_join_token),
@@ -57,7 +56,9 @@ pub struct IntegrationPublicContextResponse {
     pub job_queue: IntegrationJobQueueInfo,
 }
 
-async fn integration_public_context(State(state): State<AppState>) -> Json<IntegrationPublicContextResponse> {
+async fn integration_public_context(
+    State(state): State<AppState>,
+) -> Json<IntegrationPublicContextResponse> {
     Json(IntegrationPublicContextResponse {
         jwt_audience: integration_jwt_audience_for_ingress(&state.config().jwt),
         job_queue: IntegrationJobQueueInfo {
@@ -74,10 +75,11 @@ async fn integration_create_join_token(
     Json(req): Json<CreateJoinTokenRequest>,
 ) -> ApiResult<Json<CreateJoinTokenResponse>> {
     let principal = &auth.0;
-    if !principal.permissions.iter().any(|p| {
-        p == "*"
-            || p == app_permissions::JOIN_TOKENS_CREATE
-    }) {
+    if !principal
+        .permissions
+        .iter()
+        .any(|p| p == "*" || p == app_permissions::JOIN_TOKENS_CREATE)
+    {
         return Err(ApiError::forbidden(
             "installation does not grant join_tokens:create",
         ));
@@ -145,7 +147,9 @@ async fn integration_create_join_token(
     .await?;
 
     let mut items = enrich_join_tokens(&[created], state.db()).await?;
-    let resp_token = items.pop().ok_or_else(|| ApiError::internal("join token enrich failed"))?;
+    let resp_token = items
+        .pop()
+        .ok_or_else(|| ApiError::internal("join token enrich failed"))?;
 
     Ok(Json(CreateJoinTokenResponse {
         token: resp_token,
@@ -160,10 +164,11 @@ async fn integration_revoke_join_token(
     Path(token_id): Path<JoinTokenId>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let principal = &auth.0;
-    if !principal.permissions.iter().any(|p| {
-        p == "*"
-            || p == app_permissions::JOIN_TOKENS_REVOKE
-    }) {
+    if !principal
+        .permissions
+        .iter()
+        .any(|p| p == "*" || p == app_permissions::JOIN_TOKENS_REVOKE)
+    {
         return Err(ApiError::forbidden(
             "installation does not grant join_tokens:revoke",
         ));
@@ -199,10 +204,11 @@ async fn integration_cleanup_agent_by_kubernetes_pod(
     Json(req): Json<CleanupAgentByKubernetesPodRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let principal = &auth.0;
-    if !principal.permissions.iter().any(|p| {
-        p == "*"
-            || p == app_permissions::AGENTS_DELETE
-    }) {
+    if !principal
+        .permissions
+        .iter()
+        .any(|p| p == "*" || p == app_permissions::AGENTS_DELETE)
+    {
         return Err(ApiError::forbidden(
             "installation does not grant agents:delete",
         ));
@@ -246,10 +252,11 @@ async fn integration_delete_agent(
     Path(agent_id): Path<AgentId>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let principal = &auth.0;
-    if !principal.permissions.iter().any(|p| {
-        p == "*"
-            || p == app_permissions::AGENTS_DELETE
-    }) {
+    if !principal
+        .permissions
+        .iter()
+        .any(|p| p == "*" || p == app_permissions::AGENTS_DELETE)
+    {
         return Err(ApiError::forbidden(
             "installation does not grant agents:delete",
         ));
@@ -263,7 +270,9 @@ async fn integration_delete_agent(
     let repo = AgentRepo::new(state.db());
     let agent = repo.get(agent_id).await?;
     if agent.org_id != org_id {
-        return Err(ApiError::forbidden("agent is outside this installation org"));
+        return Err(ApiError::forbidden(
+            "agent is outside this installation org",
+        ));
     }
 
     match repo.soft_delete(org_id, agent_id).await {

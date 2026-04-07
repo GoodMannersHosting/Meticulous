@@ -80,7 +80,7 @@ impl<B: CacheBackend> CacheManager<B> {
         ctx: &ExecutionContext,
     ) -> Result<CacheKey> {
         let interpolated = self.interpolate_template(template, ctx).await?;
-        
+
         let key = format!("{}-{}", interpolated, self.hash_paths(paths));
 
         debug!(template, key = %key, "computed cache key");
@@ -189,7 +189,10 @@ impl ObjectStoreCache {
     }
 
     fn cache_path(&self, key: &str) -> String {
-        format!("s3://{}/{}/{}.tar.zst", self.config.bucket, self.config.key_prefix, key)
+        format!(
+            "s3://{}/{}/{}.tar.zst",
+            self.config.bucket, self.config.key_prefix, key
+        )
     }
 
     fn s3_key(&self, key: &str) -> String {
@@ -208,24 +211,29 @@ impl ObjectStoreCache {
         );
 
         let storage_path = self.cache_path(key);
-        
-        let mut metadata = self.metadata.write()
+
+        let mut metadata = self
+            .metadata
+            .write()
             .map_err(|e| EngineError::internal(e.to_string()))?;
-        metadata.insert(key.to_string(), CacheEntryMetadata {
-            key: key.to_string(),
-            storage_path: storage_path.clone(),
-            size_bytes: compressed.len() as u64,
-            created_at: chrono::Utc::now(),
-            last_hit_at: chrono::Utc::now(),
-            hit_count: 0,
-        });
+        metadata.insert(
+            key.to_string(),
+            CacheEntryMetadata {
+                key: key.to_string(),
+                storage_path: storage_path.clone(),
+                size_bytes: compressed.len() as u64,
+                created_at: chrono::Utc::now(),
+                last_hit_at: chrono::Utc::now(),
+                hit_count: 0,
+            },
+        );
 
         Ok(storage_path)
     }
 
     pub async fn download_from_s3(&self, key: &str) -> Result<Vec<u8>> {
         let _s3_key = self.s3_key(key);
-        
+
         debug!(key = %key, "downloading cache from S3");
 
         if let Ok(mut metadata) = self.metadata.write() {
@@ -240,32 +248,37 @@ impl ObjectStoreCache {
 
     fn compress(&self, data: &[u8]) -> Result<Vec<u8>> {
         use std::io::Write;
-        
+
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), self.config.compression_level)
             .map_err(|e| EngineError::internal(format!("Compression init failed: {e}")))?;
-        
-        encoder.write_all(data)
+
+        encoder
+            .write_all(data)
             .map_err(|e| EngineError::internal(format!("Compression write failed: {e}")))?;
-        
-        encoder.finish()
+
+        encoder
+            .finish()
             .map_err(|e| EngineError::internal(format!("Compression finish failed: {e}")))
     }
 
     fn decompress(&self, data: &[u8]) -> Result<Vec<u8>> {
         use std::io::Read;
-        
+
         let mut decoder = zstd::stream::Decoder::new(data)
             .map_err(|e| EngineError::internal(format!("Decompression init failed: {e}")))?;
-        
+
         let mut result = Vec::new();
-        decoder.read_to_end(&mut result)
+        decoder
+            .read_to_end(&mut result)
             .map_err(|e| EngineError::internal(format!("Decompression read failed: {e}")))?;
-        
+
         Ok(result)
     }
 
     pub fn total_size(&self) -> Result<u64> {
-        let metadata = self.metadata.read()
+        let metadata = self
+            .metadata
+            .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
         Ok(metadata.values().map(|m| m.size_bytes).sum())
     }
@@ -279,7 +292,9 @@ impl ObjectStoreCache {
         }
 
         let mut entries: Vec<_> = {
-            let metadata = self.metadata.read()
+            let metadata = self
+                .metadata
+                .read()
                 .map_err(|e| EngineError::internal(e.to_string()))?;
             metadata.values().cloned().collect()
         };
@@ -287,7 +302,7 @@ impl ObjectStoreCache {
         entries.sort_by(|a, b| a.last_hit_at.cmp(&b.last_hit_at));
 
         let mut size_to_free = current_size - target_size;
-        
+
         for entry in entries {
             if size_to_free == 0 {
                 break;
@@ -295,7 +310,7 @@ impl ObjectStoreCache {
 
             self.delete(&entry.key).await?;
             evicted.push(entry.key.clone());
-            
+
             size_to_free = size_to_free.saturating_sub(entry.size_bytes);
         }
 
@@ -316,7 +331,9 @@ impl ObjectStoreCache {
 #[async_trait]
 impl CacheBackend for ObjectStoreCache {
     async fn lookup(&self, key: &CacheKey) -> Result<CacheLookupResult> {
-        let metadata = self.metadata.read()
+        let metadata = self
+            .metadata
+            .read()
             .map_err(|e| EngineError::internal(e.to_string()))?;
 
         if let Some(entry) = metadata.get(&key.key) {
@@ -343,11 +360,14 @@ impl CacheBackend for ObjectStoreCache {
         }
 
         debug!(key = %key.key, "cache miss");
-        Ok(CacheLookupResult::Miss { key: key.key.clone() })
+        Ok(CacheLookupResult::Miss {
+            key: key.key.clone(),
+        })
     }
 
     async fn store(&self, key: &CacheKey, data_path: &str) -> Result<String> {
-        let data = tokio::fs::read(data_path).await
+        let data = tokio::fs::read(data_path)
+            .await
             .map_err(|e| EngineError::internal(format!("Failed to read cache data: {e}")))?;
 
         self.upload_to_s3(&key.key, &data).await
@@ -358,7 +378,9 @@ impl CacheBackend for ObjectStoreCache {
 
         debug!(key = %key, "deleting cache from S3");
 
-        let mut metadata = self.metadata.write()
+        let mut metadata = self
+            .metadata
+            .write()
             .map_err(|e| EngineError::internal(e.to_string()))?;
         metadata.remove(key);
 
@@ -368,7 +390,9 @@ impl CacheBackend for ObjectStoreCache {
 
 /// In-memory cache for testing.
 pub struct MemoryCache {
-    entries: std::sync::RwLock<std::collections::HashMap<String, (String, chrono::DateTime<chrono::Utc>)>>,
+    entries: std::sync::RwLock<
+        std::collections::HashMap<String, (String, chrono::DateTime<chrono::Utc>)>,
+    >,
 }
 
 impl MemoryCache {
@@ -388,7 +412,10 @@ impl Default for MemoryCache {
 #[async_trait]
 impl CacheBackend for MemoryCache {
     async fn lookup(&self, key: &CacheKey) -> Result<CacheLookupResult> {
-        let entries = self.entries.read().map_err(|e| EngineError::internal(e.to_string()))?;
+        let entries = self
+            .entries
+            .read()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
 
         if let Some((path, created_at)) = entries.get(&key.key) {
             return Ok(CacheLookupResult::Hit {
@@ -411,18 +438,26 @@ impl CacheBackend for MemoryCache {
             }
         }
 
-        Ok(CacheLookupResult::Miss { key: key.key.clone() })
+        Ok(CacheLookupResult::Miss {
+            key: key.key.clone(),
+        })
     }
 
     async fn store(&self, key: &CacheKey, _data_path: &str) -> Result<String> {
-        let mut entries = self.entries.write().map_err(|e| EngineError::internal(e.to_string()))?;
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
         let storage_path = format!("memory://{}", key.key);
         entries.insert(key.key.clone(), (storage_path.clone(), chrono::Utc::now()));
         Ok(storage_path)
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
-        let mut entries = self.entries.write().map_err(|e| EngineError::internal(e.to_string()))?;
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| EngineError::internal(e.to_string()))?;
         entries.remove(key);
         Ok(())
     }

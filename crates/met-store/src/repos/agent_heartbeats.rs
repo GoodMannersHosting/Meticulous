@@ -43,11 +43,7 @@ impl<'a> AgentHeartbeatRepo<'a> {
     }
 
     /// Get recent heartbeats for an agent.
-    pub async fn get_recent(
-        &self,
-        agent_id: AgentId,
-        limit: i64,
-    ) -> Result<Vec<AgentHeartbeat>> {
+    pub async fn get_recent(&self, agent_id: AgentId, limit: i64) -> Result<Vec<AgentHeartbeat>> {
         let heartbeats = sqlx::query_as::<_, AgentHeartbeat>(
             r#"
             SELECT id, agent_id, status, cpu_percent, memory_percent, disk_percent, current_job_id, recorded_at

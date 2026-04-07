@@ -1,10 +1,10 @@
 //! Admin-only API commands (requires an admin user / token).
 
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::output::{
     build_table, format_status, format_timestamp, print_serialized, print_table, status_icon,
 };
-use crate::OutputFormat;
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 
@@ -48,14 +48,8 @@ pub async fn job_queue(client: &ApiClient, limit: u32, format: OutputFormat) -> 
                 println!("No pending or queued jobs.");
                 return Ok(());
             }
-            let mut table = build_table(&[
-                "Job status",
-                "Job",
-                "Project",
-                "Pipeline",
-                "Run",
-                "Since",
-            ]);
+            let mut table =
+                build_table(&["Job status", "Job", "Project", "Pipeline", "Run", "Since"]);
             for row in &response.data {
                 let started = format_timestamp(&row.job_run_created_at);
                 table.add_row(vec![
@@ -67,7 +61,11 @@ pub async fn job_queue(client: &ApiClient, limit: u32, format: OutputFormat) -> 
                     Cell::new(&row.job_name),
                     Cell::new(&row.project_slug),
                     Cell::new(&row.pipeline_name),
-                    Cell::new(format!("#{} ({})", row.run_number, &row.run_id[..8.min(row.run_id.len())])),
+                    Cell::new(format!(
+                        "#{} ({})",
+                        row.run_number,
+                        &row.run_id[..8.min(row.run_id.len())]
+                    )),
                     Cell::new(started),
                 ]);
             }

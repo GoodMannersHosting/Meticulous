@@ -75,7 +75,12 @@ impl<'a> GroupRepo<'a> {
     }
 
     /// List groups in an organization.
-    pub async fn list(&self, org_id: OrganizationId, limit: i64, offset: i64) -> Result<Vec<Group>> {
+    pub async fn list(
+        &self,
+        org_id: OrganizationId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Group>> {
         let groups = sqlx::query_as::<_, Group>(
             r#"
             SELECT id, org_id, name, description, created_at, updated_at
@@ -196,7 +201,10 @@ impl<'a> GroupRepo<'a> {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(StoreError::not_found("group_membership", format!("{group_id}/{user_id}")));
+            return Err(StoreError::not_found(
+                "group_membership",
+                format!("{group_id}/{user_id}"),
+            ));
         }
 
         Ok(())
@@ -222,7 +230,9 @@ impl<'a> GroupRepo<'a> {
         .bind(role)
         .fetch_optional(self.pool)
         .await?
-        .ok_or_else(|| StoreError::not_found("group_membership", format!("{group_id}/{user_id}")))?;
+        .ok_or_else(|| {
+            StoreError::not_found("group_membership", format!("{group_id}/{user_id}"))
+        })?;
 
         Ok(membership)
     }

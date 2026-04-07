@@ -1,7 +1,7 @@
-use crate::api_client::ApiError;
 use crate::OutputFormat;
+use crate::api_client::ApiError;
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, ContentArrangement, Table};
+use comfy_table::{Cell, ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use std::time::Duration;

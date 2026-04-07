@@ -437,10 +437,7 @@ mod tests {
 
         let s = "pull ${{ inputs.image }} rel ${{ vars.TAG }} keep ${{ secrets.TOKEN }}";
         let out = interpolate_workflow_templates(s, &vars, &inputs);
-        assert_eq!(
-            out,
-            "pull app:latest rel v2 keep ${{ secrets.TOKEN }}"
-        );
+        assert_eq!(out, "pull app:latest rel v2 keep ${{ secrets.TOKEN }}");
     }
 
     #[test]

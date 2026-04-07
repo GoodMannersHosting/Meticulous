@@ -17,6 +17,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub mod admin;
+pub mod admin_workflows;
 pub mod agents;
 pub mod artifacts;
 pub mod auth;
@@ -35,12 +36,11 @@ pub mod stored_secrets;
 pub mod tokens;
 pub mod triggers;
 pub mod variables;
-pub mod workspace_config;
 pub mod webhooks;
 pub mod websocket;
 pub mod workflows;
 pub mod workflows_catalog;
-pub mod admin_workflows;
+pub mod workspace_config;
 
 /// Build the complete API router with all middleware.
 pub fn build_router(state: AppState) -> Router {

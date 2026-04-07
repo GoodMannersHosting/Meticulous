@@ -17,7 +17,7 @@ impl Version {
     /// Parse a version string.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().trim_start_matches('v');
-        
+
         let (version_part, prerelease) = if let Some(idx) = s.find('-') {
             (&s[..idx], Some(s[idx + 1..].to_string()))
         } else {
@@ -25,7 +25,7 @@ impl Version {
         };
 
         let parts: Vec<&str> = version_part.split('.').collect();
-        
+
         let major = parts.first()?.parse().ok()?;
         let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
         let patch = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(0);
@@ -179,8 +179,7 @@ pub fn parse_version_constraint(s: &str) -> Result<VersionConstraint, String> {
         return Ok(VersionConstraint::LessThan(version));
     }
 
-    let version = Version::parse(s)
-        .ok_or_else(|| format!("Invalid version: {}", s))?;
+    let version = Version::parse(s).ok_or_else(|| format!("Invalid version: {}", s))?;
     Ok(VersionConstraint::Exact(version))
 }
 
@@ -301,13 +300,22 @@ mod tests {
         ];
 
         let constraint = parse_version_constraint("^1.0.0").unwrap();
-        assert_eq!(resolve_version(&constraint, &available), Some("1.2.0".to_string()));
+        assert_eq!(
+            resolve_version(&constraint, &available),
+            Some("1.2.0".to_string())
+        );
 
         let constraint = parse_version_constraint("~1.1.0").unwrap();
-        assert_eq!(resolve_version(&constraint, &available), Some("1.1.0".to_string()));
+        assert_eq!(
+            resolve_version(&constraint, &available),
+            Some("1.1.0".to_string())
+        );
 
         let constraint = parse_version_constraint(">=2.0.0").unwrap();
-        assert_eq!(resolve_version(&constraint, &available), Some("2.0.0".to_string()));
+        assert_eq!(
+            resolve_version(&constraint, &available),
+            Some("2.0.0".to_string())
+        );
 
         let constraint = parse_version_constraint("3.0.0").unwrap();
         assert_eq!(resolve_version(&constraint, &available), None);

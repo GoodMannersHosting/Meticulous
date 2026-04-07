@@ -58,7 +58,9 @@ pub fn store_token(token: &str) -> Result<(), ApiError> {
 #[cfg(not(feature = "keyring"))]
 pub fn load_token() -> Option<String> {
     let path = token_file_path().ok()?;
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 #[cfg(not(feature = "keyring"))]

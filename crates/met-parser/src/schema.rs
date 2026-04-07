@@ -614,6 +614,13 @@ workflows: []
         let pipeline: RawPipeline = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(pipeline.secrets.len(), 2);
         assert!(pipeline.secrets.get("AWS_SECRET").unwrap().aws.is_some());
-        assert!(pipeline.secrets.get("VAULT_SECRET").unwrap().vault.is_some());
+        assert!(
+            pipeline
+                .secrets
+                .get("VAULT_SECRET")
+                .unwrap()
+                .vault
+                .is_some()
+        );
     }
 }

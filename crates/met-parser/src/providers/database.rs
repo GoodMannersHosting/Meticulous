@@ -38,12 +38,10 @@ impl WorkflowProvider for DatabaseWorkflowProvider {
     ) -> Result<RawWorkflowDef, WorkflowFetchError> {
         match scope {
             WorkflowScope::Global => self.fetch_global(name, version).await,
-            WorkflowScope::Project => {
-                Err(WorkflowFetchError::NotFound {
-                    scope: "project".to_string(),
-                    name: name.to_string(),
-                })
-            }
+            WorkflowScope::Project => Err(WorkflowFetchError::NotFound {
+                scope: "project".to_string(),
+                name: name.to_string(),
+            }),
         }
     }
 
@@ -125,12 +123,12 @@ impl DatabaseWorkflowProvider {
             Some((definition, description)) => {
                 let mut workflow: RawWorkflowDef = serde_json::from_value(definition)
                     .map_err(|e| WorkflowFetchError::Parse(e.to_string()))?;
-                
+
                 workflow.version = Some(resolved_version);
                 if workflow.description.is_none() {
                     workflow.description = description;
                 }
-                
+
                 Ok(workflow)
             }
             None => Err(WorkflowFetchError::NotFound {
@@ -160,10 +158,11 @@ impl DatabaseWorkflowProvider {
         .await
         .map_err(|e| WorkflowFetchError::Network(e.to_string()))?;
 
-        row.map(|(v,)| v).ok_or_else(|| WorkflowFetchError::NotFound {
-            scope: "global".to_string(),
-            name: name.to_string(),
-        })
+        row.map(|(v,)| v)
+            .ok_or_else(|| WorkflowFetchError::NotFound {
+                scope: "global".to_string(),
+                name: name.to_string(),
+            })
     }
 }
 
@@ -222,7 +221,7 @@ mod tests {
         // Insert a test workflow
         let workflow_def = test_workflow_def();
         let definition = serde_json::to_value(&workflow_def).unwrap();
-        
+
         sqlx::query(
             r#"
             INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
@@ -240,10 +239,12 @@ mod tests {
 
         // Test the provider
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
-        
-        let result = provider.fetch(WorkflowScope::Global, "test-workflow", "1.0.0").await;
+
+        let result = provider
+            .fetch(WorkflowScope::Global, "test-workflow", "1.0.0")
+            .await;
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
-        
+
         let workflow = result.unwrap();
         assert_eq!(workflow.name, "Test Workflow");
         assert_eq!(workflow.version, Some("1.0.0".to_string()));
@@ -266,7 +267,7 @@ mod tests {
             let mut workflow_def = test_workflow_def();
             workflow_def.version = Some(version.to_string());
             let definition = serde_json::to_value(&workflow_def).unwrap();
-            
+
             sqlx::query(
                 r#"
                 INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
@@ -285,9 +286,11 @@ mod tests {
         }
 
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
-        
+
         // Fetch latest should return the most recently created (2.0.0)
-        let result = provider.fetch(WorkflowScope::Global, "versioned-workflow", "latest").await;
+        let result = provider
+            .fetch(WorkflowScope::Global, "versioned-workflow", "latest")
+            .await;
         assert!(result.is_ok());
         let workflow = result.unwrap();
         assert_eq!(workflow.version, Some("2.0.0".to_string()));
@@ -305,8 +308,10 @@ mod tests {
         .await
         .unwrap();
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
-        
-        let result = provider.fetch(WorkflowScope::Global, "nonexistent", "1.0.0").await;
+
+        let result = provider
+            .fetch(WorkflowScope::Global, "nonexistent", "1.0.0")
+            .await;
         assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
     }
 
@@ -326,7 +331,7 @@ mod tests {
         for version in &["1.0.0", "1.1.0", "2.0.0"] {
             let workflow_def = test_workflow_def();
             let definition = serde_json::to_value(&workflow_def).unwrap();
-            
+
             sqlx::query(
                 r#"
                 INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
@@ -344,8 +349,11 @@ mod tests {
         }
 
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
-        
-        let versions = provider.list_versions(WorkflowScope::Global, "multi-version").await.unwrap();
+
+        let versions = provider
+            .list_versions(WorkflowScope::Global, "multi-version")
+            .await
+            .unwrap();
         assert_eq!(versions.len(), 3);
         assert!(versions.contains(&"1.0.0".to_string()));
         assert!(versions.contains(&"1.1.0".to_string()));
@@ -367,7 +375,7 @@ mod tests {
         // Insert a deprecated workflow
         let workflow_def = test_workflow_def();
         let definition = serde_json::to_value(&workflow_def).unwrap();
-        
+
         sqlx::query(
             r#"
             INSERT INTO reusable_workflows (id, org_id, scope, name, version, definition, deprecated, created_at)
@@ -384,13 +392,18 @@ mod tests {
         .unwrap();
 
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
-        
+
         // list_versions should not include deprecated workflows
-        let versions = provider.list_versions(WorkflowScope::Global, "deprecated-workflow").await.unwrap();
+        let versions = provider
+            .list_versions(WorkflowScope::Global, "deprecated-workflow")
+            .await
+            .unwrap();
         assert!(versions.is_empty());
-        
+
         // fetch latest should fail for deprecated-only workflows
-        let result = provider.fetch(WorkflowScope::Global, "deprecated-workflow", "latest").await;
+        let result = provider
+            .fetch(WorkflowScope::Global, "deprecated-workflow", "latest")
+            .await;
         assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
     }
 }

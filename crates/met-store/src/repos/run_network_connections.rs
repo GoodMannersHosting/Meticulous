@@ -29,7 +29,11 @@ impl<'a> RunNetworkConnectionRepo<'a> {
         Self { pool }
     }
 
-    pub async fn list_for_run(&self, run_id: RunId, limit: i64) -> Result<Vec<RunNetworkConnectionRow>> {
+    pub async fn list_for_run(
+        &self,
+        run_id: RunId,
+        limit: i64,
+    ) -> Result<Vec<RunNetworkConnectionRow>> {
         let rows = sqlx::query_as::<_, RunNetworkConnectionRow>(
             r#"
             SELECT

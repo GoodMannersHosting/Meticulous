@@ -8,18 +8,18 @@
 //! - Cancellation handling
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
 use indexmap::IndexMap;
 use met_core::ids::{JobId, JobRunId, OrganizationId, PipelineId, RunId, StepId};
 use met_core::models::{JobStatus, RunStatus};
+use met_engine::ExecutionResult;
 use met_engine::cache::{CacheBackend, CacheKey, CacheLookupResult, MemoryCache};
 use met_engine::context::ExecutionContext;
 use met_engine::state::{JobState, RunState};
-use met_engine::ExecutionResult;
 use met_parser::{CacheConfig, JobIR, PipelineIR, PoolSelector, Shell, StepCommand, StepIR};
 use tokio::sync::{Mutex, RwLock};
 
@@ -256,11 +256,8 @@ impl TestExecutor {
 
             for job in ready_jobs {
                 if let Some(cache_config) = &job.cache_config {
-                    let cache_key = format!(
-                        "{}-{}",
-                        cache_config.key,
-                        cache_config.paths.join(",")
-                    );
+                    let cache_key =
+                        format!("{}-{}", cache_config.key, cache_config.paths.join(","));
                     if self.cache.has_hit(&cache_key).await {
                         run_state
                             .mark_job_completed(&job.id, true, Some(0), None)
@@ -270,10 +267,9 @@ impl TestExecutor {
                 }
 
                 if let Some(condition) = &job.condition {
-                    let any_dep_failed = job
-                        .depends_on
-                        .iter()
-                        .any(|dep_id| futures::executor::block_on(run_state.failed_jobs()).contains(dep_id));
+                    let any_dep_failed = job.depends_on.iter().any(|dep_id| {
+                        futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
+                    });
 
                     if any_dep_failed && condition != "always()" {
                         run_state
@@ -282,10 +278,9 @@ impl TestExecutor {
                         continue;
                     }
                 } else {
-                    let any_dep_failed = job
-                        .depends_on
-                        .iter()
-                        .any(|dep_id| futures::executor::block_on(run_state.failed_jobs()).contains(dep_id));
+                    let any_dep_failed = job.depends_on.iter().any(|dep_id| {
+                        futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
+                    });
 
                     if any_dep_failed {
                         run_state
@@ -346,7 +341,11 @@ impl TestExecutor {
         }
     }
 
-    async fn find_ready_jobs<'a>(&self, pipeline: &'a PipelineIR, run_state: &RunState) -> Vec<&'a JobIR> {
+    async fn find_ready_jobs<'a>(
+        &self,
+        pipeline: &'a PipelineIR,
+        run_state: &RunState,
+    ) -> Vec<&'a JobIR> {
         let mut ready = Vec::new();
         let pending = run_state.pending_jobs().await;
 
@@ -390,12 +389,7 @@ impl TestExecutor {
 /// Strategy for completing jobs during test execution.
 #[async_trait::async_trait]
 trait CompletionStrategy {
-    async fn run(
-        &mut self,
-        scheduler: &MockScheduler,
-        run_state: &RunState,
-        pipeline: &PipelineIR,
-    );
+    async fn run(&mut self, scheduler: &MockScheduler, run_state: &RunState, pipeline: &PipelineIR);
 }
 
 /// Completes all jobs successfully as soon as they are dispatched.
@@ -444,8 +438,7 @@ impl CustomCompletions {
     }
 
     fn with_success(mut self, job_name: &str) -> Self {
-        self.outcomes
-            .insert(job_name.to_string(), (true, None));
+        self.outcomes.insert(job_name.to_string(), (true, None));
         self
     }
 
@@ -558,7 +551,10 @@ impl CompletionStrategy for RetryingCompletion {
                                     run_state
                                         .update_job(&job.job_id, |j| {
                                             j.status = JobStatus::Pending;
-                                            j.error_message = Some(format!("Attempt {} failed, retrying", attempt + 1));
+                                            j.error_message = Some(format!(
+                                                "Attempt {} failed, retrying",
+                                                attempt + 1
+                                            ));
                                         })
                                         .await;
                                 } else {
@@ -567,7 +563,10 @@ impl CompletionStrategy for RetryingCompletion {
                                             &job.job_id,
                                             false,
                                             Some(1),
-                                            Some(format!("Attempt {} failed, max retries exhausted", attempt + 1)),
+                                            Some(format!(
+                                                "Attempt {} failed, max retries exhausted",
+                                                attempt + 1
+                                            )),
                                         )
                                         .await;
                                 }
@@ -711,8 +710,8 @@ async fn test_diamond_dag_with_failure_propagation() {
 
     assert_eq!(result.status, RunStatus::Failed);
     assert_eq!(result.jobs_succeeded, 2); // A and B
-    assert_eq!(result.jobs_failed, 1);    // C
-    assert_eq!(result.jobs_skipped, 1);   // D
+    assert_eq!(result.jobs_failed, 1); // C
+    assert_eq!(result.jobs_skipped, 1); // D
 }
 
 #[tokio::test]
@@ -801,9 +800,7 @@ async fn test_retry_succeeds_after_failure() {
     let retrying = RetryingCompletion::new("flaky-job", 2, 3);
     let attempts = retrying.attempts.clone();
 
-    let result = executor
-        .execute_with_completions(pipeline, retrying)
-        .await;
+    let result = executor.execute_with_completions(pipeline, retrying).await;
 
     assert_eq!(result.status, RunStatus::Succeeded);
     assert_eq!(
@@ -834,9 +831,7 @@ async fn test_retry_exhaustion_fails() {
     let retrying = RetryingCompletion::new("always-failing", 10, 2);
     let attempts = retrying.attempts.clone();
 
-    let result = executor
-        .execute_with_completions(pipeline, retrying)
-        .await;
+    let result = executor.execute_with_completions(pipeline, retrying).await;
 
     assert_eq!(result.status, RunStatus::Failed);
     assert_eq!(result.jobs_failed, 1);
@@ -881,9 +876,7 @@ async fn test_cancel_mid_run_marks_jobs_cancelled() {
     scheduler.dispatch(job_a, job_a_state.job_run_id).await;
 
     tokio::time::sleep(Duration::from_millis(10)).await;
-    run_state
-        .mark_job_completed(&a, true, Some(0), None)
-        .await;
+    run_state.mark_job_completed(&a, true, Some(0), None).await;
 
     let job_b = &pipeline.jobs[1];
     let job_b_state = run_state.get_job(&b).await.unwrap();
@@ -910,9 +903,21 @@ async fn test_cancel_mid_run_marks_jobs_cancelled() {
     let job_b_final = run_state.get_job(&b).await.unwrap();
     let job_c_final = run_state.get_job(&c).await.unwrap();
 
-    assert_eq!(job_a_final.status, JobStatus::Succeeded, "Job A should have succeeded");
-    assert_eq!(job_b_final.status, JobStatus::Cancelled, "Job B should be cancelled");
-    assert_eq!(job_c_final.status, JobStatus::Cancelled, "Job C should be cancelled");
+    assert_eq!(
+        job_a_final.status,
+        JobStatus::Succeeded,
+        "Job A should have succeeded"
+    );
+    assert_eq!(
+        job_b_final.status,
+        JobStatus::Cancelled,
+        "Job B should be cancelled"
+    );
+    assert_eq!(
+        job_c_final.status,
+        JobStatus::Cancelled,
+        "Job C should be cancelled"
+    );
 }
 
 #[tokio::test]

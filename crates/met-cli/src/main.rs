@@ -538,9 +538,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await
                 }
                 TokenCommands::List => auth_cmd::token_list(&client, format).await,
-                TokenCommands::Revoke { id } => {
-                    auth_cmd::token_revoke(&client, &id, format).await
-                }
+                TokenCommands::Revoke { id } => auth_cmd::token_revoke(&client, &id, format).await,
             },
         },
 
@@ -549,14 +547,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             OrgCommands::List => org::list(&client, format).await,
             OrgCommands::Switch { slug } => org::switch(&slug).await,
             OrgCommands::Info { slug } => {
-                let slug = slug
-                    .as_deref()
-                    .or(ctx.org.as_deref())
-                    .ok_or_else(|| {
-                        api_client::ApiError::Config(
-                            "No organization specified. Use --org or provide a slug.".into(),
-                        )
-                    })?;
+                let slug = slug.as_deref().or(ctx.org.as_deref()).ok_or_else(|| {
+                    api_client::ApiError::Config(
+                        "No organization specified. Use --org or provide a slug.".into(),
+                    )
+                })?;
                 org::info(&client, slug, format).await
             }
         },
@@ -580,14 +575,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await
             }
             ProjectCommands::Info { slug } => {
-                let slug = slug
-                    .as_deref()
-                    .or(ctx.project.as_deref())
-                    .ok_or_else(|| {
-                        api_client::ApiError::Config(
-                            "No project specified. Use --project or provide a slug.".into(),
-                        )
-                    })?;
+                let slug = slug.as_deref().or(ctx.project.as_deref()).ok_or_else(|| {
+                    api_client::ApiError::Config(
+                        "No project specified. Use --project or provide a slug.".into(),
+                    )
+                })?;
                 project::info(&client, &ctx, slug, format).await
             }
             ProjectCommands::Switch { slug } => project::switch(&slug).await,
@@ -597,17 +589,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Pipeline { action } => match action {
             PipelineCommands::List => pipelines::list(&client, &ctx, format).await,
             PipelineCommands::Show { id } => pipelines::show(&client, &id, format).await,
-            PipelineCommands::Validate { path } => {
-                pipelines::validate(&path, format).await
-            }
+            PipelineCommands::Validate { path } => pipelines::validate(&path, format).await,
             PipelineCommands::Trigger {
                 id,
                 branch,
                 commit,
                 variables,
             } => {
-                let vars: Vec<(String, String)> =
-                    variables.iter().filter_map(|v| parse_key_value(v)).collect();
+                let vars: Vec<(String, String)> = variables
+                    .iter()
+                    .filter_map(|v| parse_key_value(v))
+                    .collect();
                 pipelines::trigger(&client, &id, branch, commit, vars, format).await
             }
             PipelineCommands::Diff { id, base } => {
@@ -627,9 +619,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 job,
                 step,
                 tail,
-            } => {
-                runs::logs(&client, &id, follow, job.as_deref(), step.as_deref(), tail).await
-            }
+            } => runs::logs(&client, &id, follow, job.as_deref(), step.as_deref(), tail).await,
             RunCommands::Cancel { id } => runs::cancel(&client, &id, format).await,
             RunCommands::Retry { id } => runs::retry(&client, &id, format).await,
             RunCommands::Artifacts { id } => runs::artifacts(&client, &id, format).await,
@@ -653,9 +643,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 secret::set(&client, &ctx, &name, &value, format).await
             }
-            SecretCommands::Delete { name } => {
-                secret::delete(&client, &ctx, &name, format).await
-            }
+            SecretCommands::Delete { name } => secret::delete(&client, &ctx, &name, format).await,
         },
 
         // ── Variable ─────────────────────────────────────────
@@ -676,12 +664,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             WorkflowCommands::List { scope } => {
                 workflow::list(&client, &ctx, scope.as_deref(), format).await
             }
-            WorkflowCommands::Show { slug } => {
-                workflow::show(&client, &slug, format).await
-            }
-            WorkflowCommands::Versions { slug } => {
-                workflow::versions(&client, &slug, format).await
-            }
+            WorkflowCommands::Show { slug } => workflow::show(&client, &slug, format).await,
+            WorkflowCommands::Versions { slug } => workflow::versions(&client, &slug, format).await,
         },
 
         // ── Agent ────────────────────────────────────────────
@@ -725,8 +709,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 variables,
                 dry_run,
             } => {
-                let vars: Vec<(String, String)> =
-                    variables.iter().filter_map(|v| parse_key_value(v)).collect();
+                let vars: Vec<(String, String)> = variables
+                    .iter()
+                    .filter_map(|v| parse_key_value(v))
+                    .collect();
                 debug::run(path, vars, dry_run).await
             }
             DebugCommands::Shell => debug::shell().await,

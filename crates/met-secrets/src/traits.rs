@@ -222,9 +222,8 @@ impl ProviderConfig {
 
     /// Get a required configuration setting.
     pub fn require(&self, key: &str) -> Result<&str> {
-        self.get(key).ok_or_else(|| {
-            SecretsError::Configuration(format!("missing required config: {key}"))
-        })
+        self.get(key)
+            .ok_or_else(|| SecretsError::Configuration(format!("missing required config: {key}")))
     }
 }
 

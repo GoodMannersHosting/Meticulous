@@ -54,7 +54,11 @@ impl BlastRadiusQuery {
     }
 
     /// Filter to a time range.
-    pub fn with_time_range(mut self, after: Option<DateTime<Utc>>, before: Option<DateTime<Utc>>) -> Self {
+    pub fn with_time_range(
+        mut self,
+        after: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
+    ) -> Self {
         self.after = after;
         self.before = before;
         self
@@ -172,7 +176,12 @@ impl<'a> BlastRadiusAnalyzer<'a> {
     pub async fn query(&self, query: BlastRadiusQuery) -> Result<BlastRadiusResult> {
         // Get all usages for this SHA
         let usages = self.registry.get_usages_by_sha(&query.tool_sha256).await;
-        let tool = self.registry.get_by_sha(&query.tool_sha256).await.first().cloned();
+        let tool = self
+            .registry
+            .get_by_sha(&query.tool_sha256)
+            .await
+            .first()
+            .cloned();
 
         // Filter usages by query parameters
         let filtered_usages: Vec<_> = usages
@@ -226,8 +235,16 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let summary = BlastRadiusSummary {
             total_runs: affected_runs.len(),
             total_jobs: job_ids.len(),
-            total_projects: affected_runs.iter().filter_map(|r| r.project_id).collect::<HashSet<_>>().len(),
-            total_pipelines: affected_runs.iter().filter_map(|r| r.pipeline_id).collect::<HashSet<_>>().len(),
+            total_projects: affected_runs
+                .iter()
+                .filter_map(|r| r.project_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            total_pipelines: affected_runs
+                .iter()
+                .filter_map(|r| r.pipeline_id)
+                .collect::<HashSet<_>>()
+                .len(),
             earliest_usage: earliest,
             latest_usage: latest,
         };
@@ -255,7 +272,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{TrackedTool, ToolUsage};
+    use crate::tools::{ToolUsage, TrackedTool};
     use met_core::ids::JobId;
 
     #[tokio::test]
@@ -269,8 +286,8 @@ mod tests {
 
         // Record some usages
         for _ in 0..3 {
-            let usage = ToolUsage::new(&tool, RunId::new(), JobId::new())
-                .with_command("./malware --evil");
+            let usage =
+                ToolUsage::new(&tool, RunId::new(), JobId::new()).with_command("./malware --evil");
             registry.record_usage(usage).await;
         }
 

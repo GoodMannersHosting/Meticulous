@@ -10,7 +10,7 @@ use met_core::models::{CreateTrigger, Trigger, TriggerKind, UpdateTrigger, Webho
 use met_store::repos::{PipelineRepo, ProjectRepo, TriggerRepo, UserRepo};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use tracing::instrument;
 use utoipa::ToSchema;
 
@@ -20,10 +20,7 @@ use crate::{
     state::AppState,
 };
 
-async fn username_for_user_id(
-    pool: &met_store::PgPool,
-    user_id: Option<UserId>,
-) -> Option<String> {
+async fn username_for_user_id(pool: &met_store::PgPool, user_id: Option<UserId>) -> Option<String> {
     let uid = user_id?;
     UserRepo::new(pool).get(uid).await.ok().map(|u| u.username)
 }
@@ -198,11 +195,7 @@ async fn list_triggers(
     let out = rows
         .iter()
         .map(|row| {
-            TriggerPublicResponse::from_trigger(
-                &row.trigger,
-                None,
-                row.created_by_username.clone(),
-            )
+            TriggerPublicResponse::from_trigger(&row.trigger, None, row.created_by_username.clone())
         })
         .collect();
     Ok(Json(out))
@@ -261,9 +254,8 @@ async fn create_trigger(
         obj.remove("managed_by");
     }
 
-    let wc: WebhookConfig = serde_json::from_value(config_val.clone()).map_err(|_| {
-        ApiError::bad_request("invalid webhook configuration JSON")
-    })?;
+    let wc: WebhookConfig = serde_json::from_value(config_val.clone())
+        .map_err(|_| ApiError::bad_request("invalid webhook configuration JSON"))?;
     wc.validate_inbound_for_trigger()
         .map_err(ApiError::bad_request)?;
 
@@ -322,7 +314,8 @@ async fn update_trigger(
                 "sync_key and managed_by cannot be set via API; they are managed by Git sync",
             ));
         }
-        let managed: WebhookConfig = serde_json::from_value(prior.config.clone()).unwrap_or_default();
+        let managed: WebhookConfig =
+            serde_json::from_value(prior.config.clone()).unwrap_or_default();
         if managed.managed_by.as_deref() == Some("repo")
             && (p.get("branches").is_some()
                 || p.get("paths").is_some()

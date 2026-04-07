@@ -214,7 +214,10 @@ impl<'a> MeticulousAppRepo<'a> {
         .map_err(Into::into)
     }
 
-    pub async fn get_installation(&self, id: AppInstallationId) -> Result<MeticulousAppInstallation> {
+    pub async fn get_installation(
+        &self,
+        id: AppInstallationId,
+    ) -> Result<MeticulousAppInstallation> {
         sqlx::query_as::<_, MeticulousAppInstallation>(&format!(
             "SELECT {INSTALL_ROW} FROM meticulous_app_installations WHERE id = $1"
         ))

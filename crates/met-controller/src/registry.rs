@@ -61,7 +61,9 @@ pub fn agent_state_from_db_row(agent: &Agent) -> AgentState {
         vec!["_default".to_string()]
     };
     let labels = agent.tags.clone();
-    let jwt_expires_at = agent.jwt_expires_at.unwrap_or_else(|| Utc::now() + chrono::Duration::hours(24));
+    let jwt_expires_at = agent
+        .jwt_expires_at
+        .unwrap_or_else(|| Utc::now() + chrono::Duration::hours(24));
 
     AgentState {
         agent_id: agent.id,

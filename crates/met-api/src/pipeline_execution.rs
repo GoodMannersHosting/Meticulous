@@ -198,11 +198,7 @@ pub async fn dispatch_pipeline_run(
 
     let org = OrganizationRepo::new(state.db()).get(org_id).await?;
     let yaml = workflow_diagnostics::load_pipeline_yaml_string_for_diagnostics(
-        state,
-        pipeline,
-        org_id,
-        commit_sha,
-        branch,
+        state, pipeline, org_id, commit_sha, branch,
     )
     .await?;
     let wf_diag = workflow_diagnostics::collect_workflow_diagnostics(
@@ -220,14 +216,8 @@ pub async fn dispatch_pipeline_run(
         )));
     }
 
-    let pipeline_ir = load_pipeline_ir_for_execution(
-        state,
-        pipeline,
-        org_id,
-        commit_sha,
-        branch,
-    )
-    .await?;
+    let pipeline_ir =
+        load_pipeline_ir_for_execution(state, pipeline, org_id, commit_sha, branch).await?;
 
     let run_repo = RunRepo::new(state.db());
     let run = run_repo

@@ -71,7 +71,11 @@ impl<'a> UserRepo<'a> {
     }
 
     /// Get a user by username within an organization.
-    pub async fn get_by_username(&self, org_id: OrganizationId, username: &str) -> Result<Option<User>> {
+    pub async fn get_by_username(
+        &self,
+        org_id: OrganizationId,
+        username: &str,
+    ) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
             SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
@@ -105,7 +109,11 @@ impl<'a> UserRepo<'a> {
     }
 
     /// Get a user by email, including soft-deleted users.
-    pub async fn get_by_email_including_deleted(&self, org_id: OrganizationId, email: &str) -> Result<Option<User>> {
+    pub async fn get_by_email_including_deleted(
+        &self,
+        org_id: OrganizationId,
+        email: &str,
+    ) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
             SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
@@ -122,7 +130,7 @@ impl<'a> UserRepo<'a> {
     }
 
     /// Restore a soft-deleted user by clearing their deleted_at timestamp.
-    /// 
+    ///
     /// IMPORTANT: This explicitly sets is_admin = false as a security measure.
     /// Deleted users should lose all privileges and must be re-granted admin status
     /// manually after restoration. This is required for GDPR compliance and security.

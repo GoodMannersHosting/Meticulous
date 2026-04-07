@@ -46,18 +46,7 @@ pub async fn org_dashboard_stats(
     since: DateTime<Utc>,
 ) -> Result<DashboardStats> {
     let org_u = org_id.as_uuid();
-    let row = sqlx::query_as::<_, (
-        i64,
-        i64,
-        i64,
-        i64,
-        i64,
-        Option<f64>,
-        i64,
-        i64,
-        i64,
-        i64,
-    )>(
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, Option<f64>, i64, i64, i64, i64)>(
         r#"
         WITH org_projects AS (
             SELECT id FROM projects

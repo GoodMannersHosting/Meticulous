@@ -4,9 +4,8 @@
 //! to propagate trace context across service boundaries.
 
 use opentelemetry::{
-    global,
+    Context, global,
     propagation::{Extractor, Injector},
-    Context,
 };
 use std::collections::HashMap;
 use tracing::Span;
@@ -61,7 +60,9 @@ pub struct NatsHeaderCarrier {
 
 impl NatsHeaderCarrier {
     pub fn new() -> Self {
-        Self { headers: HashMap::new() }
+        Self {
+            headers: HashMap::new(),
+        }
     }
 
     pub fn from_nats_headers(headers: &async_nats::HeaderMap) -> Self {

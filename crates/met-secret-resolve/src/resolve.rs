@@ -4,13 +4,11 @@ use std::str::FromStr;
 
 use indexmap::IndexMap;
 use met_core::ids::{JobRunId, OrganizationId, PipelineId, ProjectId};
-use met_parser::{secret_refs_from_raw_secrets, SecretRef};
 use met_parser::RawPipeline;
-use met_secrets::{
-    parse_github_app_credentials, installation_access_token, BuiltinStoredCrypto,
-};
-use met_store::repos::{BuiltinSecretsRepo, JobRunPipelineContext, JobRunRepo};
+use met_parser::{SecretRef, secret_refs_from_raw_secrets};
+use met_secrets::{BuiltinStoredCrypto, installation_access_token, parse_github_app_credentials};
 use met_store::PgPool;
+use met_store::repos::{BuiltinSecretsRepo, JobRunPipelineContext, JobRunRepo};
 
 use crate::hints::SecretResolutionHints;
 
@@ -22,7 +20,7 @@ pub fn materialization_for_kind(kind: &str) -> i32 {
     match kind {
         "github_app" => 1, // installation token is always env-inline at job time
         "ssh_private_key" | "x509_bundle" => 2, // WORKSPACE_FILE_PATH
-        _ => 1, // ENV_INLINE
+        _ => 1,            // ENV_INLINE
     }
 }
 
@@ -37,9 +35,12 @@ fn definition_to_yaml(def: &serde_json::Value) -> Result<String, ResolveError> {
 ///
 /// Does not resolve reusable workflows — the same names the executor uses come from the pipeline
 /// document alone, and full workflow resolution requires a real [`WorkflowProvider`].
-pub fn load_secret_refs_from_definition(def: &serde_json::Value) -> Result<IndexMap<String, SecretRef>, ResolveError> {
+pub fn load_secret_refs_from_definition(
+    def: &serde_json::Value,
+) -> Result<IndexMap<String, SecretRef>, ResolveError> {
     let yaml = definition_to_yaml(def)?;
-    let raw_pipeline: RawPipeline = serde_yaml::from_str(&yaml).map_err(|e| ResolveError::Parse(e.to_string()))?;
+    let raw_pipeline: RawPipeline =
+        serde_yaml::from_str(&yaml).map_err(|e| ResolveError::Parse(e.to_string()))?;
     Ok(secret_refs_from_raw_secrets(&raw_pipeline.secrets))
 }
 
@@ -123,16 +124,12 @@ pub async fn resolve_stored_secret_map(
                     .map_err(|e| ResolveError::Crypto(format!("utf8: {e}")))?;
 
                 if row.kind == "github_app" {
-                    let creds = parse_github_app_credentials(&s).map_err(|e| {
-                        ResolveError::Crypto(e.to_string())
-                    })?;
+                    let creds = parse_github_app_credentials(&s)
+                        .map_err(|e| ResolveError::Crypto(e.to_string()))?;
                     let token = installation_access_token(&creds)
                         .await
                         .map_err(|e| ResolveError::Crypto(e.to_string()))?;
-                    out.insert(
-                        env_name.clone(),
-                        (token, "github_app".to_string(), 1),
-                    );
+                    out.insert(env_name.clone(), (token, "github_app".to_string(), 1));
                 } else {
                     let mat = materialization_for_kind(&row.kind);
                     out.insert(env_name.clone(), (s, row.kind, mat));
@@ -157,15 +154,7 @@ pub async fn resolve_for_job_run_context(
     let org_id = OrganizationId::from_uuid(ctx.org_id);
     let project_id = ProjectId::from_uuid(ctx.project_id);
     let pipeline_id = PipelineId::from_uuid(ctx.pipeline_id);
-    resolve_stored_secret_map(
-        pool,
-        crypto,
-        org_id,
-        Some(project_id),
-        pipeline_id,
-        &refs,
-    )
-    .await
+    resolve_stored_secret_map(pool, crypto, org_id, Some(project_id), pipeline_id, &refs).await
 }
 
 /// Resolve plaintext secrets for `ExchangeJobKeys`: try DB `job_run` join first, else hints + ids.
@@ -192,7 +181,8 @@ pub async fn resolve_job_secrets_for_exchange(
         return Ok(Vec::new());
     }
 
-    let org_id = OrganizationId::from_str(org_id.trim()).map_err(|e| ResolveError::Parse(e.to_string()))?;
+    let org_id =
+        OrganizationId::from_str(org_id.trim()).map_err(|e| ResolveError::Parse(e.to_string()))?;
     let project_id =
         ProjectId::from_str(project_id.trim()).map_err(|e| ResolveError::Parse(e.to_string()))?;
     let pipeline_id =
@@ -206,15 +196,8 @@ pub async fn resolve_job_secrets_for_exchange(
         m.insert(h.env_name, SecretRef::Stored { name: h.path });
     }
 
-    let map = resolve_stored_secret_map(
-        pool,
-        crypto,
-        org_id,
-        Some(project_id),
-        pipeline_id,
-        &m,
-    )
-    .await?;
+    let map =
+        resolve_stored_secret_map(pool, crypto, org_id, Some(project_id), pipeline_id, &m).await?;
     Ok(map
         .into_iter()
         .map(|(k, (v, _kind, mat))| (k, v, mat))

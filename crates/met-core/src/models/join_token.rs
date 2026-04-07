@@ -8,7 +8,10 @@ use crate::ids::{AgentId, JoinTokenId, OrganizationId, PipelineId, ProjectId, Us
 /// Scope of a join token determining which jobs agents can execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx", sqlx(type_name = "join_token_scope", rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "join_token_scope", rename_all = "snake_case")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinTokenScope {
     /// Any job across any tenant.

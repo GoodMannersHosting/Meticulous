@@ -105,8 +105,8 @@ pub mod oidc;
 pub mod pki;
 pub mod providers;
 pub mod rbac;
-pub mod syscall_audit;
 pub mod stored_crypto;
+pub mod syscall_audit;
 pub mod traits;
 pub mod types;
 
@@ -116,15 +116,15 @@ pub use traits::{ProviderConfig, SecretRef, SecretsBroker, SecretsProvider, Secr
 pub use types::{ProviderType, SecretBytes, SecretMetadata, SecretPath, SecretValue};
 
 // Re-export providers for convenience
+pub use github_app::{
+    GithubAppCredentials, GithubAppError, create_app_jwt, installation_access_token,
+    parse_github_app_credentials,
+};
 pub use providers::{
     AwsSecretsProvider, BuiltinSecretsProvider, KubernetesSecretsProvider, MultiProviderBroker,
     VaultProvider,
 };
 pub use stored_crypto::BuiltinStoredCrypto;
-pub use github_app::{
-    create_app_jwt, installation_access_token, parse_github_app_credentials, GithubAppCredentials,
-    GithubAppError,
-};
 
 // Re-export RBAC types
 pub use rbac::{Actor, ActorId, Permission, RbacPolicy, Resource, ResourceType, Role};
@@ -149,7 +149,7 @@ pub use providers::{BrokerConfig, MultiProviderBrokerBuilder};
 
 // Re-export syscall audit / blast radius
 pub use syscall_audit::{
-    AffectedRun, BlastRadiusResult, BlastRadiusTracker, BinaryExecution, KnownBinary,
+    AffectedRun, BinaryExecution, BlastRadiusResult, BlastRadiusTracker, KnownBinary,
     NetworkConnection, NetworkMetadataCollector, SyscallAuditCollector,
 };
 

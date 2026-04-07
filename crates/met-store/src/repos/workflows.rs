@@ -304,7 +304,11 @@ impl<'a> WorkflowRepo<'a> {
     }
 
     /// Get by primary key within org (includes deleted and non-approved — for API detail).
-    pub async fn get_by_id(&self, org_id: OrganizationId, workflow_id: Uuid) -> Result<ReusableWorkflow> {
+    pub async fn get_by_id(
+        &self,
+        org_id: OrganizationId,
+        workflow_id: Uuid,
+    ) -> Result<ReusableWorkflow> {
         sqlx::query_as::<_, ReusableWorkflow>(&format!(
             r#"SELECT {WF_SELECT} FROM reusable_workflows WHERE id = $1 AND org_id = $2"#
         ))
@@ -690,7 +694,12 @@ impl<'a> WorkflowRepo<'a> {
     }
 
     /// Admin: approve catalog submission.
-    pub async fn approve_global(&self, org_id: OrganizationId, workflow_id: Uuid, reviewer: UserId) -> Result<ReusableWorkflow> {
+    pub async fn approve_global(
+        &self,
+        org_id: OrganizationId,
+        workflow_id: Uuid,
+        reviewer: UserId,
+    ) -> Result<ReusableWorkflow> {
         sqlx::query_as::<_, ReusableWorkflow>(&format!(
             r#"
             UPDATE reusable_workflows
@@ -711,7 +720,12 @@ impl<'a> WorkflowRepo<'a> {
     }
 
     /// Admin: reject catalog submission.
-    pub async fn reject_global(&self, org_id: OrganizationId, workflow_id: Uuid, reviewer: UserId) -> Result<ReusableWorkflow> {
+    pub async fn reject_global(
+        &self,
+        org_id: OrganizationId,
+        workflow_id: Uuid,
+        reviewer: UserId,
+    ) -> Result<ReusableWorkflow> {
         sqlx::query_as::<_, ReusableWorkflow>(&format!(
             r#"
             UPDATE reusable_workflows
@@ -760,7 +774,12 @@ impl<'a> WorkflowRepo<'a> {
     }
 
     /// Admin: soft-delete global catalog version.
-    pub async fn soft_delete_global(&self, org_id: OrganizationId, workflow_id: Uuid, reviewer: UserId) -> Result<()> {
+    pub async fn soft_delete_global(
+        &self,
+        org_id: OrganizationId,
+        workflow_id: Uuid,
+        reviewer: UserId,
+    ) -> Result<()> {
         let res = sqlx::query(
             r#"
             UPDATE reusable_workflows

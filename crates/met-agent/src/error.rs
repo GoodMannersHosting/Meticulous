@@ -56,10 +56,7 @@ pub enum AgentError {
 
     /// Step execution failed.
     #[error("step execution failed: {exit_code}: {message}")]
-    StepExecution {
-        exit_code: i32,
-        message: String,
-    },
+    StepExecution { exit_code: i32, message: String },
 
     /// Container runtime error.
     #[error("container runtime error: {0}")]

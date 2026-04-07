@@ -31,7 +31,10 @@ impl Default for PresignedOptions {
 impl PresignedOptions {
     /// Create options with a specific expiration.
     pub fn with_expires_in(expires_in: Duration) -> Self {
-        Self { expires_in, ..Default::default() }
+        Self {
+            expires_in,
+            ..Default::default()
+        }
     }
 
     /// Set the content type for uploads.
@@ -62,7 +65,10 @@ pub struct PresignedUrlBuilder {
 impl PresignedUrlBuilder {
     /// Create a new builder for the given key.
     pub fn new(key: ObjectKey) -> Self {
-        Self { key, options: PresignedOptions::default() }
+        Self {
+            key,
+            options: PresignedOptions::default(),
+        }
     }
 
     /// Set the expiration duration.
@@ -156,7 +162,12 @@ impl ParsedPresignedUrl {
         let mut base_url = url.clone();
         base_url.set_query(None);
 
-        Some(Self { base_url, key, bucket, path_style })
+        Some(Self {
+            base_url,
+            key,
+            bucket,
+            path_style,
+        })
     }
 }
 

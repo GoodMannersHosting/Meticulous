@@ -6,9 +6,7 @@ use met_parser::ir::WorkflowScope as IrWorkflowScope;
 use met_parser::schema::{RawPipeline, RawWorkflowDef};
 use met_parser::semver::{parse_version_constraint, resolve_version};
 use met_parser::workflow::parse_workflow_ref;
-use met_store::repos::{
-    WorkflowRepo, WorkflowScope as DbWorkflowScope, WorkflowVersionListMode,
-};
+use met_store::repos::{WorkflowRepo, WorkflowScope as DbWorkflowScope, WorkflowVersionListMode};
 use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE};
@@ -48,11 +46,7 @@ pub fn declared_output_names_from_definition(def: &serde_json::Value) -> Option<
     }
     names.sort();
     names.dedup();
-    if names.is_empty() {
-        None
-    } else {
-        Some(names)
-    }
+    if names.is_empty() { None } else { Some(names) }
 }
 
 fn resolve_version_string(versions: &[String], requested: &str) -> Result<String, ()> {
@@ -60,7 +54,9 @@ fn resolve_version_string(versions: &[String], requested: &str) -> Result<String
         return versions.first().cloned().ok_or(());
     }
     if let Ok(c) = parse_version_constraint(requested) {
-        return resolve_version(&c, versions).map(|s| s.to_string()).ok_or(());
+        return resolve_version(&c, versions)
+            .map(|s| s.to_string())
+            .ok_or(());
     }
     if versions.iter().any(|v| v == requested) {
         return Ok(requested.to_string());
@@ -184,10 +180,7 @@ async fn diagnose_global(
         WorkflowSubmissionStatus::Approved => {}
     }
 
-    if status == "ok"
-        && row.trust_state == WorkflowTrustState::Untrusted
-        && !allow_untrusted
-    {
+    if status == "ok" && row.trust_state == WorkflowTrustState::Untrusted && !allow_untrusted {
         status = "untrusted_blocked";
         blocking = true;
         detail = Some(
@@ -298,17 +291,15 @@ pub async fn collect_workflow_diagnostics(
     allow_untrusted: bool,
     yaml: &str,
 ) -> ApiResult<Vec<WorkflowDiagnosticItem>> {
-    let raw: RawPipeline = serde_yaml::from_str(yaml).map_err(|e| {
-        ApiError::bad_request(format!("pipeline YAML: {e}"))
-    })?;
+    let raw: RawPipeline = serde_yaml::from_str(yaml)
+        .map_err(|e| ApiError::bad_request(format!("pipeline YAML: {e}")))?;
 
     let repo = WorkflowRepo::new(pool);
     let mut out = Vec::new();
 
     for inv in raw.workflows {
-        let (scope, name, version) =
-            parse_workflow_ref(&inv.workflow, inv.version.as_deref())
-                .map_err(|e| ApiError::bad_request(format!("workflow {}: {}", inv.id, e.message)))?;
+        let (scope, name, version) = parse_workflow_ref(&inv.workflow, inv.version.as_deref())
+            .map_err(|e| ApiError::bad_request(format!("workflow {}: {}", inv.id, e.message)))?;
 
         let mut item = match scope {
             IrWorkflowScope::Global => {
@@ -372,12 +363,13 @@ pub async fn load_pipeline_yaml_string_for_diagnostics(
             .scm_repository
             .as_deref()
             .ok_or_else(|| ApiError::bad_request("Git-backed pipeline missing scm_repository"))?;
-        let credentials_path = pipeline
-            .scm_credentials_secret_path
-            .as_deref()
-            .ok_or_else(|| {
-                ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
-            })?;
+        let credentials_path =
+            pipeline
+                .scm_credentials_secret_path
+                .as_deref()
+                .ok_or_else(|| {
+                    ApiError::bad_request("Git-backed pipeline missing scm_credentials_secret_path")
+                })?;
         let scm_path = pipeline
             .scm_path
             .as_deref()

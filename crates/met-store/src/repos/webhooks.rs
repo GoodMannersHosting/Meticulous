@@ -121,7 +121,18 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         Ok(row.map(
-            |(id, project_id, org_id, provider, events, active, secret_verifier, payload_mapping, gia, gqpn)| {
+            |(
+                id,
+                project_id,
+                org_id,
+                provider,
+                events,
+                active,
+                secret_verifier,
+                payload_mapping,
+                gia,
+                gqpn,
+            )| {
                 WebhookRegistrationContext {
                     registration_id: id,
                     project_id: ProjectId::from_uuid(project_id),
@@ -143,20 +154,23 @@ impl<'a> WebhookRepo<'a> {
         &self,
         project_id: ProjectId,
     ) -> Result<Vec<WebhookRegistrationSummary>> {
-        let rows = sqlx::query_as::<_, (
-            Uuid,
-            String,
-            Vec<String>,
-            bool,
-            serde_json::Value,
-            DateTime<Utc>,
-            String,
-            Option<String>,
-            bool,
-            Option<String>,
-            Option<Uuid>,
-            Option<String>,
-        )>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                Vec<String>,
+                bool,
+                serde_json::Value,
+                DateTime<Utc>,
+                String,
+                Option<String>,
+                bool,
+                Option<String>,
+                Option<Uuid>,
+                Option<String>,
+            ),
+        >(
             r#"
             SELECT wr.id, wr.provider, wr.events, wr.active, wr.payload_mapping, wr.created_at,
                    wr.generic_inbound_auth, wr.generic_query_param_name,
@@ -214,20 +228,23 @@ impl<'a> WebhookRepo<'a> {
         project_id: ProjectId,
         registration_id: TriggerId,
     ) -> Result<WebhookRegistrationSummary> {
-        let row = sqlx::query_as::<_, (
-            Uuid,
-            String,
-            Vec<String>,
-            bool,
-            serde_json::Value,
-            DateTime<Utc>,
-            String,
-            Option<String>,
-            bool,
-            Option<String>,
-            Option<Uuid>,
-            Option<String>,
-        )>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                Vec<String>,
+                bool,
+                serde_json::Value,
+                DateTime<Utc>,
+                String,
+                Option<String>,
+                bool,
+                Option<String>,
+                Option<Uuid>,
+                Option<String>,
+            ),
+        >(
             r#"
             SELECT wr.id, wr.provider, wr.events, wr.active, wr.payload_mapping, wr.created_at,
                    wr.generic_inbound_auth, wr.generic_query_param_name,
@@ -293,7 +310,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         let Some((h,)) = row else {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         };
         Ok(h)
     }
@@ -325,7 +345,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         if r.rows_affected() == 0 {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
         Ok(())
     }
@@ -350,7 +373,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         if r.rows_affected() == 0 {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
         Ok(())
     }
@@ -376,7 +402,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         if r.rows_affected() == 0 {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
         Ok(())
     }
@@ -418,7 +447,10 @@ impl<'a> WebhookRepo<'a> {
         };
 
         if r.rows_affected() == 0 {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
         Ok(())
     }
@@ -441,7 +473,10 @@ impl<'a> WebhookRepo<'a> {
         .fetch_optional(&mut *tx)
         .await?;
         if reg_ok.is_none() {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
 
         let want: HashSet<Uuid> = pipeline_ids.iter().map(|p| p.as_uuid()).collect();
@@ -482,12 +517,10 @@ impl<'a> WebhookRepo<'a> {
 
         for (target_id, puuid) in current {
             if !want.contains(&puuid) {
-                sqlx::query(
-                    r#"DELETE FROM webhook_registration_targets WHERE id = $1"#,
-                )
-                .bind(target_id)
-                .execute(&mut *tx)
-                .await?;
+                sqlx::query(r#"DELETE FROM webhook_registration_targets WHERE id = $1"#)
+                    .bind(target_id)
+                    .execute(&mut *tx)
+                    .await?;
             }
         }
 
@@ -508,7 +541,8 @@ impl<'a> WebhookRepo<'a> {
                     if let sqlx::Error::Database(ref db) = e {
                         if db.code().as_deref() == Some("23505") {
                             return StoreError::Validation(
-                                "target for this pipeline already exists for this webhook".to_string(),
+                                "target for this pipeline already exists for this webhook"
+                                    .to_string(),
                             );
                         }
                     }
@@ -540,7 +574,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         if ok.is_none() {
-            return Err(StoreError::not_found("webhook_registration", registration_id));
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
         }
         Ok(())
     }
@@ -676,7 +713,10 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         if r.rows_affected() == 0 {
-            return Err(StoreError::not_found("webhook_registration_target", target_id));
+            return Err(StoreError::not_found(
+                "webhook_registration_target",
+                target_id,
+            ));
         }
         Ok(())
     }
@@ -792,7 +832,9 @@ impl<'a> WebhookRepo<'a> {
         if arr.is_empty() {
             return true;
         }
-        arr.iter().filter_map(|v| v.as_str()).any(|e| e == event_type)
+        arr.iter()
+            .filter_map(|v| v.as_str())
+            .any(|e| e == event_type)
     }
 }
 

@@ -19,8 +19,8 @@ use met_core::ids::{JoinTokenId, UserId};
 use met_core::models::{JoinToken, JoinTokenScope};
 use met_proto::agent::v1::agent_service_server::AgentService;
 use met_proto::agent::v1::{AgentCapabilities, RegisterRequest, SecurityBundle};
-use met_store::repos::JoinTokenRepo;
 use met_store::PgPool;
+use met_store::repos::JoinTokenRepo;
 use tonic::Request;
 use uuid::Uuid;
 
@@ -122,14 +122,7 @@ async fn register_rejects_unknown_join_token(pool: PgPool) {
     };
     let config = test_controller_config();
     let registry = AgentRegistry::new();
-    let impl_ = AgentServiceImpl::new(
-        config,
-        Arc::new(pool),
-        registry,
-        nats,
-        None,
-        None,
-    );
+    let impl_ = AgentServiceImpl::new(config, Arc::new(pool), registry, nats, None, None);
 
     let err = AgentService::register(
         &impl_,
@@ -181,14 +174,7 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
 
     let config = test_controller_config();
     let registry = AgentRegistry::new();
-    let impl_ = AgentServiceImpl::new(
-        config,
-        Arc::new(pool),
-        registry,
-        nats,
-        None,
-        None,
-    );
+    let impl_ = AgentServiceImpl::new(config, Arc::new(pool), registry, nats, None, None);
 
     let resp = AgentService::register(&impl_, Request::new(sample_register_request(&plain)))
         .await
@@ -204,7 +190,10 @@ async fn register_succeeds_with_valid_tenant_token(pool: PgPool) {
         "subjects should include org id, got {:?}",
         resp.nats_subjects
     );
-    let _ = resp.agent_id.parse::<met_core::ids::AgentId>().expect("agent id");
+    let _ = resp
+        .agent_id
+        .parse::<met_core::ids::AgentId>()
+        .expect("agent id");
 }
 
 /// Project-scoped tokens are issued by the integration API; agents must enroll into the project's org.
@@ -248,14 +237,7 @@ async fn register_succeeds_with_valid_project_scoped_token(pool: PgPool) {
 
     let config = test_controller_config();
     let registry = AgentRegistry::new();
-    let impl_ = AgentServiceImpl::new(
-        config,
-        Arc::new(pool),
-        registry,
-        nats,
-        None,
-        None,
-    );
+    let impl_ = AgentServiceImpl::new(config, Arc::new(pool), registry, nats, None, None);
 
     let resp = AgentService::register(&impl_, Request::new(sample_register_request(&plain)))
         .await

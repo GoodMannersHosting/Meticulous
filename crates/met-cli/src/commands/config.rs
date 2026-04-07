@@ -1,7 +1,7 @@
-use crate::api_client::Result;
-use crate::config::{global_config_path, CliConfig};
-use crate::output::{print_info, print_success};
 use crate::OutputFormat;
+use crate::api_client::Result;
+use crate::config::{CliConfig, global_config_path};
+use crate::output::{print_info, print_success};
 
 pub async fn show(format: OutputFormat) -> Result<()> {
     let config = CliConfig::load();
@@ -89,9 +89,9 @@ pub async fn init() -> Result<()> {
     }
 
     let config = CliConfig::default();
-    config
-        .save_global()
-        .map_err(|e| crate::api_client::ApiError::Other(format!("Failed to write config: {}", e)))?;
+    config.save_global().map_err(|e| {
+        crate::api_client::ApiError::Other(format!("Failed to write config: {}", e))
+    })?;
 
     print_success(&format!("Config initialized at {}", path.display()));
     Ok(())

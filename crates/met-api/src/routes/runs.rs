@@ -34,7 +34,10 @@ use crate::{
 };
 
 /// Backfill non-terminal `job_runs` / `step_runs` when the parent run is already terminal.
-async fn reconcile_terminal_run_children(db: &PgPool, run: &Run) -> Result<(), met_store::StoreError> {
+async fn reconcile_terminal_run_children(
+    db: &PgPool,
+    run: &Run,
+) -> Result<(), met_store::StoreError> {
     if !run.status.is_terminal() {
         return Ok(());
     }
@@ -177,9 +180,7 @@ async fn list_runs(
 
     if let Some(run_number) = query.run_number {
         let Some(pipeline_id) = query.pipeline_id else {
-            return Err(ApiError::bad_request(
-                "`run_number` requires `pipeline_id`",
-            ));
+            return Err(ApiError::bad_request("`run_number` requires `pipeline_id`"));
         };
         let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
         if !user.can_access_project(pipeline.project_id) {
@@ -290,11 +291,7 @@ fn parse_runs_list_offset(cursor: Option<&str>) -> i64 {
     if trimmed.is_empty() {
         return 0;
     }
-    trimmed
-        .parse::<i64>()
-        .ok()
-        .filter(|&o| o >= 0)
-        .unwrap_or(0)
+    trimmed.parse::<i64>().ok().filter(|&o| o >= 0).unwrap_or(0)
 }
 
 fn job_run_snapshot_key(bytes: &Option<Vec<u8>>) -> Option<[u8; 32]> {
@@ -419,9 +416,7 @@ async fn retry_run(
     }
 
     let pipeline_repo = PipelineRepo::new(state.db());
-    let pipeline = pipeline_repo
-        .get(original_run.pipeline_id)
-        .await?;
+    let pipeline = pipeline_repo.get(original_run.pipeline_id).await?;
 
     if !user.can_access_project(pipeline.project_id) {
         return Err(ApiError::forbidden("no access to this project"));
@@ -633,7 +628,9 @@ async fn get_job_run_snapshots(
 
     let jr = JobRunRepo::new(db).get(job_run_id).await?;
     if jr.run_id != run_id {
-        return Err(ApiError::not_found("job run not found for this pipeline run"));
+        return Err(ApiError::not_found(
+            "job run not found for this pipeline run",
+        ));
     }
 
     let pipeline_definition = match job_run_snapshot_key(&jr.pipeline_definition_sha256) {
@@ -691,7 +688,9 @@ async fn get_job_steps(
 
     let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
     if jr.run_id != run_id {
-        return Err(ApiError::not_found("job run not found for this pipeline run"));
+        return Err(ApiError::not_found(
+            "job run not found for this pipeline run",
+        ));
     }
 
     let step_repo = StepRunRepo::new(state.db());
@@ -764,7 +763,9 @@ async fn get_job_assignments(
 
     let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
     if jr.run_id != run_id {
-        return Err(ApiError::not_found("job run not found for this pipeline run"));
+        return Err(ApiError::not_found(
+            "job run not found for this pipeline run",
+        ));
     }
 
     let rows = JobAssignmentRepo::new(state.db())
@@ -846,7 +847,9 @@ async fn get_job_logs(
 
     let jr = JobRunRepo::new(state.db()).get(job_run_id).await?;
     if jr.run_id != run_id {
-        return Err(ApiError::not_found("job run not found for this pipeline run"));
+        return Err(ApiError::not_found(
+            "job run not found for this pipeline run",
+        ));
     }
 
     let repo = LogCacheRepo::new(state.db());
@@ -874,9 +877,7 @@ async fn get_job_logs(
             run_id: e.run_id.to_string(),
             job_run_id: e.job_run_id.to_string(),
             // Match `StepRunId` JSON everywhere else (`srun_<uuid>`), not bare `Uuid::to_string()`.
-            step_run_id: e
-                .step_run_id
-                .map(|u| StepRunId::from_uuid(u).to_string()),
+            step_run_id: e.step_run_id.map(|u| StepRunId::from_uuid(u).to_string()),
             line: e.content.clone(),
             level: if e.stream == "stderr" {
                 "stderr".to_string()
@@ -961,11 +962,7 @@ async fn get_run_dag(
         .await?;
 
     let nodes = if dag_jobs.is_empty() {
-        build_dag_nodes_from_definition(
-            &pipeline.definition,
-            &job_runs,
-            &binaries_by_job_run,
-        )
+        build_dag_nodes_from_definition(&pipeline.definition, &job_runs, &binaries_by_job_run)
     } else {
         build_dag_nodes_from_db_jobs(dag_jobs, &runs_by_job_id, &binaries_by_job_run)
     };
@@ -1009,11 +1006,13 @@ fn merge_binaries_for_job_runs(
         }
     }
     acc.into_iter()
-        .map(|((binary_path, sha256), execution_count)| ExecutedBinarySummary {
-            binary_path,
-            sha256,
-            execution_count,
-        })
+        .map(
+            |((binary_path, sha256), execution_count)| ExecutedBinarySummary {
+                binary_path,
+                sha256,
+                execution_count,
+            },
+        )
         .collect()
 }
 
@@ -1029,7 +1028,10 @@ fn build_dag_nodes_from_db_jobs(
     dag_jobs
         .into_iter()
         .map(|j| {
-            let jrs = runs_by_job_id.get(&j.id).map(|v| v.as_slice()).unwrap_or(&[]);
+            let jrs = runs_by_job_id
+                .get(&j.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             let status = latest_job_run(jrs)
                 .map(|jr| format!("{:?}", jr.status).to_lowercase())
                 .unwrap_or_else(|| "pending".to_string());
@@ -1054,7 +1056,8 @@ fn build_dag_nodes_from_definition(
     job_defs_from_pipeline_definition(def)
         .into_iter()
         .map(|(name, deps)| {
-            let jrs_for_name: Vec<&JobRun> = job_runs.iter().filter(|jr| jr.job_name == name).collect();
+            let jrs_for_name: Vec<&JobRun> =
+                job_runs.iter().filter(|jr| jr.job_name == name).collect();
             let status = latest_job_run(&jrs_for_name)
                 .map(|jr| format!("{:?}", jr.status).to_lowercase())
                 .unwrap_or_else(|| "pending".to_string());
@@ -1163,20 +1166,12 @@ fn format_footprint_parent_dir(binary_path: &str) -> String {
     while out.ends_with('/') && out.len() > 1 {
         out.pop();
     }
-    if out.is_empty() {
-        ".".to_string()
-    } else {
-        out
-    }
+    if out.is_empty() { ".".to_string() } else { out }
 }
 
 fn build_footprint_filesystem(
     binaries: &[FootprintBinaryRow],
-) -> (
-    Vec<FootprintDirectoryGroup>,
-    bool,
-    Option<u32>,
-) {
+) -> (Vec<FootprintDirectoryGroup>, bool, Option<u32>) {
     let mut dir_map: BTreeMap<String, BTreeMap<(String, String), (i64, BTreeSet<String>)>> =
         BTreeMap::new();
 
@@ -1213,12 +1208,14 @@ fn build_footprint_filesystem(
         .map(|(directory, files)| {
             let mut entries: Vec<FootprintDirectoryEntry> = files
                 .into_iter()
-                .map(|((binary_path, sha256), (execution_count, jobs))| FootprintDirectoryEntry {
-                    binary_path,
-                    sha256,
-                    execution_count,
-                    job_names: jobs.into_iter().collect(),
-                })
+                .map(
+                    |((binary_path, sha256), (execution_count, jobs))| FootprintDirectoryEntry {
+                        binary_path,
+                        sha256,
+                        execution_count,
+                        job_names: jobs.into_iter().collect(),
+                    },
+                )
                 .collect();
             entries.sort_by(|a, b| a.binary_path.cmp(&b.binary_path));
             let etrunc = entries.len() > FOOTPRINT_MAX_ENTRIES_PER_DIR;
@@ -1292,8 +1289,11 @@ async fn get_run_footprint(
         })
         .collect();
 
-    let (filesystem_by_directory, filesystem_directories_truncated, filesystem_more_directory_count) =
-        build_footprint_filesystem(&executed_binaries);
+    let (
+        filesystem_by_directory,
+        filesystem_directories_truncated,
+        filesystem_more_directory_count,
+    ) = build_footprint_filesystem(&executed_binaries);
 
     Ok(Json(RunFootprintResponse {
         run_id: id,

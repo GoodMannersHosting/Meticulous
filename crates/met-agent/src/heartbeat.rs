@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use met_proto::agent::v1::{
-    agent_service_client::AgentServiceClient, AgentStatusInfo, HeartbeatAction, HeartbeatRequest,
-    ResourceSnapshot,
-};
 use met_proto::AgentStatus;
+use met_proto::agent::v1::{
+    AgentStatusInfo, HeartbeatAction, HeartbeatRequest, ResourceSnapshot,
+    agent_service_client::AgentServiceClient,
+};
 use sysinfo::System;
-use tokio::sync::{mpsc, watch, RwLock};
-use tonic::transport::Channel;
+use tokio::sync::{RwLock, mpsc, watch};
 use tonic::Code;
+use tonic::transport::Channel;
 use tracing::{debug, error, info};
 
 use crate::config::AgentIdentity;
@@ -228,8 +228,8 @@ impl HeartbeatLoop {
             // Would update the identity here
         }
 
-        let action = HeartbeatAction::try_from(response.action)
-            .unwrap_or(HeartbeatAction::Continue);
+        let action =
+            HeartbeatAction::try_from(response.action).unwrap_or(HeartbeatAction::Continue);
 
         if action == HeartbeatAction::Drain {
             let mut s = self.state.write().await;

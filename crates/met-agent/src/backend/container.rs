@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::{poll_watcher_emit_telemetry, ExecutionBackend, StepResult, StepSpec};
+use super::{ExecutionBackend, StepResult, StepSpec, poll_watcher_emit_telemetry};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
 use crate::step_log::StepLogPipe;
@@ -114,8 +114,7 @@ impl ContainerBackend {
                 cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
 
                 if let Some(p) = met_output_path_in_container {
-                    cmd.arg("-e")
-                        .arg(format!("METICULOUS_OUTPUT_PATH={p}"));
+                    cmd.arg("-e").arg(format!("METICULOUS_OUTPUT_PATH={p}"));
                 }
 
                 // Set environment variables
@@ -215,13 +214,12 @@ impl ExecutionBackend for ContainerBackend {
             "container backend: image pull attempt finished"
         );
 
-
         let (output_fifo_file, fifo_cleanup, met_out_container_path) = {
             use std::fs::OpenOptions;
             let met_dir = workspace.join(".meticulous");
-            tokio::fs::create_dir_all(&met_dir).await.map_err(|e| {
-                AgentError::ContainerRuntime(format!("create .meticulous: {e}"))
-            })?;
+            tokio::fs::create_dir_all(&met_dir)
+                .await
+                .map_err(|e| AgentError::ContainerRuntime(format!("create .meticulous: {e}")))?;
             let fifo_path = met_dir.join(format!("met-output-{}.fifo", step.step_run_id));
             if tokio::fs::metadata(&fifo_path).await.is_ok() {
                 let _ = tokio::fs::remove_file(&fifo_path).await;
@@ -240,7 +238,10 @@ impl ExecutionBackend for ContainerBackend {
             let canon = tokio::fs::canonicalize(&fifo_path)
                 .await
                 .unwrap_or_else(|_| fifo_path.clone());
-            let p_in_ctr = format!("/workspace/.meticulous/met-output-{}.fifo", step.step_run_id);
+            let p_in_ctr = format!(
+                "/workspace/.meticulous/met-output-{}.fifo",
+                step.step_run_id
+            );
             let f = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -252,9 +253,9 @@ impl ExecutionBackend for ContainerBackend {
         // Build and run command
         let mut cmd = self.build_run_command(step, workspace, met_out_container_path.as_deref());
 
-        let mut child = cmd.spawn().map_err(|e| {
-            AgentError::ContainerRuntime(format!("failed to spawn container: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AgentError::ContainerRuntime(format!("failed to spawn container: {e}")))?;
 
         // Get the PID and start process watching
         // Note: For containers, we watch the container runtime process and its children
@@ -459,9 +460,10 @@ impl ContainerBackend {
             }
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            AgentError::ContainerRuntime(format!("failed to pull image: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| AgentError::ContainerRuntime(format!("failed to pull image: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

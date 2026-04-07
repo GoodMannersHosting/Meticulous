@@ -3,22 +3,23 @@
 //! Tests cover: PKI flow, hybrid encryption, masking, RBAC, blast radius, and audit types.
 
 use met_secrets::{
+    // Types
+    ProviderType,
+    SecretValue,
+    // Audit
+    audit::{AuditAction, AuditActor, AuditEvent, AuditLogger, Outcome, TracingAuditLogger},
+    // Masking
+    masking::{ControlPlaneMaskingFilter, SecretMaskingFilter},
     // PKI
     pki::{
         ca::{CaConfig, CertificateAuthority},
         encryption::{EncryptedEnvelope, HybridDecryption, HybridEncryption},
         ephemeral::EphemeralKeypair,
     },
-    // Masking
-    masking::{ControlPlaneMaskingFilter, SecretMaskingFilter},
     // RBAC
     rbac::{Actor, Permission, RbacPolicy, Resource, ResourceType, Role},
-    // Audit
-    audit::{AuditAction, AuditActor, AuditEvent, AuditLogger, Outcome, TracingAuditLogger},
     // Syscall / Blast radius
     syscall_audit::{BlastRadiusTracker, NetworkConnection, SyscallAuditCollector},
-    // Types
-    ProviderType, SecretValue,
 };
 
 use aes_gcm::aead::OsRng;
@@ -51,10 +52,7 @@ async fn pki_full_flow() {
         .expect("CSR signing must succeed");
 
     assert!(signed_cert.certificate_pem.contains("BEGIN CERTIFICATE"));
-    assert_eq!(
-        signed_cert.subject_cn,
-        "agent:agent-integration/job:job-42"
-    );
+    assert_eq!(signed_cert.subject_cn, "agent:agent-integration/job:job-42");
     assert!(signed_cert.not_after > signed_cert.not_before);
     assert_eq!(signed_cert.public_key_fingerprint.len(), 64); // SHA-256 hex
 
@@ -73,7 +71,11 @@ async fn pki_multiple_agents_distinct_serials() {
     for i in 0..10 {
         let kp = EphemeralKeypair::generate().unwrap();
         let cert = ca
-            .sign_csr(&format!("agent-{i}"), &format!("job-{i}"), kp.key_pair_der())
+            .sign_csr(
+                &format!("agent-{i}"),
+                &format!("job-{i}"),
+                kp.key_pair_der(),
+            )
             .await
             .unwrap();
         assert!(
@@ -95,19 +97,15 @@ fn hybrid_encryption_roundtrip() {
 
     let plaintext = b"database-password=hunter2";
 
-    let envelope = HybridEncryption::encrypt(
-        &recipient_public.to_bytes(),
-        plaintext,
-    )
-    .expect("encryption must succeed");
+    let envelope = HybridEncryption::encrypt(&recipient_public.to_bytes(), plaintext)
+        .expect("encryption must succeed");
 
     // Serialize → deserialize the envelope (simulates network transit)
     let bytes = envelope.to_bytes();
     let restored = EncryptedEnvelope::from_bytes(&bytes).expect("deserialization must succeed");
 
-    let decrypted =
-        HybridDecryption::decrypt(&recipient_secret.to_bytes(), &restored)
-            .expect("decryption must succeed");
+    let decrypted = HybridDecryption::decrypt(&recipient_secret.to_bytes(), &restored)
+        .expect("decryption must succeed");
 
     assert_eq!(&*decrypted, plaintext);
 }
@@ -118,11 +116,9 @@ fn hybrid_encryption_wrong_key_rejected() {
     let real_public = X25519PublicKey::from(&real_secret);
     let wrong_secret = StaticSecret::random_from_rng(OsRng);
 
-    let envelope =
-        HybridEncryption::encrypt(&real_public.to_bytes(), b"secret-data").unwrap();
+    let envelope = HybridEncryption::encrypt(&real_public.to_bytes(), b"secret-data").unwrap();
 
-    let result =
-        HybridDecryption::decrypt(&wrong_secret.to_bytes(), &envelope);
+    let result = HybridDecryption::decrypt(&wrong_secret.to_bytes(), &envelope);
     assert!(result.is_err(), "decryption with wrong key must fail");
 }
 
@@ -131,8 +127,7 @@ fn hybrid_encryption_tampered_hmac_rejected() {
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = X25519PublicKey::from(&secret);
 
-    let mut envelope =
-        HybridEncryption::encrypt(&public.to_bytes(), b"secret").unwrap();
+    let mut envelope = HybridEncryption::encrypt(&public.to_bytes(), b"secret").unwrap();
 
     // Tamper with the HMAC
     envelope.plaintext_hmac[0] ^= 0xff;
@@ -154,10 +149,8 @@ fn hybrid_encryption_large_payload() {
 
     let plaintext = vec![0xAB_u8; 1024 * 1024]; // 1 MiB
 
-    let envelope =
-        HybridEncryption::encrypt(&public.to_bytes(), &plaintext).unwrap();
-    let decrypted =
-        HybridDecryption::decrypt(&secret.to_bytes(), &envelope).unwrap();
+    let envelope = HybridEncryption::encrypt(&public.to_bytes(), &plaintext).unwrap();
+    let decrypted = HybridDecryption::decrypt(&secret.to_bytes(), &envelope).unwrap();
 
     assert_eq!(&*decrypted, &plaintext);
 }
@@ -198,7 +191,10 @@ fn masking_github_token_pattern() {
     let filter = SecretMaskingFilter::new();
     let input = "export GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkl";
     let masked = filter.mask(input);
-    assert!(!masked.contains("ghp_"), "GitHub token pattern must be masked");
+    assert!(
+        !masked.contains("ghp_"),
+        "GitHub token pattern must be masked"
+    );
 }
 
 #[test]
@@ -234,8 +230,7 @@ fn masking_multiple_secrets_in_one_line() {
     filter.add_secret("secret-alpha-value");
     filter.add_secret("secret-beta-value-long");
 
-    let masked =
-        filter.mask("DB=secret-alpha-value API=secret-beta-value-long done");
+    let masked = filter.mask("DB=secret-alpha-value API=secret-beta-value-long done");
     assert!(!masked.contains("secret-alpha"));
     assert!(!masked.contains("secret-beta"));
 }
@@ -409,7 +404,10 @@ fn rbac_permissions_for_role_are_correct() {
 fn rbac_role_from_str() {
     assert_eq!("developer".parse::<Role>().unwrap(), Role::Developer);
     assert_eq!("org_admin".parse::<Role>().unwrap(), Role::OrgAdmin);
-    assert_eq!("platform_admin".parse::<Role>().unwrap(), Role::PlatformAdmin);
+    assert_eq!(
+        "platform_admin".parse::<Role>().unwrap(),
+        Role::PlatformAdmin
+    );
     assert!("nonexistent_role".parse::<Role>().is_err());
 }
 
@@ -443,7 +441,10 @@ async fn audit_tracing_logger_does_not_panic() {
         .success();
 
     // Should complete without panicking
-    logger.log(event).await.expect("tracing logger must not fail");
+    logger
+        .log(event)
+        .await
+        .expect("tracing logger must not fail");
 }
 
 #[tokio::test]
@@ -528,7 +529,12 @@ async fn syscall_audit_record_and_summary() {
         .record_execution("/usr/bin/git", vec!["git".into(), "status".into()], 1000, 1)
         .await;
     collector
-        .record_execution("/usr/bin/make", vec!["make".into(), "build".into()], 1001, 1)
+        .record_execution(
+            "/usr/bin/make",
+            vec!["make".into(), "build".into()],
+            1001,
+            1,
+        )
         .await;
     collector
         .record_execution("/usr/bin/git", vec!["git".into(), "push".into()], 1002, 1)
@@ -615,14 +621,10 @@ fn combined_encrypt_then_mask() {
     let recipient = StaticSecret::random_from_rng(OsRng);
     let recipient_pub = X25519PublicKey::from(&recipient);
 
-    let envelope = HybridEncryption::encrypt(
-        &recipient_pub.to_bytes(),
-        secret_value.as_bytes(),
-    )
-    .unwrap();
+    let envelope =
+        HybridEncryption::encrypt(&recipient_pub.to_bytes(), secret_value.as_bytes()).unwrap();
 
-    let decrypted =
-        HybridDecryption::decrypt(&recipient.to_bytes(), &envelope).unwrap();
+    let decrypted = HybridDecryption::decrypt(&recipient.to_bytes(), &envelope).unwrap();
     let decrypted_str = std::str::from_utf8(&decrypted).unwrap();
     assert_eq!(decrypted_str, secret_value);
 

@@ -7,6 +7,6 @@ pub mod ca;
 pub mod encryption;
 pub mod ephemeral;
 
-pub use ca::{CertificateAuthority, CaConfig, SignedCertificate};
-pub use encryption::{HybridEncryption, EncryptedEnvelope, HybridDecryption};
-pub use ephemeral::{EphemeralKeypair, CertificateSigningRequest};
+pub use ca::{CaConfig, CertificateAuthority, SignedCertificate};
+pub use encryption::{EncryptedEnvelope, HybridDecryption, HybridEncryption};
+pub use ephemeral::{CertificateSigningRequest, EphemeralKeypair};

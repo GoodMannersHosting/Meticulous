@@ -50,7 +50,8 @@ pub fn validate_share_workspace_affinity(ir: &PipelineIR, diagnostics: &mut Pars
         }
     }
 
-    let id_to_name: HashMap<JobId, &str> = ir.jobs.iter().map(|j| (j.id, j.name.as_str())).collect();
+    let id_to_name: HashMap<JobId, &str> =
+        ir.jobs.iter().map(|j| (j.id, j.name.as_str())).collect();
 
     for (g, job_ids) in groups {
         if job_ids.len() < 2 {
@@ -91,7 +92,13 @@ mod tests {
         JobId::from_uuid(uuid::Uuid::parse_str(s).unwrap())
     }
 
-    fn minimal_job(id: JobId, name: &str, depends_on: Vec<JobId>, group: Option<&str>, share_ws: bool) -> JobIR {
+    fn minimal_job(
+        id: JobId,
+        name: &str,
+        depends_on: Vec<JobId>,
+        group: Option<&str>,
+        share_ws: bool,
+    ) -> JobIR {
         JobIR {
             id,
             name: name.to_string(),

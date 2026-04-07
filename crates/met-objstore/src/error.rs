@@ -64,15 +64,21 @@ impl ObjectStoreError {
     }
 
     pub fn access_denied(message: impl Into<String>) -> Self {
-        Self::AccessDenied { message: message.into() }
+        Self::AccessDenied {
+            message: message.into(),
+        }
     }
 
     pub fn bucket_not_found(bucket: impl Into<String>) -> Self {
-        Self::BucketNotFound { bucket: bucket.into() }
+        Self::BucketNotFound {
+            bucket: bucket.into(),
+        }
     }
 
     pub fn invalid_key(message: impl Into<String>) -> Self {
-        Self::InvalidKey { message: message.into() }
+        Self::InvalidKey {
+            message: message.into(),
+        }
     }
 
     pub fn already_exists(key: impl Into<String>) -> Self {
@@ -80,31 +86,45 @@ impl ObjectStoreError {
     }
 
     pub fn timeout(operation: impl Into<String>) -> Self {
-        Self::Timeout { operation: operation.into() }
+        Self::Timeout {
+            operation: operation.into(),
+        }
     }
 
     pub fn connection(message: impl Into<String>) -> Self {
-        Self::Connection { message: message.into() }
+        Self::Connection {
+            message: message.into(),
+        }
     }
 
     pub fn multipart(message: impl Into<String>) -> Self {
-        Self::MultipartUpload { message: message.into() }
+        Self::MultipartUpload {
+            message: message.into(),
+        }
     }
 
     pub fn presigned(message: impl Into<String>) -> Self {
-        Self::PresignedUrl { message: message.into() }
+        Self::PresignedUrl {
+            message: message.into(),
+        }
     }
 
     pub fn config(message: impl Into<String>) -> Self {
-        Self::Configuration { message: message.into() }
+        Self::Configuration {
+            message: message.into(),
+        }
     }
 
     pub fn s3(message: impl Into<String>) -> Self {
-        Self::S3 { message: message.into() }
+        Self::S3 {
+            message: message.into(),
+        }
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::Internal { message: message.into() }
+        Self::Internal {
+            message: message.into(),
+        }
     }
 
     /// Check if this error indicates the object was not found.

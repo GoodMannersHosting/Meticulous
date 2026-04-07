@@ -103,7 +103,12 @@ impl<'a> ApiTokenRepo<'a> {
     }
 
     /// List tokens for a user.
-    pub async fn list_by_user(&self, user_id: UserId, limit: i64, offset: i64) -> Result<Vec<ApiToken>> {
+    pub async fn list_by_user(
+        &self,
+        user_id: UserId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
             SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
@@ -220,7 +225,11 @@ impl<'a> ApiTokenRepo<'a> {
     }
 
     /// List tokens that can access a specific project.
-    pub async fn list_by_project(&self, project_id: ProjectId, limit: i64) -> Result<Vec<ApiToken>> {
+    pub async fn list_by_project(
+        &self,
+        project_id: ProjectId,
+        limit: i64,
+    ) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
             SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at

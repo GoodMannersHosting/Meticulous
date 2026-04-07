@@ -1,9 +1,7 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::context::ResolvedContext;
-use crate::output::{
-    build_table, format_timestamp, print_kv, print_serialized, print_table,
-};
-use crate::OutputFormat;
+use crate::output::{build_table, format_timestamp, print_kv, print_serialized, print_table};
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 
@@ -87,10 +85,7 @@ pub async fn show(client: &ApiClient, slug: &str, format: OutputFormat) -> Resul
             print_kv("ID", &wf.id);
             print_kv("Slug", &wf.slug);
             print_kv("Scope", &wf.scope);
-            print_kv(
-                "Description",
-                wf.description.as_deref().unwrap_or("-"),
-            );
+            print_kv("Description", wf.description.as_deref().unwrap_or("-"));
             print_kv(
                 "Latest Version",
                 wf.latest_version.as_deref().unwrap_or("-"),
@@ -103,9 +98,8 @@ pub async fn show(client: &ApiClient, slug: &str, format: OutputFormat) -> Resul
 }
 
 pub async fn versions(client: &ApiClient, slug: &str, format: OutputFormat) -> Result<()> {
-    let resp: WorkflowVersionsResponse = client
-        .get(&format!("/workflows/{}/versions", slug))
-        .await?;
+    let resp: WorkflowVersionsResponse =
+        client.get(&format!("/workflows/{}/versions", slug)).await?;
 
     match format {
         OutputFormat::Table => {

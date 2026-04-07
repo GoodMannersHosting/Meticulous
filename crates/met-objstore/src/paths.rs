@@ -80,7 +80,10 @@ pub struct ObjectKeyBuilder {
 impl ObjectKeyBuilder {
     /// Create a new key builder.
     pub fn new() -> Self {
-        Self { organization: None, project: None }
+        Self {
+            organization: None,
+            project: None,
+        }
     }
 
     /// Set the organization context.
@@ -119,7 +122,9 @@ impl ObjectKeyBuilder {
     /// Build a key for a step log file.
     pub fn step_log(&self, run_id: &str, job_name: &str, step_name: &str) -> ObjectKey {
         let base = self.base_prefix();
-        ObjectKey::new(format!("{base}/runs/{run_id}/logs/{job_name}/{step_name}.log"))
+        ObjectKey::new(format!(
+            "{base}/runs/{run_id}/logs/{job_name}/{step_name}.log"
+        ))
     }
 
     /// Build a key for an SBOM (Software Bill of Materials).
@@ -223,9 +228,7 @@ mod tests {
 
     #[test]
     fn test_key_builder_with_context() {
-        let builder = ObjectKeyBuilder::new()
-            .organization("acme")
-            .project("api");
+        let builder = ObjectKeyBuilder::new().organization("acme").project("api");
 
         let key = builder.artifact("run-123", "test-results.xml");
         assert_eq!(

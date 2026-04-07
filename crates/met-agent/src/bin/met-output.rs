@@ -3,8 +3,8 @@
 
 use clap::{Parser, Subcommand};
 use met_core::output_ipc::{
-    encode_frame, parse_key_value_arg, validate_key, OUTPUT_MSG_SECRET, OUTPUT_MSG_VAR,
-    OUTPUT_VALUE_MAX_BYTES,
+    OUTPUT_MSG_SECRET, OUTPUT_MSG_VAR, OUTPUT_VALUE_MAX_BYTES, encode_frame, parse_key_value_arg,
+    validate_key,
 };
 use std::io::Write;
 
@@ -24,9 +24,7 @@ enum Cmd {
         kv: String,
     },
     /// Sensitive output (plaintext on IPC to agent only).
-    Secret {
-        kv: String,
-    },
+    Secret { kv: String },
 }
 
 fn main() -> std::process::ExitCode {
@@ -74,15 +72,13 @@ fn main() -> std::process::ExitCode {
         if let Ok(fd) = fd_s.parse::<std::os::fd::RawFd>() {
             if fd >= 0 {
                 #[allow(unsafe_code)]
-                let n = unsafe {
-                    libc::write(
-                        fd,
-                        frame.as_ptr().cast::<libc::c_void>(),
-                        frame.len(),
-                    )
-                };
+                let n =
+                    unsafe { libc::write(fd, frame.as_ptr().cast::<libc::c_void>(), frame.len()) };
                 if n < 0 {
-                    eprintln!("met-output: write failed: {}", std::io::Error::last_os_error());
+                    eprintln!(
+                        "met-output: write failed: {}",
+                        std::io::Error::last_os_error()
+                    );
                     return std::process::ExitCode::from(6);
                 }
                 if n as usize != frame.len() {
@@ -97,7 +93,9 @@ fn main() -> std::process::ExitCode {
     let path = match std::env::var("METICULOUS_OUTPUT_PATH") {
         Ok(p) if !p.is_empty() => p,
         _ => {
-            eprintln!("met-output: set METICULOUS_OUTPUT_FD (native) or METICULOUS_OUTPUT_PATH (containers)");
+            eprintln!(
+                "met-output: set METICULOUS_OUTPUT_FD (native) or METICULOUS_OUTPUT_PATH (containers)"
+            );
             return std::process::ExitCode::from(2);
         }
     };

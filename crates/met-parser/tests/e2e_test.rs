@@ -1,11 +1,11 @@
 //! End-to-end parser test: parse example pipeline YAML, verify IR structure.
 
 use indexmap::IndexMap;
-use met_parser::{
-    MockWorkflowProvider, PipelineParser, RawJob, RawStep, RawWorkflowDef, WorkflowScope,
-    EnvValue, StepCommand, Trigger,
-};
 use met_parser::schema::{RawInputDef, RawOutputDef};
+use met_parser::{
+    EnvValue, MockWorkflowProvider, PipelineParser, RawJob, RawStep, RawWorkflowDef, StepCommand,
+    Trigger, WorkflowScope,
+};
 
 fn create_full_provider() -> MockWorkflowProvider {
     let mut provider = MockWorkflowProvider::new();
@@ -16,12 +16,15 @@ fn create_full_provider() -> MockWorkflowProvider {
         version: Some("2.0.0".to_string()),
         inputs: {
             let mut m = IndexMap::new();
-            m.insert("ref".to_string(), met_parser::schema::RawInputDef {
-                input_type: "string".to_string(),
-                required: false,
-                default: Some(serde_yaml::Value::String("HEAD".to_string())),
-                description: None,
-            });
+            m.insert(
+                "ref".to_string(),
+                met_parser::schema::RawInputDef {
+                    input_type: "string".to_string(),
+                    required: false,
+                    default: Some(serde_yaml::Value::String("HEAD".to_string())),
+                    description: None,
+                },
+            );
             m
         },
         outputs: IndexMap::new(),
@@ -56,12 +59,15 @@ fn create_full_provider() -> MockWorkflowProvider {
         version: Some("1.0.0".to_string()),
         inputs: {
             let mut m = IndexMap::new();
-            m.insert("profile".to_string(), met_parser::schema::RawInputDef {
-                input_type: "string".to_string(),
-                required: false,
-                default: Some(serde_yaml::Value::String("release".to_string())),
-                description: None,
-            });
+            m.insert(
+                "profile".to_string(),
+                met_parser::schema::RawInputDef {
+                    input_type: "string".to_string(),
+                    required: false,
+                    default: Some(serde_yaml::Value::String("release".to_string())),
+                    description: None,
+                },
+            );
             m
         },
         outputs: IndexMap::new(),
@@ -247,21 +253,33 @@ workflows:
 
     let provider = create_full_provider();
     let mut parser = PipelineParser::new(&provider);
-    
+
     let result = parser.parse(yaml).await;
     assert!(result.is_ok(), "Parse failed: {:?}", result.err());
-    
+
     let ir = result.unwrap();
 
     assert_eq!(ir.name, "Meticulous CI Pipeline");
 
     assert!(ir.triggers.iter().any(|t| matches!(t, Trigger::Manual)));
     assert!(ir.triggers.iter().any(|t| matches!(t, Trigger::Webhook(_))));
-    assert!(ir.triggers.iter().any(|t| matches!(t, Trigger::Schedule(_))));
+    assert!(
+        ir.triggers
+            .iter()
+            .any(|t| matches!(t, Trigger::Schedule(_)))
+    );
 
-    let webhook = ir.triggers.iter().find_map(|t| {
-        if let Trigger::Webhook(w) = t { Some(w) } else { None }
-    }).unwrap();
+    let webhook = ir
+        .triggers
+        .iter()
+        .find_map(|t| {
+            if let Trigger::Webhook(w) = t {
+                Some(w)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(webhook.branches.len(), 3);
     assert!(webhook.paths.contains(&"crates/**".to_string()));
 
@@ -295,7 +313,10 @@ workflows:
     assert_eq!(postgres_service.name, "postgres");
     assert_eq!(postgres_service.image, "postgres:15");
 
-    let release_job = ir.jobs.iter().find(|j| j.name == "Build" && j.condition.is_some());
+    let release_job = ir
+        .jobs
+        .iter()
+        .find(|j| j.name == "Build" && j.condition.is_some());
     assert!(release_job.is_some());
 }
 
@@ -337,7 +358,11 @@ workflows:
     assert_eq!(job2.depends_on.len(), 1);
 
     let job1 = ir.jobs.iter().find(|j| j.name == "Checkout").unwrap();
-    assert!(job2.depends_on.iter().any(|dep| ir.jobs.iter().any(|j| &j.id == dep)));
+    assert!(
+        job2.depends_on
+            .iter()
+            .any(|dep| ir.jobs.iter().any(|j| &j.id == dep))
+    );
 
     for job in &ir.jobs {
         for step in &job.steps {
@@ -390,9 +415,17 @@ workflows:
         .map(|(i, id)| (*id, i))
         .collect();
 
-    let job_a = ir.jobs.iter().find(|j| j.name == "Checkout" && j.depends_on.is_empty()).unwrap();
-    let job_d = ir.jobs.iter().find(|j| j.name == "Checkout" && j.depends_on.len() == 2).unwrap();
-    
+    let job_a = ir
+        .jobs
+        .iter()
+        .find(|j| j.name == "Checkout" && j.depends_on.is_empty())
+        .unwrap();
+    let job_d = ir
+        .jobs
+        .iter()
+        .find(|j| j.name == "Checkout" && j.depends_on.len() == 2)
+        .unwrap();
+
     if let (Some(&pos_a), Some(&pos_d)) = (positions.get(&job_a.id), positions.get(&job_d.id)) {
         assert!(pos_a < pos_d, "A should come before D");
     }
@@ -418,7 +451,7 @@ workflows:
 
     let job = &ir.jobs[0];
     assert!(job.source_workflow.is_some());
-    
+
     let source = job.source_workflow.as_ref().unwrap();
     assert_eq!(source.scope, WorkflowScope::Global);
     assert_eq!(source.name, "rust-build");

@@ -9,7 +9,7 @@ use met_core::ids::{JobId, RunId, StepId};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tracing::{debug, instrument};
 
 /// A processed log line ready for delivery.

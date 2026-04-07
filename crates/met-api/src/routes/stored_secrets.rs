@@ -39,7 +39,10 @@ pub fn router() -> Router<AppState> {
             "/projects/{project_id}/stored-secrets",
             get(list_stored_secrets).post(create_stored_secret),
         )
-        .route("/stored-secrets/{id}/activate", post(activate_stored_secret_version))
+        .route(
+            "/stored-secrets/{id}/activate",
+            post(activate_stored_secret_version),
+        )
         .route(
             "/stored-secrets/{id}/permanent",
             delete(purge_stored_secret_version),
@@ -232,7 +235,9 @@ async fn list_stored_secret_versions(
         .list_versions_for_scope(org_id, scope_project, scope_pipeline, path)
         .await
         .map_err(met_store::StoreError::from)?;
-    Ok(Json(rows.into_iter().map(StoredSecretResponse::from).collect()))
+    Ok(Json(
+        rows.into_iter().map(StoredSecretResponse::from).collect(),
+    ))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -673,5 +678,7 @@ async fn purge_stored_secret_version(
         "stored secret version permanently purged"
     );
 
-    Ok(Json(serde_json::json!({ "message": "stored secret version permanently deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "stored secret version permanently deleted" }),
+    ))
 }

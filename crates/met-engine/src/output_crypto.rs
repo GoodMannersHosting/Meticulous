@@ -7,7 +7,10 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 const HKDF_INFO: &[u8] = b"meticulous.met-output.v1";
 
-pub fn open_secret_envelope(job_static_secret: &[u8; 32], envelope: &[u8]) -> Result<Vec<u8>, String> {
+pub fn open_secret_envelope(
+    job_static_secret: &[u8; 32],
+    envelope: &[u8],
+) -> Result<Vec<u8>, String> {
     if envelope.len() < 32 + 12 + 16 {
         return Err("short envelope".into());
     }
@@ -26,7 +29,5 @@ pub fn open_secret_envelope(job_static_secret: &[u8; 32], envelope: &[u8]) -> Re
 
     let cipher = Aes256Gcm::new_from_slice(&okm).map_err(|e| e.to_string())?;
     let nonce = Nonce::from_slice(&nonce_bytes);
-    cipher
-        .decrypt(nonce, ct)
-        .map_err(|_| "decrypt".to_string())
+    cipher.decrypt(nonce, ct).map_err(|_| "decrypt".to_string())
 }

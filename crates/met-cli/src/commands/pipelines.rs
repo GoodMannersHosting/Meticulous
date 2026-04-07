@@ -1,10 +1,9 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::context::ResolvedContext;
 use crate::output::{
-    build_table, format_status, print_kv, print_serialized, print_success, print_table,
-    status_icon,
+    build_table, format_status, print_kv, print_serialized, print_success, print_table, status_icon,
 };
-use crate::OutputFormat;
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,11 +47,7 @@ pub struct PipelineDiff {
     pub modified: Vec<String>,
 }
 
-pub async fn list(
-    client: &ApiClient,
-    ctx: &ResolvedContext,
-    format: OutputFormat,
-) -> Result<()> {
+pub async fn list(client: &ApiClient, ctx: &ResolvedContext, format: OutputFormat) -> Result<()> {
     let project = ctx.require_project()?;
 
     #[derive(Serialize)]
@@ -61,7 +56,12 @@ pub async fn list(
     }
 
     let response: PipelineListResponse = client
-        .get_with_query("/pipelines", &Query { project_id: project })
+        .get_with_query(
+            "/pipelines",
+            &Query {
+                project_id: project,
+            },
+        )
         .await?;
 
     match format {
@@ -104,10 +104,7 @@ pub async fn show(client: &ApiClient, id: &str, format: OutputFormat) -> Result<
                 "Description",
                 pipeline.description.as_deref().unwrap_or("-"),
             );
-            print_kv(
-                "Enabled",
-                if pipeline.enabled { "yes" } else { "no" },
-            );
+            print_kv("Enabled", if pipeline.enabled { "yes" } else { "no" });
             print_kv("Created", &pipeline.created_at);
             print_kv("Updated", &pipeline.updated_at);
         }
@@ -127,9 +124,8 @@ pub async fn validate(path: &std::path::Path, format: OutputFormat) -> Result<()
         )));
     }
 
-    let yaml = std::fs::read_to_string(path).map_err(|e| {
-        crate::api_client::ApiError::Other(format!("Failed to read file: {}", e))
-    })?;
+    let yaml = std::fs::read_to_string(path)
+        .map_err(|e| crate::api_client::ApiError::Other(format!("Failed to read file: {}", e)))?;
 
     let provider = MockWorkflowProvider::new();
     let mut parser = PipelineParser::new(&provider);

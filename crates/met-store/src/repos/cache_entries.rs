@@ -77,7 +77,11 @@ impl<'a> CacheEntryRepo<'a> {
     }
 
     /// Lookup a cache entry by key.
-    pub async fn lookup(&self, project_id: ProjectId, cache_key: &str) -> Result<Option<CacheEntry>> {
+    pub async fn lookup(
+        &self,
+        project_id: ProjectId,
+        cache_key: &str,
+    ) -> Result<Option<CacheEntry>> {
         let entry = sqlx::query_as::<_, CacheEntry>(
             r#"
             SELECT id, project_id, cache_key, storage_path, size_bytes, compression, 
@@ -198,7 +202,7 @@ impl<'a> CacheEntryRepo<'a> {
     /// Evict oldest entries until total size is under quota.
     pub async fn evict_to_quota(&self, project_id: ProjectId, quota_bytes: i64) -> Result<i32> {
         let mut evicted = 0;
-        
+
         loop {
             let total = self.total_size(project_id).await?;
             if total <= quota_bytes {
@@ -232,7 +236,11 @@ impl<'a> CacheEntryRepo<'a> {
     }
 
     /// Delete entries older than a given duration.
-    pub async fn delete_older_than(&self, project_id: ProjectId, older_than: DateTime<Utc>) -> Result<i64> {
+    pub async fn delete_older_than(
+        &self,
+        project_id: ProjectId,
+        older_than: DateTime<Utc>,
+    ) -> Result<i64> {
         let result = sqlx::query(
             r#"
             DELETE FROM cache_entries

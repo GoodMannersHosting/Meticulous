@@ -14,7 +14,7 @@ use crate::error::{ControllerError, Result};
 /// claims can panic and tear down the gRPC connection (client sees `BrokenPipe`). Convert that
 /// into a normal [`ControllerError`] instead.
 fn sign_agent_user_jwt(token: Token, account_kp: &KeyPair) -> Result<String> {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     match catch_unwind(AssertUnwindSafe(|| token.sign(account_kp))) {
         Ok(jwt) => Ok(jwt),
@@ -40,8 +40,9 @@ pub fn issue_agent_nats_credentials(
     issuer_account_pubkey: Option<&str>,
     ttl: StdDuration,
 ) -> Result<(String, String)> {
-    let account_kp = KeyPair::from_seed(account_signing_seed.trim())
-        .map_err(|e| ControllerError::Internal(format!("invalid MET_NATS_ACCOUNT_SIGNING_SEED: {e}")))?;
+    let account_kp = KeyPair::from_seed(account_signing_seed.trim()).map_err(|e| {
+        ControllerError::Internal(format!("invalid MET_NATS_ACCOUNT_SIGNING_SEED: {e}"))
+    })?;
 
     let user_kp = KeyPair::new_user();
 
@@ -56,10 +57,7 @@ pub fn issue_agent_nats_credentials(
         format!("met.jobs.{org}.*.{agent}"),
     ];
 
-    let allow_pub = vec![
-        "$JS.API.>".to_string(),
-        "$JS.ACK.>".to_string(),
-    ];
+    let allow_pub = vec!["$JS.API.>".to_string(), "$JS.ACK.>".to_string()];
 
     let mut user_builder = User::builder()
         .bearer_token(false)
@@ -70,11 +68,12 @@ pub fn issue_agent_nats_credentials(
         user_builder = user_builder.issuer_account(Some(pubkey.to_string()));
     }
 
-    let user: User = user_builder
-        .try_into()
-        .map_err(|e: nats_io_jwt::error::ConversionError| {
-            ControllerError::Internal(format!("NATS user JWT claims invalid: {e}"))
-        })?;
+    let user: User =
+        user_builder
+            .try_into()
+            .map_err(|e: nats_io_jwt::error::ConversionError| {
+                ControllerError::Internal(format!("NATS user JWT claims invalid: {e}"))
+            })?;
 
     let chrono_ttl = Duration::from_std(ttl).map_err(|_| {
         ControllerError::Internal("NATS agent JWT ttl out of range for timestamp".into())

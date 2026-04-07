@@ -65,15 +65,21 @@ pub mod secrets;
 pub mod state;
 
 pub use artifacts::{ArtifactBackend, ArtifactManager, ArtifactMetadata, MemoryArtifactStore};
-pub use cache::{CacheBackend, CacheKey, CacheLookupResult, CacheManager, MemoryCache, ObjectStoreCache};
+pub use cache::{
+    CacheBackend, CacheKey, CacheLookupResult, CacheManager, MemoryCache, ObjectStoreCache,
+};
 pub use context::{ArtifactRef, CacheHit, ExecutionContext, ResolvedSecret};
 pub use error::{EngineError, Result};
-pub use events::{subjects as event_subjects, EventBroadcaster};
-pub use executor::{topological_order, ExecutionResult, Executor, ExecutorConfig, RunStartKind};
+pub use events::{EventBroadcaster, subjects as event_subjects};
+pub use executor::{ExecutionResult, Executor, ExecutorConfig, RunStartKind, topological_order};
 pub use log_streaming::{LogChunk, LogStreamRelay};
-pub use persistence::{JobRunSourceRefs, MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
+pub use persistence::{
+    JobRunSourceRefs, MemoryRunPersistence, PostgresRunPersistence, RunPersistence,
+};
 pub use retry::{RetryExecutor, RetryPolicy, RetryState};
-pub use scheduler::{JobCompletionNotification, JobDispatchMessage, Scheduler, SchedulerConfig, StepDispatch};
+pub use scheduler::{
+    JobCompletionNotification, JobDispatchMessage, Scheduler, SchedulerConfig, StepDispatch,
+};
 
 mod output_crypto;
 pub use secrets::SecretEncryption;
@@ -178,7 +184,9 @@ impl Engine {
         if m.is_empty() {
             return None;
         }
-        BuiltinStoredCrypto::from_master_key_b64(m, kid).ok().map(Arc::new)
+        BuiltinStoredCrypto::from_master_key_b64(m, kid)
+            .ok()
+            .map(Arc::new)
     }
 
     /// Create an engine with a custom cache backend.
@@ -200,7 +208,8 @@ impl Engine {
 
         let cache = Arc::new(CacheManager::new(cache_backend));
 
-        let persistence: Arc<dyn RunPersistence> = Arc::new(PostgresRunPersistence::new(pool.clone()));
+        let persistence: Arc<dyn RunPersistence> =
+            Arc::new(PostgresRunPersistence::new(pool.clone()));
 
         let scheduler = Arc::new(Scheduler::new(
             jetstream.clone(),
@@ -423,11 +432,17 @@ pub(crate) fn parse_completion_message(payload: &[u8]) -> Result<JobCompletionNo
     let proto = JobCompletion::decode(payload)
         .map_err(|e| EngineError::internal(format!("Failed to decode completion: {e}")))?;
 
-    let job_run_id = proto.job_run_id.parse()
+    let job_run_id = proto
+        .job_run_id
+        .parse()
         .map_err(|e| EngineError::internal(format!("Invalid job_run_id: {e}")))?;
-    let run_id = proto.run_id.parse()
+    let run_id = proto
+        .run_id
+        .parse()
         .map_err(|e| EngineError::internal(format!("Invalid run_id: {e}")))?;
-    let agent_id = proto.agent_id.parse()
+    let agent_id = proto
+        .agent_id
+        .parse()
         .map_err(|e| EngineError::internal(format!("Invalid agent_id: {e}")))?;
 
     let success = proto.status() == met_proto::common::v1::RunStatus::Succeeded;

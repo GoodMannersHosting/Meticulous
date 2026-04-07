@@ -144,12 +144,11 @@ impl<'a> LogCacheRepo<'a> {
     }
 
     pub async fn count_for_job_run(&self, job_run_id: JobRunId) -> Result<i64> {
-        let (n,): (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*)::bigint FROM log_cache WHERE job_run_id = $1"#,
-        )
-        .bind(job_run_id.as_uuid())
-        .fetch_one(self.pool)
-        .await?;
+        let (n,): (i64,) =
+            sqlx::query_as(r#"SELECT COUNT(*)::bigint FROM log_cache WHERE job_run_id = $1"#)
+                .bind(job_run_id.as_uuid())
+                .fetch_one(self.pool)
+                .await?;
 
         Ok(n)
     }

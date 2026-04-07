@@ -2,8 +2,8 @@
 
 use async_nats::jetstream::{self, Context as JetStreamContext};
 use met_core::events::{
-    kinds, EventEnvelope, JobCompleted, JobDispatched, JobStarted, RunCompleted, RunQueued,
-    RunStarted, StepCompleted, StepStarted,
+    EventEnvelope, JobCompleted, JobDispatched, JobStarted, RunCompleted, RunQueued, RunStarted,
+    StepCompleted, StepStarted, kinds,
 };
 use met_core::ids::{AgentId, JobRunId, PipelineId, RunId, StepRunId};
 use tracing::{debug, instrument};
@@ -286,7 +286,10 @@ impl EventBroadcaster {
 
         let subject = subjects::job_events(pipeline_id);
         self.publish(&subject, event).await?;
-        debug!(success, exit_code, duration_ms, "published job.completed event");
+        debug!(
+            success,
+            exit_code, duration_ms, "published job.completed event"
+        );
         Ok(())
     }
 
@@ -352,7 +355,10 @@ impl EventBroadcaster {
 
         let subject = subjects::step_events(pipeline_id);
         self.publish(&subject, event).await?;
-        debug!(success, exit_code, duration_ms, "published step.completed event");
+        debug!(
+            success,
+            exit_code, duration_ms, "published step.completed event"
+        );
         Ok(())
     }
 
@@ -428,13 +434,26 @@ impl EventBroadcaster {
 pub struct NullBroadcaster;
 
 impl NullBroadcaster {
-    pub async fn run_queued(&self, _: RunId, _: PipelineId, _: &str, _: Option<&str>) -> Result<()> {
+    pub async fn run_queued(
+        &self,
+        _: RunId,
+        _: PipelineId,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<()> {
         Ok(())
     }
     pub async fn run_started(&self, _: RunId, _: PipelineId, _: Option<&str>) -> Result<()> {
         Ok(())
     }
-    pub async fn run_completed(&self, _: RunId, _: PipelineId, _: bool, _: u64, _: Option<&str>) -> Result<()> {
+    pub async fn run_completed(
+        &self,
+        _: RunId,
+        _: PipelineId,
+        _: bool,
+        _: u64,
+        _: Option<&str>,
+    ) -> Result<()> {
         Ok(())
     }
 }

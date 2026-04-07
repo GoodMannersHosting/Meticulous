@@ -5,7 +5,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId, StepId, StepRunId};
+use met_core::ids::{
+    AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId, StepId, StepRunId,
+};
 use met_core::models::{JobStatus, RunStatus};
 use sqlx::PgPool;
 use tracing::{debug, instrument, warn};
@@ -145,7 +147,7 @@ impl RunPersistence for PostgresRunPersistence {
         trace_id: uuid::Uuid,
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         let run_number: (i64,) = sqlx::query_as(
             r#"
             SELECT COALESCE(MAX(run_number), 0) + 1
@@ -208,7 +210,7 @@ impl RunPersistence for PostgresRunPersistence {
     #[instrument(skip(self))]
     async fn update_run_status(&self, run_id: RunId, status: RunStatus) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             UPDATE runs
@@ -236,7 +238,7 @@ impl RunPersistence for PostgresRunPersistence {
         error_message: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             UPDATE runs
@@ -348,7 +350,7 @@ impl RunPersistence for PostgresRunPersistence {
     #[instrument(skip(self))]
     async fn start_job(&self, job_run_id: JobRunId, agent_id: AgentId) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             UPDATE job_runs
@@ -376,8 +378,12 @@ impl RunPersistence for PostgresRunPersistence {
         error_message: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now();
-        let status = if success { JobStatus::Succeeded } else { JobStatus::Failed };
-        
+        let status = if success {
+            JobStatus::Succeeded
+        } else {
+            JobStatus::Failed
+        };
+
         sqlx::query(
             r#"
             UPDATE job_runs
@@ -401,7 +407,7 @@ impl RunPersistence for PostgresRunPersistence {
     #[instrument(skip(self))]
     async fn skip_job(&self, job_run_id: JobRunId, reason: Option<&str>) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             UPDATE job_runs
@@ -470,7 +476,7 @@ impl RunPersistence for PostgresRunPersistence {
         step_name: &str,
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             INSERT INTO step_runs (id, job_run_id, step_id, step_name, status, created_at)
@@ -493,7 +499,7 @@ impl RunPersistence for PostgresRunPersistence {
     #[instrument(skip(self))]
     async fn start_step(&self, step_run_id: StepRunId) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             UPDATE step_runs
@@ -520,8 +526,12 @@ impl RunPersistence for PostgresRunPersistence {
         log_path: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now();
-        let status = if exit_code == 0 { "succeeded" } else { "failed" };
-        
+        let status = if exit_code == 0 {
+            "succeeded"
+        } else {
+            "failed"
+        };
+
         sqlx::query(
             r#"
             UPDATE step_runs
@@ -552,7 +562,7 @@ impl RunPersistence for PostgresRunPersistence {
         actor: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             INSERT INTO run_events (run_id, event_type, event_data, actor, timestamp)
@@ -783,7 +793,11 @@ impl RunPersistence for MemoryRunPersistence {
     ) -> Result<()> {
         let mut jobs = self.job_runs.lock().unwrap();
         if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
-            job.status = if success { JobStatus::Succeeded } else { JobStatus::Failed };
+            job.status = if success {
+                JobStatus::Succeeded
+            } else {
+                JobStatus::Failed
+            };
             job.exit_code = exit_code;
             job.error_message = error_message.map(|s| s.to_string());
             job.finished_at = Some(Utc::now());
@@ -863,7 +877,12 @@ impl RunPersistence for MemoryRunPersistence {
     ) -> Result<()> {
         let mut steps = self.step_runs.lock().unwrap();
         if let Some(step) = steps.iter_mut().find(|s| s.id == step_run_id) {
-            step.status = if exit_code == 0 { "succeeded" } else { "failed" }.to_string();
+            step.status = if exit_code == 0 {
+                "succeeded"
+            } else {
+                "failed"
+            }
+            .to_string();
             step.exit_code = Some(exit_code);
             step.error_message = error_message.map(|s| s.to_string());
             step.log_path = log_path.map(|s| s.to_string());
@@ -902,15 +921,9 @@ mod mark_job_queued_tests {
         let run_id = RunId::new();
         let pipeline_id = PipelineId::new();
         let org_id = OrganizationId::new();
-        p.create_run(
-            run_id,
-            pipeline_id,
-            org_id,
-            "tester",
-            uuid::Uuid::now_v7(),
-        )
-        .await
-        .unwrap();
+        p.create_run(run_id, pipeline_id, org_id, "tester", uuid::Uuid::now_v7())
+            .await
+            .unwrap();
         let job_run_id = JobRunId::new();
         let job_id = JobId::new();
         let src = JobRunSourceRefs {
@@ -925,6 +938,8 @@ mod mark_job_queued_tests {
         p.mark_job_queued(job_run_id).await.unwrap();
         p.start_job(job_run_id, AgentId::new()).await.unwrap();
         p.mark_job_queued(job_run_id).await.unwrap();
-        p.complete_job(job_run_id, true, Some(0), None).await.unwrap();
+        p.complete_job(job_run_id, true, Some(0), None)
+            .await
+            .unwrap();
     }
 }

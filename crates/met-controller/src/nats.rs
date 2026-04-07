@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use async_nats::jetstream::{self, consumer::PullConsumer, stream::Stream};
 use async_nats::Client;
+use async_nats::jetstream::{self, consumer::PullConsumer, stream::Stream};
 use futures::StreamExt;
 use met_core::ids::OrganizationId;
 use met_proto::controller::v1::JobCompletion;
@@ -97,7 +97,9 @@ impl NatsDispatcher {
         let client = if let Some(path) = creds_path {
             let opts = async_nats::ConnectOptions::with_credentials_file(path)
                 .await
-                .map_err(|e| ControllerError::Nats(format!("load NATS creds {}: {e}", path.display())))?;
+                .map_err(|e| {
+                    ControllerError::Nats(format!("load NATS creds {}: {e}", path.display()))
+                })?;
             opts.connect(url)
                 .await
                 .map_err(|e| ControllerError::Nats(e.to_string()))?
@@ -282,7 +284,8 @@ impl NatsDispatcher {
             }
             Err(_) => {
                 info!(stream = name, "creating stream");
-                let stream = self.jetstream
+                let stream = self
+                    .jetstream
                     .create_stream(config)
                     .await
                     .map_err(|e| ControllerError::Nats(e.to_string()))?;
@@ -309,11 +312,7 @@ impl NatsDispatcher {
 
         let payload = message.encode_to_vec();
 
-        debug!(
-            subject,
-            job_run_id = message.job_run_id,
-            "dispatching job"
-        );
+        debug!(subject, job_run_id = message.job_run_id, "dispatching job");
 
         self.jetstream
             .publish(subject, payload.into())
@@ -365,7 +364,8 @@ impl NatsDispatcher {
         pool_tag: &str,
         agent_id: &str,
     ) -> Result<PullConsumer> {
-        let stream = self.jetstream
+        let stream = self
+            .jetstream
             .get_stream(subjects::JOBS_STREAM)
             .await
             .map_err(|e| ControllerError::Nats(e.to_string()))?;

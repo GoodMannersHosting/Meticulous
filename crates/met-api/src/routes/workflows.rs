@@ -7,9 +7,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::ProjectId;
-use met_store::repos::{
-    CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowVersionListMode,
-};
+use met_store::repos::{CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowVersionListMode};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;

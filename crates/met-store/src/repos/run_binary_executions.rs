@@ -34,7 +34,10 @@ impl<'a> RunBinaryExecutionRepo<'a> {
     }
 
     /// Distinct `(job_run_id, path, sha256)` rows with exec counts.
-    pub async fn list_aggregated_by_run(&self, run_id: RunId) -> Result<Vec<RunBinaryExecutionAgg>> {
+    pub async fn list_aggregated_by_run(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<RunBinaryExecutionAgg>> {
         let rows = sqlx::query_as::<_, RunBinaryExecutionAgg>(
             r#"
             SELECT

@@ -8,9 +8,7 @@ use axum::{
 };
 use met_core::ids::ProjectId;
 use met_core::{OrganizationId, UserId};
-use met_store::repos::{
-    CreateGlobalCatalogGit, WorkflowRepo, WorkflowSubmissionStatus,
-};
+use met_store::repos::{CreateGlobalCatalogGit, WorkflowRepo, WorkflowSubmissionStatus};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -65,18 +63,10 @@ fn parse_catalog_list_offset(cursor: Option<&str>) -> i64 {
     if trimmed.is_empty() {
         return 0;
     }
-    trimmed
-        .parse::<i64>()
-        .ok()
-        .filter(|&o| o >= 0)
-        .unwrap_or(0)
+    trimmed.parse::<i64>().ok().filter(|&o| o >= 0).unwrap_or(0)
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/v1/workflows/catalog",
-    tag = "workflows",
-)]
+#[utoipa::path(get, path = "/api/v1/workflows/catalog", tag = "workflows")]
 #[instrument(skip(state))]
 async fn list_catalog_workflows(
     State(state): State<AppState>,
@@ -263,7 +253,9 @@ fn catalog_metadata_json(
         }
     }
 
-    let cred_path = catalog_scm_credentials_path.map(str::trim).filter(|s| !s.is_empty());
+    let cred_path = catalog_scm_credentials_path
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let mut meta = serde_json::json!({
         "summary": summary,
         "tools": tools,
@@ -344,13 +336,7 @@ async fn catalog_upstream_ref_search_execute(
     .await?;
 
     let (branches_raw, tags_raw) = tokio::join!(
-        github_scm::list_github_branches(
-            &token,
-            &slug.owner,
-            &slug.name,
-            &api_base,
-            100
-        ),
+        github_scm::list_github_branches(&token, &slug.owner, &slug.name, &api_base, 100),
         github_scm::list_github_tags(&token, &slug.owner, &slug.name, &api_base, 100)
     );
     let branches_raw = branches_raw?;
@@ -382,16 +368,15 @@ async fn catalog_upstream_ref_search_execute(
     tags.truncate(80);
 
     let mut commits_out = Vec::new();
-    if let Some(cref) = req.commits_for_ref.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let rows = github_scm::list_github_commits(
-            &token,
-            &slug.owner,
-            &slug.name,
-            cref,
-            &api_base,
-            30,
-        )
-        .await?;
+    if let Some(cref) = req
+        .commits_for_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let rows =
+            github_scm::list_github_commits(&token, &slug.owner, &slug.name, cref, &api_base, 30)
+                .await?;
         for (sha, title, committed_at) in rows {
             if let Some(ref ql) = q {
                 let sh = sha.to_lowercase();
@@ -565,7 +550,7 @@ pub struct CatalogVersionsPage {
 #[utoipa::path(
     get,
     path = "/api/v1/workflows/{workflow_id}/catalog-versions",
-    tag = "workflows",
+    tag = "workflows"
 )]
 #[instrument(skip(state))]
 async fn list_catalog_versions(

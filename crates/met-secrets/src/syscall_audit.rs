@@ -251,7 +251,9 @@ impl NetworkMetadataCollector {
 #[cfg(target_os = "linux")]
 fn parse_proc_net_tcp_line(line: &str, _agent_id: &str) -> Option<NetworkConnection> {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 4 { return None; }
+    if parts.len() < 4 {
+        return None;
+    }
 
     let local = parse_hex_addr(parts[1])?;
     let remote = parse_hex_addr(parts[2])?;
@@ -274,13 +276,21 @@ fn parse_proc_net_tcp_line(line: &str, _agent_id: &str) -> Option<NetworkConnect
 #[cfg(target_os = "linux")]
 fn parse_hex_addr(addr: &str) -> Option<(String, u16)> {
     let parts: Vec<&str> = addr.split(':').collect();
-    if parts.len() != 2 { return None; }
+    if parts.len() != 2 {
+        return None;
+    }
     let ip_hex = parts[0];
     let port = u16::from_str_radix(parts[1], 16).ok()?;
 
     if ip_hex.len() == 8 {
         let ip = u32::from_str_radix(ip_hex, 16).ok()?;
-        let ip_str = format!("{}.{}.{}.{}", ip & 0xff, (ip >> 8) & 0xff, (ip >> 16) & 0xff, (ip >> 24) & 0xff);
+        let ip_str = format!(
+            "{}.{}.{}.{}",
+            ip & 0xff,
+            (ip >> 8) & 0xff,
+            (ip >> 16) & 0xff,
+            (ip >> 24) & 0xff
+        );
         Some((ip_str, port))
     } else {
         Some((ip_hex.to_string(), port))
@@ -335,17 +345,19 @@ impl BlastRadiusTracker {
     /// Register or update a known binary.
     pub async fn track_binary(&self, sha256: &str, name: &str, path: Option<&str>) {
         let mut binaries = self.known_binaries.write().await;
-        let entry = binaries.entry(sha256.to_string()).or_insert_with(|| KnownBinary {
-            sha256: sha256.to_string(),
-            binary_name: name.to_string(),
-            binary_path: path.map(String::from),
-            first_seen_at: chrono::Utc::now(),
-            last_seen_at: chrono::Utc::now(),
-            run_count: 0,
-            flagged: false,
-            flag_reason: None,
-            block_execution: false,
-        });
+        let entry = binaries
+            .entry(sha256.to_string())
+            .or_insert_with(|| KnownBinary {
+                sha256: sha256.to_string(),
+                binary_name: name.to_string(),
+                binary_path: path.map(String::from),
+                first_seen_at: chrono::Utc::now(),
+                last_seen_at: chrono::Utc::now(),
+                run_count: 0,
+                flagged: false,
+                flag_reason: None,
+                block_execution: false,
+            });
         entry.last_seen_at = chrono::Utc::now();
         entry.run_count += 1;
     }
@@ -391,7 +403,9 @@ impl BlastRadiusTracker {
 }
 
 impl Default for BlastRadiusTracker {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -412,7 +426,14 @@ mod tests {
     #[tokio::test]
     async fn test_record_execution() {
         let collector = SyscallAuditCollector::new("agent-1".into());
-        collector.record_execution("/usr/bin/gcc", vec!["gcc".into(), "-o".into(), "a.out".into()], 1234, 1000).await;
+        collector
+            .record_execution(
+                "/usr/bin/gcc",
+                vec!["gcc".into(), "-o".into(), "a.out".into()],
+                1234,
+                1000,
+            )
+            .await;
         let execs = collector.get_executions().await;
         assert_eq!(execs.len(), 1);
         assert_eq!(execs[0].binary_path, "/usr/bin/gcc");
@@ -422,8 +443,12 @@ mod tests {
     #[tokio::test]
     async fn test_blast_radius_tracker() {
         let tracker = BlastRadiusTracker::new();
-        tracker.track_binary("abc123", "gcc", Some("/usr/bin/gcc")).await;
-        tracker.track_binary("abc123", "gcc", Some("/usr/bin/gcc")).await;
+        tracker
+            .track_binary("abc123", "gcc", Some("/usr/bin/gcc"))
+            .await;
+        tracker
+            .track_binary("abc123", "gcc", Some("/usr/bin/gcc"))
+            .await;
 
         let binary = tracker.get_binary("abc123").await.unwrap();
         assert_eq!(binary.run_count, 2);
@@ -441,9 +466,15 @@ mod tests {
     #[tokio::test]
     async fn test_audit_summary() {
         let collector = SyscallAuditCollector::new("agent-1".into());
-        collector.record_execution("/usr/bin/ls", vec!["ls".into()], 100, 1).await;
-        collector.record_execution("/usr/bin/cat", vec!["cat".into()], 101, 1).await;
-        collector.record_execution("/usr/bin/ls", vec!["ls".into(), "-la".into()], 102, 1).await;
+        collector
+            .record_execution("/usr/bin/ls", vec!["ls".into()], 100, 1)
+            .await;
+        collector
+            .record_execution("/usr/bin/cat", vec!["cat".into()], 101, 1)
+            .await;
+        collector
+            .record_execution("/usr/bin/ls", vec!["ls".into(), "-la".into()], 102, 1)
+            .await;
 
         let summary = collector.stop_monitoring().await;
         assert_eq!(summary.total_executions, 3);

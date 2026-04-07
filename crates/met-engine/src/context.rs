@@ -5,7 +5,9 @@
 
 use indexmap::IndexMap;
 use met_core::ids::{JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId};
-use met_core::output_ipc::{OUTPUT_AGGREGATE_MAX_BYTES, OUTPUT_FRAME_MAX_BYTES, OUTPUT_VALUE_MAX_BYTES};
+use met_core::output_ipc::{
+    OUTPUT_AGGREGATE_MAX_BYTES, OUTPUT_FRAME_MAX_BYTES, OUTPUT_VALUE_MAX_BYTES,
+};
 use met_parser::{EnvValue, PipelineIR, SecretRef};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -191,13 +193,11 @@ impl ExecutionContext {
     /// Register a resolved secret.
     pub async fn register_secret(&self, name: impl Into<String>, value: secrecy::SecretString) {
         let name = name.into();
-        self.inner.secrets.write().await.insert(
-            name.clone(),
-            ResolvedSecret {
-                name,
-                value,
-            },
-        );
+        self.inner
+            .secrets
+            .write()
+            .await
+            .insert(name.clone(), ResolvedSecret { name, value });
     }
 
     /// Get a resolved secret.
@@ -217,7 +217,11 @@ impl ExecutionContext {
 
     /// Register an artifact.
     pub async fn register_artifact(&self, key: impl Into<String>, artifact: ArtifactRef) {
-        self.inner.artifacts.write().await.insert(key.into(), artifact);
+        self.inner
+            .artifacts
+            .write()
+            .await
+            .insert(key.into(), artifact);
     }
 
     /// Get an artifact by key.
@@ -258,11 +262,7 @@ impl ExecutionContext {
     }
 
     /// Register X25519 secret for workflow output wrapping (see `design/workflow-invocation-outputs.md`).
-    pub async fn register_output_wrap_x25519_secret(
-        &self,
-        job_run_id: JobRunId,
-        secret: [u8; 32],
-    ) {
+    pub async fn register_output_wrap_x25519_secret(&self, job_run_id: JobRunId, secret: [u8; 32]) {
         self.inner
             .output_wrap_secret_by_job_run
             .write()
@@ -335,8 +335,11 @@ impl ExecutionContext {
             return Err("workflow outputs exceed per-invocation aggregate cap".into());
         }
 
-        let public: IndexMap<String, String> =
-            wo.public.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let public: IndexMap<String, String> = wo
+            .public
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         self.merge_workflow_invocation_outputs(inv.to_string(), public)
             .await;
 
@@ -363,28 +366,22 @@ impl ExecutionContext {
     pub async fn resolve_env_value(&self, value: &EnvValue) -> Option<String> {
         match value {
             EnvValue::Literal(s) => Some(s.clone()),
-            EnvValue::SecretRef(name) => {
-                self.get_secret(name)
-                    .await
-                    .map(|s| {
-                        use secrecy::ExposeSecret;
-                        s.value.expose_secret().to_string()
-                    })
-            }
-            EnvValue::Expression(expr) => {
-                self.evaluate_expression(expr).await
-            }
+            EnvValue::SecretRef(name) => self.get_secret(name).await.map(|s| {
+                use secrecy::ExposeSecret;
+                s.value.expose_secret().to_string()
+            }),
+            EnvValue::Expression(expr) => self.evaluate_expression(expr).await,
         }
     }
 
     /// Evaluate a simple variable expression like ${{ variables.foo }}.
     async fn evaluate_expression(&self, expr: &str) -> Option<String> {
         let trimmed = expr.trim();
-        
+
         if let Some(var_name) = trimmed.strip_prefix("variables.") {
             return self.get_variable(var_name).await;
         }
-        
+
         if let Some(rest) = trimmed.strip_prefix("jobs.") {
             if let Some((job_name, output_name)) = rest.split_once(".outputs.") {
                 let jobs = &self.inner.pipeline_ir.jobs;

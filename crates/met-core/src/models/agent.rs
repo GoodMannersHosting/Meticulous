@@ -17,7 +17,10 @@ pub type LastSecurityBundleSnapshot = JsonValue;
 /// Environment type for an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx", sqlx(type_name = "environment_type", rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "environment_type", rename_all = "snake_case")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvironmentType {
     /// Physical bare-metal machine.
@@ -268,7 +271,10 @@ impl Agent {
 /// Status of an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx", sqlx(type_name = "agent_status", rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "agent_status", rename_all = "snake_case")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     /// Agent is connected and accepting jobs.

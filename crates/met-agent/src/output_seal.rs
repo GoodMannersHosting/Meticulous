@@ -25,9 +25,7 @@ pub fn seal_secret_value(
     let cipher = Aes256Gcm::new_from_slice(&okm).map_err(|_| "aes key")?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let nonce_bytes = nonce.as_slice();
-    let mut ct = cipher
-        .encrypt(&nonce, plaintext)
-        .map_err(|_| "encrypt")?;
+    let mut ct = cipher.encrypt(&nonce, plaintext).map_err(|_| "encrypt")?;
 
     let mut out = Vec::with_capacity(32 + 12 + ct.len());
     out.extend_from_slice(eph_pub.as_bytes());

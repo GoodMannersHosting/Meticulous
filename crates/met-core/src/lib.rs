@@ -16,6 +16,6 @@ pub mod output_ipc;
 pub mod tokens;
 
 pub use config::MetConfig;
-pub use tokens::hash_join_token;
 pub use error::{MetError, Result};
 pub use ids::*;
+pub use tokens::hash_join_token;

@@ -1,9 +1,9 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::output::{
     build_table, format_duration, format_status, format_timestamp, print_kv, print_serialized,
     print_success, print_table, status_icon,
 };
-use crate::OutputFormat;
 use comfy_table::Cell;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -253,9 +253,7 @@ struct LogLine {
 }
 
 pub async fn cancel(client: &ApiClient, id: &str, format: OutputFormat) -> Result<()> {
-    let response: CancelResponse = client
-        .post(&format!("/runs/{}/cancel", id), &())
-        .await?;
+    let response: CancelResponse = client.post(&format!("/runs/{}/cancel", id), &()).await?;
 
     match format {
         OutputFormat::Table => {
@@ -272,9 +270,7 @@ pub async fn cancel(client: &ApiClient, id: &str, format: OutputFormat) -> Resul
 }
 
 pub async fn retry(client: &ApiClient, id: &str, format: OutputFormat) -> Result<()> {
-    let response: RetryResponse = client
-        .post(&format!("/runs/{}/retry", id), &())
-        .await?;
+    let response: RetryResponse = client.post(&format!("/runs/{}/retry", id), &()).await?;
 
     match format {
         OutputFormat::Table => {
@@ -289,9 +285,7 @@ pub async fn retry(client: &ApiClient, id: &str, format: OutputFormat) -> Result
 }
 
 pub async fn artifacts(client: &ApiClient, id: &str, format: OutputFormat) -> Result<()> {
-    let resp: ArtifactListResponse = client
-        .get(&format!("/runs/{}/artifacts", id))
-        .await?;
+    let resp: ArtifactListResponse = client.get(&format!("/runs/{}/artifacts", id)).await?;
 
     match format {
         OutputFormat::Table => {

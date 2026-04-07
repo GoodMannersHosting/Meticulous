@@ -185,13 +185,21 @@ impl<B: LogStorageBackend> LogShipper<B> {
 
     /// Generate storage key for a run's logs.
     fn run_key(&self, run_id: RunId) -> String {
-        let extension = if self.config.compress { "jsonl.gz" } else { "jsonl" };
+        let extension = if self.config.compress {
+            "jsonl.gz"
+        } else {
+            "jsonl"
+        };
         format!("runs/{}/{}.{}", run_id, "logs", extension)
     }
 
     /// Generate storage key for a job's logs.
     fn job_key(&self, run_id: RunId, job_id: JobId) -> String {
-        let extension = if self.config.compress { "jsonl.gz" } else { "jsonl" };
+        let extension = if self.config.compress {
+            "jsonl.gz"
+        } else {
+            "jsonl"
+        };
         format!("runs/{}/jobs/{}/logs.{}", run_id, job_id, extension)
     }
 

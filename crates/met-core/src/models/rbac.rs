@@ -3,8 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ApiTokenId, AuthProviderId, GroupId, OidcGroupMappingId, OrganizationId, ProjectId, UserId};
 use super::user::GroupRole;
+use crate::ids::{
+    ApiTokenId, AuthProviderId, GroupId, OidcGroupMappingId, OrganizationId, ProjectId, UserId,
+};
 
 /// Permission roles available in the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,22 +33,9 @@ impl PermissionRole {
     pub fn permissions(&self) -> Vec<&'static str> {
         match self {
             Self::Admin => vec!["*"],
-            Self::Auditor => vec![
-                "read:*",
-                "audit:read",
-            ],
-            Self::SecurityLead => vec![
-                "user:read",
-                "user:write",
-                "token:revoke",
-                "audit:read",
-            ],
-            Self::User => vec![
-                "pipeline:read",
-                "run:read",
-                "run:write",
-                "agent:read",
-            ],
+            Self::Auditor => vec!["read:*", "audit:read"],
+            Self::SecurityLead => vec!["user:read", "user:write", "token:revoke", "audit:read"],
+            Self::User => vec!["pipeline:read", "run:read", "run:write", "agent:read"],
         }
     }
 }
@@ -120,7 +109,9 @@ impl ApiToken {
     /// Check if the token can access a specific project.
     #[must_use]
     pub fn can_access_project(&self, project_id: ProjectId) -> bool {
-        self.project_ids.as_ref().map_or(true, |ids| ids.contains(&project_id))
+        self.project_ids
+            .as_ref()
+            .map_or(true, |ids| ids.contains(&project_id))
     }
 }
 

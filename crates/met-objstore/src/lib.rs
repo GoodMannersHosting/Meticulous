@@ -44,13 +44,15 @@ pub mod traits;
 pub use config::ObjectStoreConfig;
 pub use error::{ObjectStoreError, Result};
 pub use multipart::{CompletedPart, MultipartOptions, MultipartUpload, MultipartUploader};
-pub use paths::{keys, ObjectKey, ObjectKeyBuilder, SbomFormat};
+pub use paths::{ObjectKey, ObjectKeyBuilder, SbomFormat, keys};
 pub use presigned::{
-    attachment_disposition, inline_disposition, ParsedPresignedUrl, PresignedOptions,
-    PresignedUrlBuilder,
+    ParsedPresignedUrl, PresignedOptions, PresignedUrlBuilder, attachment_disposition,
+    inline_disposition,
 };
 pub use s3::S3ObjectStore;
-pub use traits::{GetResult, ListOptions, ListResult, ObjectMeta, ObjectStore, ObjectStoreExt, PutResult};
+pub use traits::{
+    GetResult, ListOptions, ListResult, ObjectMeta, ObjectStore, ObjectStoreExt, PutResult,
+};
 
 #[cfg(test)]
 mod tests {

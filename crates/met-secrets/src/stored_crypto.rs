@@ -4,8 +4,8 @@
 //! configuration or environment at runtime — never embedded in source.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng},
 };
 use hkdf::Hkdf;
 use rand::RngCore;
@@ -29,14 +29,14 @@ pub struct BuiltinStoredCrypto {
 impl BuiltinStoredCrypto {
     /// Build crypto helper from base64 master key material (16+ bytes after decode).
     pub fn from_master_key_b64(master_key_b64: &str, key_id: Option<&str>) -> Result<Self> {
-        let master_key_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            master_key_b64,
-        )
-        .map_err(|e| SecretsError::Crypto(format!("invalid master key base64: {e}")))?;
+        let master_key_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, master_key_b64)
+                .map_err(|e| SecretsError::Crypto(format!("invalid master key base64: {e}")))?;
 
         if master_key_bytes.len() < 16 {
-            return Err(SecretsError::Crypto("master key too short (min 16 bytes)".into()));
+            return Err(SecretsError::Crypto(
+                "master key too short (min 16 bytes)".into(),
+            ));
         }
 
         let hk = Hkdf::<Sha256>::new(None, &master_key_bytes);
@@ -72,7 +72,11 @@ impl BuiltinStoredCrypto {
     }
 
     /// Decrypt ciphertext (ignores row `key_id` for now; single active master per process).
-    pub fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; NONCE_SIZE]) -> Result<Zeroizing<Vec<u8>>> {
+    pub fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        nonce: &[u8; NONCE_SIZE],
+    ) -> Result<Zeroizing<Vec<u8>>> {
         let n = Nonce::from_slice(nonce.as_slice());
         let cipher = Aes256Gcm::new_from_slice(self.key.as_ref())
             .map_err(|e| SecretsError::Crypto(format!("AES init: {e}")))?;

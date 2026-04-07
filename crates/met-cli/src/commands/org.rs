@@ -1,7 +1,7 @@
+use crate::OutputFormat;
 use crate::api_client::{ApiClient, Result};
 use crate::config::CliConfig;
 use crate::output::{build_table, print_kv, print_serialized, print_success, print_table};
-use crate::OutputFormat;
 use comfy_table::Cell;
 use serde::{Deserialize, Serialize};
 

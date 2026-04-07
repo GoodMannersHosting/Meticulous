@@ -1,14 +1,14 @@
 //! OTLP exporter setup for traces and metrics.
 
 use crate::config::{OtlpProtocol, TelemetryConfig};
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::{
+    Resource,
     metrics::{PeriodicReader, SdkMeterProvider},
     propagation::TraceContextPropagator,
     runtime,
     trace::{RandomIdGenerator, Sampler, TracerProvider},
-    Resource,
 };
 use std::time::Duration;
 
