@@ -1,6 +1,6 @@
 # Dockerfile.met-api — Meticulous REST API (`met-api`)
 #
-# Requires Rust >= 1.85 (workspace edition 2024).
+# Requires Rust >= 1.88 (workspace edition 2024; async-nats 0.47 MSRV).
 #
 # Build:
 #   docker build -f Dockerfile.met-api --target prod -t meticulous/met-api:prod .
@@ -16,7 +16,7 @@
 # ==============================================================================
 # Stage: builder
 # ==============================================================================
-FROM docker.io/rust:1.85-slim-bookworm AS builder
+FROM docker.io/rust:1.88-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \

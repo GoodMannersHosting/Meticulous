@@ -1,0 +1,110 @@
+# Example: build and push every Meticulous service image from the repo-root Dockerfiles.
+# Dockerfiles: Dockerfile.agent, Dockerfile.met-api, Dockerfile.met-controller, Dockerfile.sqlx-migrate.
+#
+# Import catalog workflows first; set pipeline secrets: GITHUB_TOKEN (or catalog credential),
+# REGISTRY_USERNAME, REGISTRY_PASSWORD. Agents need Docker/Podman + buildx (global/docker-buildx-push),
+# Trivy on PATH (global/trivy-scan ≥ 1.1.0), and git for checkout.
+#
+# share-workspace + agent-affinity require a total depends-on order (no concurrent jobs in the group).
+# Flow per image: push then Trivy image scan + CycloneDX → sbom.cdx.json; the agent uploads that file
+# to the control plane when the scan job finishes (run SBOM tab).
+#
+# Re-import `trivy-scan` from this repo after bumping to 1.1.0 (registry login for private image pull).
+name: meticulous self-build
+agent-affinity:
+  default-group: ci
+  share-workspace: true
+vars:
+  METICULOUS_REPO: GoodMannersHosting/Meticulous
+  IMAGE_TAG: latest
+  REGISTRY_PREFIX: harbor.cloud.danmanners.com/meticulous
+workflows:
+  - name: Checkout Meticulous
+    id: checkout
+    workflow: global/git-checkout
+    version: "1.0.0"
+    inputs:
+      repo: "${METICULOUS_REPO}"
+      ref: main
+      clone_path: meticulous
+  - name: Build and push met-agent
+    id: push-agent
+    workflow: global/docker-buildx-push
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.agent
+      image_ref: "${REGISTRY_PREFIX}/met-agent:${IMAGE_TAG}"
+      registry_host: harbor.cloud.danmanners.com
+  - name: Trivy scan met-agent (SBOM)
+    id: scan-agent
+    workflow: global/trivy-scan
+    version: "1.1.0"
+    depends-on: [push-agent]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-agent:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: harbor.cloud.danmanners.com
+  - name: Build and push met-api
+    id: push-api
+    workflow: global/docker-buildx-push
+    version: "1.0.0"
+    depends-on: [scan-agent]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.met-api
+      image_ref: "${REGISTRY_PREFIX}/met-api:${IMAGE_TAG}"
+      registry_host: harbor.cloud.danmanners.com
+  - name: Trivy scan met-api (SBOM)
+    id: scan-api
+    workflow: global/trivy-scan
+    version: "1.1.0"
+    depends-on: [push-api]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-api:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: harbor.cloud.danmanners.com
+  - name: Build and push met-controller
+    id: push-controller
+    workflow: global/docker-buildx-push
+    version: "1.0.0"
+    depends-on: [scan-api]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.met-controller
+      image_ref: "${REGISTRY_PREFIX}/met-controller:${IMAGE_TAG}"
+      registry_host: harbor.cloud.danmanners.com
+  - name: Trivy scan met-controller (SBOM)
+    id: scan-controller
+    workflow: global/trivy-scan
+    version: "1.1.0"
+    depends-on: [push-controller]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-controller:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: harbor.cloud.danmanners.com
+  - name: Build and push sqlx-migrate
+    id: push-sqlx-migrate
+    workflow: global/docker-buildx-push
+    version: "1.0.0"
+    depends-on: [scan-controller]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.sqlx-migrate
+      image_ref: "${REGISTRY_PREFIX}/met-sqlx-migrate:${IMAGE_TAG}"
+      registry_host: harbor.cloud.danmanners.com
+  - name: Trivy scan sqlx-migrate (SBOM)
+    id: scan-sqlx-migrate
+    workflow: global/trivy-scan
+    version: "1.1.0"
+    depends-on: [push-sqlx-migrate]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-sqlx-migrate:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: harbor.cloud.danmanners.com
+# Add global/run-script with depends-on: [scan-sqlx-migrate] for deploy.

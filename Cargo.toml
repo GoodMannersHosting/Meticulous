@@ -18,7 +18,8 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["compression-gzip", "cors", "propagate-header", "request-id", "trace"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+# default-features = false: disable sqlx bundles we do not use (e.g. sqlite). `sqlx-macros` still pulls dev-only driver deps for expand-time metadata.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 
 # gRPC
 tonic = "0.13"
@@ -27,7 +28,7 @@ prost = "0.13"
 prost-types = "0.13"
 
 # NATS
-async-nats = "0.39"
+async-nats = "0.47"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -50,7 +51,7 @@ http = "1"
 
 # Object Storage
 async-trait = "0.1"
-aws-sdk-s3 = "1"
+aws-sdk-s3 = "1.129"
 aws-config = "1"
 aws-credential-types = "1"
 bytes = "1"
@@ -84,7 +85,7 @@ indexmap = { version = "2", features = ["serde"] }
 regex = "1"
 
 # Auth
-jsonwebtoken = "9"
+jsonwebtoken = "10.3"
 base64 = "0.22"
 argon2 = "0.5"
 
