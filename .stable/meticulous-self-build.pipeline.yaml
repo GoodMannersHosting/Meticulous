@@ -2,7 +2,8 @@
 # Dockerfiles: Dockerfile.agent, Dockerfile.met-api, Dockerfile.met-controller, Dockerfile.sqlx-migrate.
 #
 # Import catalog workflows first; set pipeline secrets: GITHUB_TOKEN (or catalog credential),
-# REGISTRY_USERNAME, REGISTRY_PASSWORD. Agents need Docker/Podman + buildx (global/docker-buildx-push),
+# REGISTRY_USERNAME / REGISTRY_PASSWORD (global/docker-buildx-push and global/trivy-scan read these env names).
+# Map them to your Harbor robot credentials via stored: name — do not rename to HARBOR_* or login will not see them.
 # Trivy on PATH (global/trivy-scan ≥ 1.1.0), and git for checkout.
 #
 # share-workspace + agent-affinity require a total depends-on order (no concurrent jobs in the group).
@@ -19,10 +20,10 @@ secrets:
   GITHUB_TOKEN:
     stored:
       name: meticulous-ci
-  HARBOR_PASSWORD:
+  REGISTRY_PASSWORD:
     stored:
       name: harbor-mar-operator-password
-  HARBOR_USERNAME:
+  REGISTRY_USERNAME:
     stored:
       name: harbor-mar-operator-username
 
