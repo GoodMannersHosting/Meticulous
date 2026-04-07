@@ -3,6 +3,8 @@
 		open?: boolean;
 		title?: string;
 		description?: string;
+		/** Tailwind max-width on the panel (default `max-w-lg`). */
+		maxWidthClass?: string;
 		class?: string;
 		onclose?: () => void;
 	}
@@ -16,6 +18,7 @@
 		open = $bindable(false),
 		title,
 		description,
+		maxWidthClass = 'max-w-lg',
 		class: className = '',
 		onclose,
 		children
@@ -35,21 +38,21 @@
 			class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
 		/>
 		<Dialog.Content
-			class="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-6 shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 dark:bg-secondary-900 {className}"
+			class="fixed left-1/2 top-1/2 z-50 mx-4 flex w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white p-6 shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 dark:bg-secondary-900 {maxWidthClass} {className}"
 		>
 			{#if title}
-				<Dialog.Title class="text-lg font-semibold text-secondary-900 dark:text-secondary-100">
+				<Dialog.Title class="shrink-0 text-lg font-semibold text-secondary-900 dark:text-secondary-100">
 					{title}
 				</Dialog.Title>
 			{/if}
 
 			{#if description}
-				<Dialog.Description class="mt-2 text-sm text-secondary-600 dark:text-secondary-400">
+				<Dialog.Description class="mt-2 shrink-0 text-sm text-secondary-600 dark:text-secondary-400">
 					{description}
 				</Dialog.Description>
 			{/if}
 
-			<div class="mt-4">
+			<div class="mt-4 min-h-0 flex-1 overflow-hidden">
 				{@render children?.()}
 			</div>
 

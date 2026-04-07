@@ -608,189 +608,226 @@
 		bind:open={syncDialogOpen}
 		title="Sync new catalog version"
 		description="Fetch branches, tags, and recent commits from GitHub, pick a ref, then import the same workflow path as a new catalog row (same semver in YAML updates the existing version; a new semver adds another row). Requires an organization GitHub App secret and org admin."
-		class="max-h-[90vh] max-w-3xl overflow-y-auto"
+		maxWidthClass="max-w-[min(1320px,calc(100vw-2rem))]"
+		class="max-h-[90vh] overflow-hidden"
 	>
 		{#if workflow && canSyncCatalogGit}
-			<div class="space-y-4 text-sm text-[var(--text-secondary)]">
-				{#if syncDialogError}
-					<Alert variant="error" dismissible ondismiss={() => (syncDialogError = null)}>
-						{syncDialogError}
-					</Alert>
-				{/if}
+			<div
+				class="flex min-h-0 flex-1 flex-col gap-4 text-sm text-[var(--text-secondary)] lg:max-h-[min(78vh,720px)] lg:min-h-[280px]"
+			>
+				<div
+					class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] lg:items-stretch"
+				>
+					<div class="min-h-0 overflow-y-auto overscroll-y-contain lg:max-h-full lg:pr-1">
+						<div class="space-y-4">
+							{#if syncDialogError}
+								<Alert variant="error" dismissible ondismiss={() => (syncDialogError = null)}>
+									{syncDialogError}
+								</Alert>
+							{/if}
 
-				<div class="space-y-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-					<p>
-						<span class="text-[var(--text-tertiary)]">Repository</span><br />
-						<span class="font-mono text-[var(--text-primary)]">{workflow.scm_repository}</span>
-					</p>
-					<p class="mt-2">
-						<span class="text-[var(--text-tertiary)]">Workflow path</span><br />
-						<span class="font-mono text-[var(--text-primary)]">{workflow.scm_path}</span>
-					</p>
-				</div>
-
-				<div>
-					<label
-						for="sync-dialog-cred"
-						class="mb-1 block text-sm font-medium text-[var(--text-primary)]">GitHub App credential</label
-					>
-					<Select
-						id="sync-dialog-cred"
-						options={syncCredentialOptions}
-						bind:value={syncCredentialsPath}
-						disabled={orgSecretsLoading}
-						class="w-full"
-						onchange={() => void fetchUpstreamRefs()}
-					/>
-					{#if !orgSecretsLoading && syncCredentialOptions.length <= 1}
-						<p class="mt-1 text-xs text-amber-700 dark:text-amber-400">
-							Add an organization-scoped GitHub App secret under Secrets &amp; Variables.
-						</p>
-					{/if}
-				</div>
-
-				<div class="grid gap-3 sm:grid-cols-2">
-					<div>
-						<label
-							for="sync-dialog-git-ref"
-							class="mb-1 block text-sm font-medium text-[var(--text-primary)]">Git ref to import</label
-						>
-						<Input
-							id="sync-dialog-git-ref"
-							bind:value={syncGitRef}
-							placeholder="branch, tag, or full SHA"
-							class="font-mono"
-						/>
-						<p class="mt-1 text-xs text-[var(--text-tertiary)]">
-							This value is sent to the import API (resolved to a commit on the server).
-						</p>
-					</div>
-					<div>
-						<label
-							for="sync-dialog-commits-ref"
-							class="mb-1 block text-sm font-medium text-[var(--text-primary)]">Load commits from ref</label
-						>
-						<Input
-							id="sync-dialog-commits-ref"
-							bind:value={syncCommitsRef}
-							placeholder="e.g. main"
-							class="font-mono"
-						/>
-						<p class="mt-1 text-xs text-[var(--text-tertiary)]">
-							Used only to populate the commit list below (not the import ref unless you select a row).
-						</p>
-					</div>
-				</div>
-
-				<div>
-					<label
-						for="sync-dialog-filter"
-						class="mb-1 block text-sm font-medium text-[var(--text-primary)]"
-						>Filter branches, tags, commits</label
-					>
-					<div class="flex flex-wrap gap-2">
-						<Input
-							id="sync-dialog-filter"
-							bind:value={syncFilterQ}
-							placeholder="Type to filter…"
-							class="min-w-[12rem] flex-1"
-							oninput={() => scheduleUpstreamRefSearch()}
-						/>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onclick={() => void fetchUpstreamRefs()}
-							loading={refSearchLoading}
-							disabled={!syncCredentialsPath.trim()}
-						>
-							Refresh
-						</Button>
-					</div>
-				</div>
-
-				{#if refSearchLoading && !upstreamRefData}
-					<div class="space-y-2 py-4">
-						{#each Array(3) as _, i (i)}
-							<Skeleton class="h-8 w-full" />
-						{/each}
-					</div>
-				{:else if upstreamRefData}
-					<div class="grid max-h-[min(50vh,420px)] gap-4 overflow-y-auto md:grid-cols-3">
-						<div class="min-w-0">
-							<h3 class="mb-2 flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-								<GitBranch class="h-3.5 w-3.5" />
-								Branches
-							</h3>
-							<div class="space-y-1">
-								{#each upstreamRefData.branches as b (b.name)}
-									<button
-										type="button"
-										class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
-										onclick={() => {
-											syncGitRef = b.name;
-										}}
-									>
-										<span class="font-mono font-medium text-[var(--text-primary)]">{b.name}</span>
-										<span class="ml-1 font-mono text-[var(--text-tertiary)]">{shortSha(b.commit_sha)}</span>
-									</button>
-								{:else}
-									<p class="text-xs text-[var(--text-tertiary)]">No branches match.</p>
-								{/each}
+							<div class="space-y-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+								<p>
+									<span class="text-[var(--text-tertiary)]">Repository</span><br />
+									<span class="font-mono text-[var(--text-primary)]">{workflow.scm_repository}</span>
+								</p>
+								<p class="mt-2">
+									<span class="text-[var(--text-tertiary)]">Workflow path</span><br />
+									<span class="font-mono text-[var(--text-primary)]">{workflow.scm_path}</span>
+								</p>
 							</div>
-						</div>
-						<div class="min-w-0">
-							<h3 class="mb-2 flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-								<Tag class="h-3.5 w-3.5" />
-								Tags
-							</h3>
-							<div class="space-y-1">
-								{#each upstreamRefData.tags as t (t.name)}
-									<button
-										type="button"
-										class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
-										onclick={() => {
-											syncGitRef = t.name;
-										}}
-									>
-										<span class="font-mono font-medium text-[var(--text-primary)]">{t.name}</span>
-										<span class="ml-1 font-mono text-[var(--text-tertiary)]">{shortSha(t.commit_sha)}</span>
-									</button>
-								{:else}
-									<p class="text-xs text-[var(--text-tertiary)]">No tags match.</p>
-								{/each}
-							</div>
-						</div>
-						<div class="min-w-0 md:col-span-1">
-							<h3 class="mb-2 flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-								<GitCommit class="h-3.5 w-3.5" />
-								Commits
-							</h3>
-							<div class="space-y-1">
-								{#each upstreamRefData.commits as c (c.sha)}
-									<button
-										type="button"
-										class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
-										onclick={() => {
-											syncGitRef = c.sha;
-										}}
-									>
-										<span class="font-mono text-[var(--text-primary)]">{shortSha(c.sha)}</span>
-										<span class="mt-0.5 block truncate text-[var(--text-secondary)]" title={c.title}
-											>{c.title || '—'}</span
-										>
-									</button>
-								{:else}
-									<p class="text-xs text-[var(--text-tertiary)]">
-										Set “Load commits from ref” and click Refresh (optional).
+
+							<div>
+								<label
+									for="sync-dialog-cred"
+									class="mb-1 block text-sm font-medium text-[var(--text-primary)]"
+									>GitHub App credential</label
+								>
+								<Select
+									id="sync-dialog-cred"
+									options={syncCredentialOptions}
+									bind:value={syncCredentialsPath}
+									disabled={orgSecretsLoading}
+									class="w-full"
+									onchange={() => void fetchUpstreamRefs()}
+								/>
+								{#if !orgSecretsLoading && syncCredentialOptions.length <= 1}
+									<p class="mt-1 text-xs text-amber-700 dark:text-amber-400">
+										Add an organization-scoped GitHub App secret under Secrets &amp; Variables.
 									</p>
-								{/each}
+								{/if}
+							</div>
+
+							<div class="space-y-3">
+								<div>
+									<label
+										for="sync-dialog-git-ref"
+										class="mb-1 block text-sm font-medium text-[var(--text-primary)]"
+										>Git ref to import</label
+									>
+									<Input
+										id="sync-dialog-git-ref"
+										bind:value={syncGitRef}
+										placeholder="branch, tag, or full SHA"
+										class="font-mono"
+									/>
+									<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+										Sent to the import API (resolved to a commit on the server).
+									</p>
+								</div>
+								<div>
+									<label
+										for="sync-dialog-commits-ref"
+										class="mb-1 block text-sm font-medium text-[var(--text-primary)]"
+										>Load commits from ref</label
+									>
+									<Input
+										id="sync-dialog-commits-ref"
+										bind:value={syncCommitsRef}
+										placeholder="e.g. main"
+										class="font-mono"
+									/>
+									<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+										Populates the commit list on the right (does not change the import ref unless you pick a
+										row).
+									</p>
+								</div>
 							</div>
 						</div>
 					</div>
-				{/if}
 
-				<div class="flex flex-wrap justify-end gap-2 border-t border-[var(--border-primary)] pt-4">
+					<div
+						class="flex min-h-0 min-w-0 flex-col gap-3 border-t border-[var(--border-primary)] pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0"
+					>
+						<div class="shrink-0">
+							<label
+								for="sync-dialog-filter"
+								class="mb-1 block text-sm font-medium text-[var(--text-primary)]"
+								>Filter branches, tags, commits</label
+							>
+							<div class="flex flex-wrap gap-2">
+								<Input
+									id="sync-dialog-filter"
+									bind:value={syncFilterQ}
+									placeholder="Type to filter…"
+									class="min-w-[10rem] flex-1"
+									oninput={() => scheduleUpstreamRefSearch()}
+								/>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onclick={() => void fetchUpstreamRefs()}
+									loading={refSearchLoading}
+									disabled={!syncCredentialsPath.trim()}
+								>
+									Refresh
+								</Button>
+							</div>
+						</div>
+
+						{#if refSearchLoading && !upstreamRefData}
+							<div class="flex min-h-0 flex-1 flex-col space-y-2 py-2">
+								{#each Array(3) as _, i (i)}
+									<Skeleton class="h-8 w-full shrink-0" />
+								{/each}
+							</div>
+						{:else if upstreamRefData}
+							<div
+								class="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-3 lg:min-h-[200px]"
+							>
+								<div class="flex min-h-0 min-w-0 flex-col">
+									<h3
+										class="mb-2 flex shrink-0 items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]"
+									>
+										<GitBranch class="h-3.5 w-3.5" />
+										Branches
+									</h3>
+									<div
+										class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 p-1.5"
+									>
+										{#each upstreamRefData.branches as b (b.name)}
+											<button
+												type="button"
+												class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
+												onclick={() => {
+													syncGitRef = b.name;
+												}}
+											>
+												<span class="font-mono font-medium text-[var(--text-primary)]">{b.name}</span>
+												<span class="ml-1 font-mono text-[var(--text-tertiary)]"
+													>{shortSha(b.commit_sha)}</span
+												>
+											</button>
+										{:else}
+											<p class="px-1 py-2 text-xs text-[var(--text-tertiary)]">No branches match.</p>
+										{/each}
+									</div>
+								</div>
+								<div class="flex min-h-0 min-w-0 flex-col">
+									<h3
+										class="mb-2 flex shrink-0 items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]"
+									>
+										<Tag class="h-3.5 w-3.5" />
+										Tags
+									</h3>
+									<div
+										class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 p-1.5"
+									>
+										{#each upstreamRefData.tags as t (t.name)}
+											<button
+												type="button"
+												class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
+												onclick={() => {
+													syncGitRef = t.name;
+												}}
+											>
+												<span class="font-mono font-medium text-[var(--text-primary)]">{t.name}</span>
+												<span class="ml-1 font-mono text-[var(--text-tertiary)]"
+													>{shortSha(t.commit_sha)}</span
+												>
+											</button>
+										{:else}
+											<p class="px-1 py-2 text-xs text-[var(--text-tertiary)]">No tags match.</p>
+										{/each}
+									</div>
+								</div>
+								<div class="flex min-h-0 min-w-0 flex-col">
+									<h3
+										class="mb-2 flex shrink-0 items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]"
+									>
+										<GitCommit class="h-3.5 w-3.5" />
+										Commits
+									</h3>
+									<div
+										class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 p-1.5"
+									>
+										{#each upstreamRefData.commits as c (c.sha)}
+											<button
+												type="button"
+												class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-tertiary)]"
+												onclick={() => {
+													syncGitRef = c.sha;
+												}}
+											>
+												<span class="font-mono text-[var(--text-primary)]">{shortSha(c.sha)}</span>
+												<span class="mt-0.5 block truncate text-[var(--text-secondary)]" title={c.title}
+													>{c.title || '—'}</span
+												>
+											</button>
+										{:else}
+											<p class="px-1 py-2 text-xs text-[var(--text-tertiary)]">
+												Set “Load commits from ref” and click Refresh (optional).
+											</p>
+										{/each}
+									</div>
+								</div>
+							</div>
+						{/if}
+					</div>
+				</div>
+
+				<div class="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-primary)] pt-4">
 					<Button type="button" variant="outline" onclick={() => (syncDialogOpen = false)}>
 						Cancel
 					</Button>
