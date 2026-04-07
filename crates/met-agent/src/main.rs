@@ -21,6 +21,8 @@ use met_agent::registration::{
 use met_proto::agent::v1::HeartbeatAction;
 use nkeys::KeyPair;
 use tokio::signal;
+#[cfg(unix)]
+use tokio::signal::unix::{signal as unix_signal, SignalKind};
 use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
 
@@ -287,8 +289,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut shutdown_notify = shutdown_rx.clone();
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
-                info!("received SIGINT, shutting down");
+            _ = wait_sigint_or_sigterm() => {
+                info!("received SIGINT or SIGTERM, shutting down");
                 break;
             }
             action = action_rx.recv() => {
@@ -342,6 +344,23 @@ fn registration_failure_should_exit(err: &AgentError) -> bool {
         AgentError::Config(msg) if msg.contains("join_token") => true,
         _ => false,
     }
+}
+
+/// Kubernetes and other supervisors send SIGTERM; interactive use sends SIGINT (ctrl_c).
+#[cfg(unix)]
+async fn wait_sigint_or_sigterm() {
+    let mut sigterm = unix_signal(SignalKind::terminate()).expect("register SIGTERM");
+    tokio::select! {
+        res = signal::ctrl_c() => {
+            res.expect("SIGINT handler");
+        }
+        _ = sigterm.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_sigint_or_sigterm() {
+    signal::ctrl_c().await.expect("SIGINT handler OS support");
 }
 
 async fn connect_nats(
