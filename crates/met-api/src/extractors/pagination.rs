@@ -2,21 +2,19 @@
 //!
 //! Extracts pagination parameters from query string:
 //! - `cursor`: Opaque cursor string for continuation
-//! - `limit`: Number of items per page (default 25, max 100)
+//! - `limit` or `per_page`: Page size (`per_page` is accepted as an alias for clients that use that name)
+//!
+//! Default and maximum page size come from [`crate::config::ApiConfig`] (also set via `MetConfig.http`
+//! in TOML or `MET_HTTP__PAGINATION_*` environment variables).
 
 use crate::error::ApiError;
+use crate::state::AppState;
 use axum::{
     extract::{FromRequestParts, Query},
     http::request::Parts,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-
-/// Default number of items per page.
-const DEFAULT_LIMIT: u32 = 25;
-
-/// Maximum allowed items per page.
-const MAX_LIMIT: u32 = 100;
 
 /// Pagination parameters extracted from query string.
 #[derive(Debug, Clone)]
@@ -28,22 +26,6 @@ pub struct Pagination {
 }
 
 impl Pagination {
-    /// Create pagination for the first page with default limit.
-    pub fn first_page() -> Self {
-        Self {
-            cursor: None,
-            limit: DEFAULT_LIMIT,
-        }
-    }
-
-    /// Create pagination with a specific limit.
-    pub fn with_limit(limit: u32) -> Self {
-        Self {
-            cursor: None,
-            limit: limit.min(MAX_LIMIT),
-        }
-    }
-
     /// Get the SQL LIMIT value (limit + 1 to detect if there's a next page).
     pub fn sql_limit(&self) -> i64 {
         i64::from(self.limit) + 1
@@ -55,20 +37,27 @@ impl Pagination {
 struct PaginationQuery {
     cursor: Option<String>,
     limit: Option<u32>,
+    #[serde(rename = "per_page")]
+    per_page: Option<u32>,
 }
 
-impl<S> FromRequestParts<S> for Pagination
-where
-    S: Send + Sync,
-{
+impl FromRequestParts<AppState> for Pagination {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let Query(query) = Query::<PaginationQuery>::from_request_parts(parts, state)
             .await
             .map_err(|e| ApiError::bad_request(format!("invalid pagination parameters: {e}")))?;
 
-        let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+        let cfg = state.config();
+        let max = cfg.pagination_max_limit.max(1);
+        let default = cfg.pagination_default_limit.max(1).min(max);
+
+        let requested = query.limit.or(query.per_page);
+        let limit = requested.unwrap_or(default).max(1).min(max);
 
         Ok(Pagination {
             cursor: query.cursor,
@@ -148,21 +137,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pagination_defaults() {
-        let page = Pagination::first_page();
-        assert_eq!(page.limit, DEFAULT_LIMIT);
-        assert!(page.cursor.is_none());
-    }
-
-    #[test]
-    fn test_pagination_max_limit() {
-        let page = Pagination::with_limit(500);
-        assert_eq!(page.limit, MAX_LIMIT);
-    }
-
-    #[test]
     fn test_sql_limit() {
-        let page = Pagination::with_limit(25);
+        let page = Pagination {
+            cursor: None,
+            limit: 25,
+        };
         assert_eq!(page.sql_limit(), 26);
     }
 

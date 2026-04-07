@@ -24,8 +24,44 @@ use crate::variable::VariableContext;
 use crate::workflow::{WorkflowProvider, WorkflowResolver};
 use indexmap::IndexMap;
 use met_core::{JobId, PipelineId, StepId};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, instrument};
+
+/// Map a pipeline `secrets:` block to [`SecretRef`] values without resolving workflows or building IR.
+///
+/// Used by the controller to load secret names for job key exchange; workflow providers are not
+/// required because secrets are declared only on the pipeline root.
+#[must_use]
+pub fn secret_refs_from_raw_secrets(secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
+    secrets
+        .iter()
+        .filter_map(|(name, raw)| {
+            let secret_ref = if let Some(aws) = &raw.aws {
+                SecretRef::Aws {
+                    arn: aws.arn.clone(),
+                    key: aws.key.clone(),
+                }
+            } else if let Some(vault) = &raw.vault {
+                SecretRef::Vault {
+                    path: vault.path.clone(),
+                    key: vault.key.clone(),
+                    mount: vault.mount.clone(),
+                }
+            } else if let Some(stored) = &raw.stored {
+                SecretRef::Stored {
+                    name: stored.name.clone(),
+                }
+            } else if let Some(builtin) = &raw.builtin {
+                SecretRef::Builtin {
+                    name: builtin.name.clone(),
+                }
+            } else {
+                return None;
+            };
+            Some((name.clone(), secret_ref))
+        })
+        .collect()
+}
 
 /// Parser configuration.
 #[derive(Debug, Clone)]
@@ -157,6 +193,12 @@ impl<'a> PipelineParser<'a> {
         // Stage 6: Emit IR
         debug!("stage 6: emitting IR");
         let ir = self.emit_ir(&raw_pipeline, resolved_jobs, &var_ctx);
+
+        debug!("stage 6b: affinity / shared workspace validation");
+        crate::affinity::validate_share_workspace_affinity(&ir, &mut diagnostics);
+        if diagnostics.has_errors() {
+            return Err(diagnostics.into_iter().collect());
+        }
 
         if self.config.strict && diagnostics.warnings().count() > 0 {
             return Err(diagnostics.into_iter().collect());
@@ -367,7 +409,8 @@ impl<'a> PipelineParser<'a> {
     /// Build variable context for validation.
     fn build_variable_context(&self, pipeline: &RawPipeline) -> VariableContext {
         let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
-        VariableContext::new(pipeline.vars.clone(), secrets)
+        let wf: HashSet<String> = pipeline.workflows.iter().map(|w| w.id.clone()).collect();
+        VariableContext::new(pipeline.vars.clone(), secrets).with_workflow_invocations(wf)
     }
 
     /// Stage 4: Validate variable references.
@@ -377,6 +420,24 @@ impl<'a> PipelineParser<'a> {
         ctx: &VariableContext,
         diagnostics: &mut ParseDiagnostics,
     ) {
+        let output_declarations: HashMap<String, HashSet<String>> = workflows
+            .iter()
+            .map(|rwf| {
+                let mut names = HashSet::new();
+                for k in rwf.definition.outputs.keys() {
+                    names.insert(k.clone());
+                }
+                for job in &rwf.definition.jobs {
+                    for step in &job.steps {
+                        for k in step.outputs.keys() {
+                            names.insert(k.clone());
+                        }
+                    }
+                }
+                (rwf.invocation.id.clone(), names)
+            })
+            .collect();
+
         for (idx, resolved) in workflows.iter().enumerate() {
             let workflow_location = self.get_workflow_location(idx, &resolved.invocation.id);
 
@@ -395,7 +456,9 @@ impl<'a> PipelineParser<'a> {
                 .collect();
 
             let workflow_ctx = VariableContext::new(ctx.vars.clone(), ctx.secrets.clone())
-                .with_inputs(inputs);
+                .with_inputs(inputs)
+                .with_workflow_invocations(ctx.workflow_invocations.clone())
+                .with_workflow_declared_outputs(output_declarations.clone());
 
             // Validate input values
             for (name, value) in &resolved.invocation.inputs {
@@ -435,7 +498,12 @@ impl<'a> PipelineParser<'a> {
 
                     // Validate run command
                     if let Some(run) = &step.run {
-                        crate::variable::validate_refs(run, &workflow_ctx, diagnostics, step_location.clone());
+                        crate::variable::validate_refs_in_run_script(
+                            run,
+                            &workflow_ctx,
+                            diagnostics,
+                            step_location.clone(),
+                        );
                     }
 
                     // Validate env values
@@ -472,10 +540,14 @@ impl<'a> PipelineParser<'a> {
         let secret_refs = self.convert_secrets(&pipeline.secrets);
         let default_pool = pipeline.runs_on.as_ref().map(|p| self.convert_pool_selector(p));
 
-        let jobs: Vec<JobIR> = workflows
+        let mut jobs: Vec<JobIR> = workflows
             .into_iter()
-            .flat_map(|w| self.expand_workflow_to_jobs(w, default_pool.clone()))
+            .flat_map(|w| {
+                self.expand_workflow_to_jobs(w, default_pool.clone(), pipeline)
+            })
             .collect();
+
+        expand_cross_invocation_depends_on(&mut jobs);
 
         PipelineIR {
             id: PipelineId::new(),
@@ -487,6 +559,7 @@ impl<'a> PipelineParser<'a> {
             secret_refs,
             jobs,
             default_pool_selector: default_pool,
+            expose_workflow_secret_outputs: pipeline.expose_workflow_secret_outputs,
         }
     }
 
@@ -515,6 +588,11 @@ impl<'a> PipelineParser<'a> {
                 branches: webhook.branches.clone(),
                 paths: webhook.paths.clone(),
                 paths_ignore: webhook.paths_ignore.clone(),
+                sync_key: webhook
+                    .sync_key
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             }));
         }
 
@@ -542,34 +620,7 @@ impl<'a> PipelineParser<'a> {
 
     /// Convert raw secrets to IR.
     fn convert_secrets(&self, secrets: &IndexMap<String, RawSecretRef>) -> IndexMap<String, SecretRef> {
-        secrets
-            .iter()
-            .filter_map(|(name, raw)| {
-                let secret_ref = if let Some(aws) = &raw.aws {
-                    SecretRef::Aws {
-                        arn: aws.arn.clone(),
-                        key: aws.key.clone(),
-                    }
-                } else if let Some(vault) = &raw.vault {
-                    SecretRef::Vault {
-                        path: vault.path.clone(),
-                        key: vault.key.clone(),
-                        mount: vault.mount.clone(),
-                    }
-                } else if let Some(stored) = &raw.stored {
-                    SecretRef::Stored {
-                        name: stored.name.clone(),
-                    }
-                } else if let Some(builtin) = &raw.builtin {
-                    SecretRef::Builtin {
-                        name: builtin.name.clone(),
-                    }
-                } else {
-                    return None;
-                };
-                Some((name.clone(), secret_ref))
-            })
-            .collect()
+        secret_refs_from_raw_secrets(secrets)
     }
 
     /// Convert pool selector.
@@ -599,8 +650,15 @@ impl<'a> PipelineParser<'a> {
         &self,
         workflow: ResolvedWorkflow,
         default_pool: Option<PoolSelector>,
+        pipeline: &RawPipeline,
     ) -> Vec<JobIR> {
         let workflow_prefix = &workflow.invocation.id;
+        let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
+        let resolved_inputs = Self::resolve_workflow_invocation_inputs(pipeline, &workflow);
+        let wf_ids: HashSet<String> = pipeline.workflows.iter().map(|w| w.id.clone()).collect();
+        let full_ctx = VariableContext::new(pipeline.vars.clone(), secrets)
+            .with_inputs(resolved_inputs.clone())
+            .with_workflow_invocations(wf_ids);
 
         workflow
             .definition
@@ -619,7 +677,15 @@ impl<'a> PipelineParser<'a> {
                     .steps
                     .iter()
                     .enumerate()
-                    .map(|(idx, step)| self.convert_step(step, idx))
+                    .map(|(idx, step)| {
+                        self.convert_step_with_interpolation(
+                            step,
+                            idx,
+                            &pipeline.vars,
+                            &resolved_inputs,
+                            &full_ctx,
+                        )
+                    })
                     .collect();
 
                 let services: Vec<ServiceDef> = job
@@ -640,6 +706,25 @@ impl<'a> PipelineParser<'a> {
                             .map(|dep| make_job_id(dep)),
                     )
                     .collect();
+
+                let affinity_group = workflow
+                    .invocation
+                    .affinity_group
+                    .clone()
+                    .or_else(|| pipeline.agent_affinity.as_ref()?.default_group.clone())
+                    .and_then(|s| {
+                        let t = s.trim();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t.to_string())
+                        }
+                    });
+                let share_workspace = affinity_group.is_some()
+                    && pipeline
+                        .agent_affinity
+                        .as_ref()
+                        .is_some_and(|a| a.share_workspace);
 
                 JobIR {
                     id: make_job_id(&job_id),
@@ -670,6 +755,9 @@ impl<'a> PipelineParser<'a> {
                         .or(workflow.invocation.condition.clone()),
                     source_workflow: Some(workflow.workflow_ref.clone()),
                     env: IndexMap::new(),
+                    affinity_group,
+                    share_workspace,
+                    workflow_invocation_id: Some(workflow.invocation.id.clone()),
                 }
             })
             .collect()
@@ -748,6 +836,59 @@ impl<'a> PipelineParser<'a> {
         }
     }
 
+    fn resolve_workflow_invocation_inputs(
+        pipeline: &RawPipeline,
+        workflow: &ResolvedWorkflow,
+    ) -> IndexMap<String, String> {
+        let secrets: HashSet<String> = pipeline.secrets.keys().cloned().collect();
+        let wf_ids: HashSet<String> = pipeline.workflows.iter().map(|w| w.id.clone()).collect();
+        let base_ctx = VariableContext::new(pipeline.vars.clone(), secrets).with_workflow_invocations(wf_ids);
+        workflow
+            .invocation
+            .inputs
+            .iter()
+            .map(|(k, v)| {
+                let raw = Self::invocation_yaml_to_string(v);
+                let resolved = crate::variable::interpolate(&raw, &base_ctx);
+                (k.clone(), resolved)
+            })
+            .collect()
+    }
+
+    fn invocation_yaml_to_string(v: &serde_yaml::Value) -> String {
+        match v {
+            serde_yaml::Value::String(s) => s.clone(),
+            serde_yaml::Value::Number(n) => n.to_string(),
+            serde_yaml::Value::Bool(b) => b.to_string(),
+            serde_yaml::Value::Null => String::new(),
+            other => serde_yaml::to_string(other)
+                .unwrap_or_default()
+                .trim_matches('\n')
+                .to_string(),
+        }
+    }
+
+    fn convert_step_with_interpolation(
+        &self,
+        step: &RawStep,
+        idx: usize,
+        pipeline_vars: &IndexMap<String, String>,
+        resolved_inputs: &IndexMap<String, String>,
+        full_ctx: &VariableContext,
+    ) -> StepIR {
+        let mut step_ir = self.convert_step(step, idx);
+        if let StepCommand::Run { script, .. } = &mut step_ir.command {
+            let raw = std::mem::take(script);
+            let after_templates = crate::variable::interpolate_workflow_templates(
+                &raw,
+                pipeline_vars,
+                resolved_inputs,
+            );
+            *script = crate::variable::interpolate(&after_templates, full_ctx);
+        }
+        step_ir
+    }
+
     /// Convert a raw service to IR.
     fn convert_service(&self, service: &RawService) -> ServiceDef {
         ServiceDef {
@@ -807,6 +948,41 @@ struct ResolvedWorkflow {
 
 /// Create a JobId from a string identifier.
 /// This creates a deterministic UUID based on the string for consistent IDs.
+/// `depends-on: [other]` on a pipeline workflow injects `make_job_id("other")`; expand to every
+/// concrete job expanded from invocation `other`.
+fn expand_cross_invocation_depends_on(jobs: &mut [JobIR]) {
+    use indexmap::IndexSet;
+    use std::collections::HashMap;
+
+    let mut inv_to_jobs: HashMap<String, Vec<JobId>> = HashMap::new();
+    for j in jobs.iter() {
+        if let Some(inv) = j.workflow_invocation_id.as_ref() {
+            inv_to_jobs.entry(inv.clone()).or_default().push(j.id);
+        }
+    }
+
+    let placeholder: HashMap<JobId, String> = inv_to_jobs
+        .keys()
+        .map(|inv| (make_job_id(inv.as_str()), inv.clone()))
+        .collect();
+
+    for job in jobs.iter_mut() {
+        let mut next: IndexSet<JobId> = IndexSet::new();
+        for dep in job.depends_on.drain(..) {
+            if let Some(inv) = placeholder.get(&dep) {
+                if let Some(ids) = inv_to_jobs.get(inv) {
+                    for id in ids {
+                        next.insert(*id);
+                    }
+                }
+            } else {
+                next.insert(dep);
+            }
+        }
+        job.depends_on = next.into_iter().collect();
+    }
+}
+
 fn make_job_id(s: &str) -> JobId {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -911,6 +1087,7 @@ mod tests {
                     working_directory: None,
                     timeout: None,
                     continue_on_error: false,
+                    outputs: IndexMap::new(),
                 }],
                 services: vec![],
                 depends_on: vec![],
@@ -918,6 +1095,32 @@ mod tests {
                 timeout: None,
                 retry: None,
             }],
+        }
+    }
+
+    /// Controller job key exchange must resolve secrets without a workflow provider; pipeline
+    /// `secrets:` live on the root document only.
+    #[test]
+    fn secret_refs_extracted_without_resolving_workflows() {
+        let yaml = r#"
+name: demo
+triggers:
+  manual: {}
+secrets:
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+workflows:
+  - name: X
+    id: x
+    workflow: project/not-fetched-for-secret-extraction
+"#;
+        let raw: RawPipeline = serde_yaml::from_str(yaml).expect("yaml");
+        let refs = secret_refs_from_raw_secrets(&raw.secrets);
+        assert_eq!(refs.len(), 1);
+        match refs.get("GITHUB_TOKEN") {
+            Some(SecretRef::Stored { name }) => assert_eq!(name, "meticulous-ci"),
+            o => panic!("unexpected ref: {o:?}"),
         }
     }
 

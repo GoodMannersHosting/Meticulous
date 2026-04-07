@@ -5,9 +5,9 @@
 //! restricted to specific projects.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use met_core::ids::{ApiTokenId, ProjectId};
 use met_core::models::{CreateApiToken, CreateApiTokenResponse};
@@ -19,7 +19,7 @@ use utoipa::ToSchema;
 use crate::{
     auth::generate_token,
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -56,9 +56,10 @@ impl From<&met_core::models::ApiToken> for TokenResponse {
             description: t.description.clone(),
             prefix: t.prefix.clone(),
             scopes: t.scopes.clone(),
-            project_ids: t.project_ids.as_ref().map(|ids| {
-                ids.iter().map(|id| id.to_string()).collect()
-            }),
+            project_ids: t
+                .project_ids
+                .as_ref()
+                .map(|ids| ids.iter().map(|id| id.to_string()).collect()),
             expires_at: t.expires_at.map(|dt| dt.to_rfc3339()),
             last_used_at: t.last_used_at.map(|dt| dt.to_rfc3339()),
             created_at: t.created_at.to_rfc3339(),
@@ -152,7 +153,9 @@ async fn create_token(
     }
 
     if req.name.len() > 100 {
-        return Err(ApiError::bad_request("token name must be 100 characters or less"));
+        return Err(ApiError::bad_request(
+            "token name must be 100 characters or less",
+        ));
     }
 
     // Validate scopes
@@ -187,7 +190,9 @@ async fn create_token(
     };
 
     let repo = ApiTokenRepo::new(state.db());
-    let token = repo.create(user.user_id, &input, &token_hash, &prefix).await?;
+    let token = repo
+        .create(user.user_id, &input, &token_hash, &prefix)
+        .await?;
 
     tracing::info!(
         user_id = %user.user_id,

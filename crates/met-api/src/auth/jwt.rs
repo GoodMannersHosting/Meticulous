@@ -4,7 +4,7 @@
 
 use crate::config::JwtConfig;
 use crate::extractors::CurrentUser;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use met_core::{OrganizationId, UserId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -101,7 +101,7 @@ impl JwtValidator {
             name: claims.name,
             permissions: claims.permissions.into_iter().collect(),
             is_api_token: false,
-            project_ids: None, // JWT tokens have access to all projects
+            project_ids: None,           // JWT tokens have access to all projects
             password_must_change: false, // refreshed from DB in `finalize_authenticated_user`
         })
     }

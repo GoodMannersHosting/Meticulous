@@ -5,7 +5,7 @@
 use crate::error::{ErrorCode, ParseDiagnostics, SourceLocation};
 use indexmap::IndexMap;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 /// Pattern for variable references: ${name} or $name
@@ -50,6 +50,10 @@ pub struct VariableContext {
     pub inputs: IndexMap<String, String>,
     /// Step outputs from previous steps (for runtime resolution).
     pub step_outputs: IndexMap<String, IndexMap<String, String>>,
+    /// Pipeline `workflows[].id` values (for `${{ workflows.X.outputs.* }}` validation).
+    pub workflow_invocations: HashSet<String>,
+    /// Declared output names per workflow invocation id (from reusable workflow YAML). Empty set skips name checks.
+    pub workflow_declared_outputs: HashMap<String, HashSet<String>>,
 }
 
 impl VariableContext {
@@ -60,12 +64,26 @@ impl VariableContext {
             secrets,
             inputs: IndexMap::new(),
             step_outputs: IndexMap::new(),
+            workflow_invocations: HashSet::new(),
+            workflow_declared_outputs: HashMap::new(),
         }
     }
 
     /// Add workflow inputs to the context.
     pub fn with_inputs(mut self, inputs: IndexMap<String, String>) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    /// Pipeline workflow invocation ids available for `workflows.<id>.outputs.*` references.
+    pub fn with_workflow_invocations(mut self, ids: HashSet<String>) -> Self {
+        self.workflow_invocations = ids;
+        self
+    }
+
+    /// Declared `outputs` names for each `workflows[].id` (workflow- and step-level declarations).
+    pub fn with_workflow_declared_outputs(mut self, map: HashMap<String, HashSet<String>>) -> Self {
+        self.workflow_declared_outputs = map;
         self
     }
 
@@ -151,7 +169,7 @@ pub fn extract_vars(s: &str) -> VarExtraction {
     VarExtraction { vars, expressions }
 }
 
-/// Validate all variable references in a string.
+/// Validate all variable references in a string (Meticulous `${VAR}` / `$VAR` and `${{ … }}`).
 pub fn validate_refs(
     s: &str,
     ctx: &VariableContext,
@@ -190,6 +208,23 @@ pub fn validate_refs(
     }
 }
 
+/// Validate references in a `run:` script body.
+///
+/// `$VAR` / `${VAR}` are shell syntax (often assigned inside the same script). Only `${{ … }}`
+/// Meticulous expressions are checked here (e.g. `inputs.repo`, `vars.X`).
+pub fn validate_refs_in_run_script(
+    s: &str,
+    ctx: &VariableContext,
+    diagnostics: &mut ParseDiagnostics,
+    location: SourceLocation,
+) {
+    let extraction = extract_vars(s);
+
+    for expr_ref in &extraction.expressions {
+        validate_expression(&expr_ref.expr, ctx, diagnostics, location.clone());
+    }
+}
+
 /// Validate an expression (basic check for now).
 fn validate_expression(
     expr: &str,
@@ -203,6 +238,43 @@ fn validate_expression(
     }
 
     match parts[0] {
+        "workflows" => {
+            if parts.len() == 4 && parts[2] == "outputs" {
+                let inv = parts[1];
+                let out_name = parts[3];
+                if !ctx.workflow_invocations.contains(inv) {
+                    diagnostics.push(
+                        crate::error::ParseError::new(
+                            ErrorCode::E4001,
+                            format!("unknown workflow invocation id in outputs reference: {inv}"),
+                        )
+                        .with_source(location),
+                    );
+                } else if let Some(declared) = ctx.workflow_declared_outputs.get(inv) {
+                    if !declared.is_empty() && !declared.contains(out_name) {
+                        let mut sample: Vec<&String> = declared.iter().collect();
+                        sample.sort();
+                        diagnostics.push(
+                            crate::error::ParseError::new(
+                                ErrorCode::E4001,
+                                format!(
+                                    "workflow invocation '{inv}' has no declared output '{out_name}'"
+                                ),
+                            )
+                            .with_source(location.clone())
+                            .with_hint(format!(
+                                "declared outputs for '{inv}': {}",
+                                sample
+                                    .into_iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )),
+                        );
+                    }
+                }
+            }
+        }
         "inputs" => {
             if parts.len() > 1 && !ctx.inputs.contains_key(parts[1]) {
                 diagnostics.push(
@@ -254,6 +326,32 @@ fn validate_expression(
     }
 }
 
+/// Replace `${{ inputs.KEY }}` and `${{ vars.KEY }}` using workflow invocation inputs and pipeline vars.
+///
+/// Leaves other `${{ ... }}` blocks unchanged (e.g. `${{ secrets.X }}` for runtime / env).
+pub fn interpolate_workflow_templates(
+    s: &str,
+    pipeline_vars: &IndexMap<String, String>,
+    workflow_inputs: &IndexMap<String, String>,
+) -> String {
+    let extraction = extract_vars(s);
+    let mut result = s.to_string();
+    for expr in extraction.expressions.iter().rev() {
+        let trimmed = expr.expr.trim();
+        let replacement = if let Some(key) = trimmed.strip_prefix("inputs.") {
+            workflow_inputs.get(key)
+        } else if let Some(key) = trimmed.strip_prefix("vars.") {
+            pipeline_vars.get(key)
+        } else {
+            None
+        };
+        if let Some(rep) = replacement {
+            result.replace_range(expr.start..expr.end, rep);
+        }
+    }
+    result
+}
+
 /// Interpolate variables in a string with known values.
 /// Leaves unresolvable references (secrets, builtins) as-is.
 pub fn interpolate(s: &str, ctx: &VariableContext) -> String {
@@ -298,6 +396,7 @@ pub fn has_secret_refs(s: &str, ctx: &VariableContext) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[test]
     fn test_extract_vars() {
@@ -330,6 +429,21 @@ mod tests {
     }
 
     #[test]
+    fn test_interpolate_workflow_templates() {
+        let mut vars = IndexMap::new();
+        vars.insert("TAG".to_string(), "v2".to_string());
+        let mut inputs = IndexMap::new();
+        inputs.insert("image".to_string(), "app:latest".to_string());
+
+        let s = "pull ${{ inputs.image }} rel ${{ vars.TAG }} keep ${{ secrets.TOKEN }}";
+        let out = interpolate_workflow_templates(s, &vars, &inputs);
+        assert_eq!(
+            out,
+            "pull app:latest rel v2 keep ${{ secrets.TOKEN }}"
+        );
+    }
+
+    #[test]
     fn test_validate_refs() {
         let mut ctx = VariableContext::default();
         ctx.vars.insert("DEFINED".to_string(), "value".to_string());
@@ -346,6 +460,42 @@ mod tests {
         assert!(diag.has_errors());
         assert_eq!(diag.len(), 1);
         assert!(diag.all()[0].message.contains("UNDEFINED"));
+    }
+
+    #[test]
+    fn test_validate_refs_in_run_script_allows_shell_locals() {
+        let mut ctx = VariableContext::new(IndexMap::new(), HashSet::new());
+        ctx.inputs.insert("repo".to_string(), "o/r".to_string());
+
+        let script = indoc! {r#"
+            WS="${METICULOUS_WORKSPACE:?}"
+            SRC="${WS}/src"
+            echo "clone ${{ inputs.repo }} into ${SRC}"
+        "#};
+
+        let mut diag = ParseDiagnostics::new();
+        validate_refs_in_run_script(script, &ctx, &mut diag, SourceLocation::new(1, 1));
+        assert!(
+            !diag.has_errors(),
+            "shell WS/SRC must not be validated as pipeline vars: {:?}",
+            diag.all()
+        );
+    }
+
+    #[test]
+    fn test_validate_refs_in_run_script_still_checks_expressions() {
+        let ctx = VariableContext::new(IndexMap::new(), HashSet::new());
+
+        let mut diag = ParseDiagnostics::new();
+        validate_refs_in_run_script(
+            "echo ${{ inputs.missing }}",
+            &ctx,
+            &mut diag,
+            SourceLocation::new(1, 1),
+        );
+        assert!(diag.has_errors());
+        let msg = diag.all()[0].message.as_str();
+        assert!(msg.contains("missing"), "unexpected diagnostic: {msg}");
     }
 
     #[test]

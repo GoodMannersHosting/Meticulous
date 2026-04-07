@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Users, UserCog, Key, Server, Settings, ChevronRight } from 'lucide-svelte';
+	import { Users, UserCog, Key, Server, ListOrdered, ChevronRight, AppWindow } from 'lucide-svelte';
 
 	interface AdminLink {
 		title: string;
@@ -28,10 +28,22 @@
 			icon: Key
 		},
 		{
+			title: 'Meticulous Apps',
+			description: 'Machine integrations, JWT signing keys, and project installations',
+			href: '/admin/apps',
+			icon: AppWindow
+		},
+		{
 			title: 'Agents',
 			description: 'Manage agent join tokens and registration',
 			href: '/admin/agents',
 			icon: Server
+		},
+		{
+			title: 'Job queue',
+			description: 'See pipeline jobs that are pending or queued for agents',
+			href: '/admin/job-queue',
+			icon: ListOrdered
 		}
 	];
 </script>

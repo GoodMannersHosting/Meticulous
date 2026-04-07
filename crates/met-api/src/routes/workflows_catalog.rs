@@ -1,0 +1,623 @@
+//! Org catalog workflows: Git import, list, version search.
+
+use axum::extract::Query;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::{get, post},
+};
+use met_core::ids::ProjectId;
+use met_core::{OrganizationId, UserId};
+use met_store::repos::{
+    CreateGlobalCatalogGit, WorkflowRepo, WorkflowSubmissionStatus,
+};
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+use crate::{
+    error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
+    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta},
+    github_scm,
+    state::AppState,
+};
+
+use crate::routes::workflows::WorkflowResponse;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/workflows/catalog", get(list_catalog_workflows))
+        .route(
+            "/workflows/catalog/import-git",
+            post(import_catalog_workflow_git_organization),
+        )
+        .route(
+            "/workflows/catalog/upstream-ref-search",
+            post(catalog_upstream_ref_search_organization),
+        )
+        .route(
+            "/projects/{project_id}/workflows/catalog/import-git",
+            post(import_catalog_workflow_git),
+        )
+        .route(
+            "/projects/{project_id}/workflows/catalog/upstream-ref-search",
+            post(catalog_upstream_ref_search_project),
+        )
+        .route(
+            "/workflows/{workflow_id}/catalog-versions",
+            get(list_catalog_versions),
+        )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CatalogListQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// `cursor` for catalog lists is a non-negative SQL `OFFSET` as a decimal string.
+fn parse_catalog_list_offset(cursor: Option<&str>) -> i64 {
+    let Some(raw) = cursor else {
+        return 0;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    trimmed
+        .parse::<i64>()
+        .ok()
+        .filter(|&o| o >= 0)
+        .unwrap_or(0)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/catalog",
+    tag = "workflows",
+)]
+#[instrument(skip(state))]
+async fn list_catalog_workflows(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    pagination: Pagination,
+    Query(q): Query<CatalogListQuery>,
+) -> ApiResult<Json<PaginatedResponse<WorkflowResponse>>> {
+    let repo = WorkflowRepo::new(state.db());
+    let st = match q.status.as_deref() {
+        Some("pending") => Some(WorkflowSubmissionStatus::Pending),
+        Some("approved") => Some(WorkflowSubmissionStatus::Approved),
+        Some("rejected") => Some(WorkflowSubmissionStatus::Rejected),
+        Some(s) if !s.is_empty() => {
+            return Err(ApiError::bad_request(format!(
+                "unknown status filter: {s} (use pending|approved|rejected)"
+            )));
+        }
+        _ => None,
+    };
+
+    let offset = parse_catalog_list_offset(pagination.cursor.as_deref());
+    let workflows = repo
+        .list_global_catalog(user.org_id, pagination.sql_limit(), offset, st)
+        .await?;
+
+    let limit_usize = pagination.limit as usize;
+    let mut items: Vec<WorkflowResponse> =
+        workflows.into_iter().map(WorkflowResponse::from).collect();
+    let fetched = items.len();
+    let has_more = fetched > limit_usize;
+    if has_more {
+        items.pop();
+    }
+    let count = items.len();
+    let next_cursor = if has_more {
+        Some((offset as usize + count).to_string())
+    } else {
+        None
+    };
+
+    Ok(Json(PaginatedResponse {
+        data: items,
+        pagination: PaginationMeta {
+            next_cursor,
+            has_more,
+            count,
+        },
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ImportCatalogWorkflowGitRequest {
+    /// GitHub repository as `owner/name` or URL.
+    pub repository: String,
+    pub git_ref: String,
+    /// Path to workflow YAML in the repo.
+    pub workflow_path: String,
+    pub credentials_path: String,
+}
+
+/// Shared Git fetch + global catalog row insert.
+async fn import_catalog_workflow_git_execute(
+    state: &AppState,
+    submitted_by: UserId,
+    org_id: OrganizationId,
+    project_id_for_secrets: ProjectId,
+    req: ImportCatalogWorkflowGitRequest,
+) -> ApiResult<met_store::repos::ReusableWorkflow> {
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
+    };
+
+    let slug = github_scm::parse_github_repository(&req.repository)?;
+    let api_base = github_scm::github_api_base_for_credentials_path(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        true,
+    )
+    .await?;
+    let token = github_scm::github_app_installation_token_for_project_secret(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        true,
+    )
+    .await?;
+    let commit_sha = github_scm::resolve_github_commit_sha(
+        &token,
+        &slug.owner,
+        &slug.name,
+        &req.git_ref,
+        &api_base,
+    )
+    .await?;
+
+    let (yaml_text, _) = github_scm::fetch_github_text_file(
+        &token,
+        &slug.owner,
+        &slug.name,
+        req.workflow_path.trim_start_matches('/'),
+        &commit_sha,
+        &api_base,
+    )
+    .await?;
+
+    let def = github_scm::yaml_file_to_json_value(&yaml_text)?;
+
+    let name = def
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request("workflow YAML must include a non-empty `name` field")
+        })?
+        .to_string();
+
+    let version = def
+        .get("version")
+        .and_then(github_scm::json_workflow_version)
+        .unwrap_or_else(|| "0.0.0".to_string());
+
+    let description = def
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let repo_slug = format!("{}/{}", slug.owner, slug.name);
+    let upstream_url = format!(
+        "https://github.com/{}/blob/{}/{}",
+        repo_slug,
+        commit_sha,
+        req.workflow_path.trim_start_matches('/')
+    );
+    let catalog_metadata =
+        catalog_metadata_json(&def, upstream_url, Some(req.credentials_path.as_str()));
+
+    WorkflowRepo::new(state.db())
+        .create_global_catalog_git(
+            org_id,
+            &CreateGlobalCatalogGit {
+                name,
+                version,
+                definition: def,
+                description,
+                tags: Vec::new(),
+                scm_repository: repo_slug,
+                scm_ref: req.git_ref,
+                scm_path: req.workflow_path,
+                scm_revision: commit_sha,
+                catalog_metadata,
+                submitted_by,
+            },
+        )
+        .await
+        .map_err(ApiError::from)
+}
+
+fn catalog_metadata_json(
+    def: &serde_json::Value,
+    upstream_url: impl Into<String>,
+    catalog_scm_credentials_path: Option<&str>,
+) -> serde_json::Value {
+    let summary = def
+        .get("description")
+        .and_then(|v| v.as_str())
+        .or_else(|| def.get("name").and_then(|v| v.as_str()))
+        .unwrap_or("workflow");
+
+    let mut tools = Vec::new();
+    if let Some(jobs) = def.get("jobs").and_then(|j| j.as_array()) {
+        for job in jobs {
+            if let Some(steps) = job.get("steps").and_then(|s| s.as_array()) {
+                for step in steps {
+                    if let Some(u) = step.get("uses").and_then(|u| u.as_str()) {
+                        tools.push(u.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let cred_path = catalog_scm_credentials_path.map(str::trim).filter(|s| !s.is_empty());
+    let mut meta = serde_json::json!({
+        "summary": summary,
+        "tools": tools,
+        "target_arch": serde_json::Value::Null,
+        "target_os": serde_json::Value::Null,
+        "upstream_url": upstream_url.into(),
+    });
+    if let Some(p) = cred_path {
+        meta["catalog_scm_credentials_path"] = serde_json::Value::String(p.to_string());
+    }
+    meta
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CatalogUpstreamRefSearchRequest {
+    /// GitHub repository as `owner/name` or URL.
+    pub repository: String,
+    pub credentials_path: String,
+    /// Case-insensitive filter on branch name, tag name, and (when loading commits) subject line or SHA prefix.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// When set, include recent commits on this ref (branch name, tag, or SHA).
+    #[serde(default)]
+    pub commits_for_ref: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogRefItem {
+    pub name: String,
+    pub commit_sha: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogCommitPreview {
+    pub sha: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogUpstreamRefSearchResponse {
+    pub branches: Vec<CatalogRefItem>,
+    pub tags: Vec<CatalogRefItem>,
+    #[serde(default)]
+    pub commits: Vec<CatalogCommitPreview>,
+}
+
+async fn catalog_upstream_ref_search_execute(
+    state: &AppState,
+    user_org_id: OrganizationId,
+    project_id_for_secrets: ProjectId,
+    catalog_scm: bool,
+    req: CatalogUpstreamRefSearchRequest,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
+    };
+
+    let slug = github_scm::parse_github_repository(&req.repository)?;
+    let api_base = github_scm::github_api_base_for_credentials_path(
+        state.db(),
+        crypto.as_ref(),
+        user_org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        catalog_scm,
+    )
+    .await?;
+    let token = github_scm::github_app_installation_token_for_project_secret(
+        state.db(),
+        crypto.as_ref(),
+        user_org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        catalog_scm,
+    )
+    .await?;
+
+    let (branches_raw, tags_raw) = tokio::join!(
+        github_scm::list_github_branches(
+            &token,
+            &slug.owner,
+            &slug.name,
+            &api_base,
+            100
+        ),
+        github_scm::list_github_tags(&token, &slug.owner, &slug.name, &api_base, 100)
+    );
+    let branches_raw = branches_raw?;
+    let tags_raw = tags_raw?;
+
+    let q = req
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase());
+
+    let mut branches: Vec<CatalogRefItem> = branches_raw
+        .into_iter()
+        .map(|(name, commit_sha)| CatalogRefItem { name, commit_sha })
+        .collect();
+    if let Some(ref ql) = q {
+        branches.retain(|b| b.name.to_lowercase().contains(ql));
+    }
+    branches.truncate(80);
+
+    let mut tags: Vec<CatalogRefItem> = tags_raw
+        .into_iter()
+        .map(|(name, commit_sha)| CatalogRefItem { name, commit_sha })
+        .collect();
+    if let Some(ref ql) = q {
+        tags.retain(|t| t.name.to_lowercase().contains(ql));
+    }
+    tags.truncate(80);
+
+    let mut commits_out = Vec::new();
+    if let Some(cref) = req.commits_for_ref.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let rows = github_scm::list_github_commits(
+            &token,
+            &slug.owner,
+            &slug.name,
+            cref,
+            &api_base,
+            30,
+        )
+        .await?;
+        for (sha, title, committed_at) in rows {
+            if let Some(ref ql) = q {
+                let sh = sha.to_lowercase();
+                if !title.to_lowercase().contains(ql) && !sh.starts_with(ql) {
+                    continue;
+                }
+            }
+            commits_out.push(CatalogCommitPreview {
+                sha,
+                title,
+                committed_at,
+            });
+        }
+        commits_out.truncate(40);
+    }
+
+    Ok(Json(CatalogUpstreamRefSearchResponse {
+        branches,
+        tags,
+        commits: commits_out,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/catalog/upstream-ref-search",
+    request_body = CatalogUpstreamRefSearchRequest,
+    responses(
+        (status = 200, description = "Branches, tags, optional commits", body = CatalogUpstreamRefSearchResponse),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn catalog_upstream_ref_search_organization(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Json(req): Json<CatalogUpstreamRefSearchRequest>,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    if !user.has_any_permission(&["*", "org:admin"]) {
+        return Err(ApiError::forbidden(
+            "upstream ref search requires org:admin (or *) permission",
+        ));
+    }
+
+    catalog_upstream_ref_search_execute(
+        &state,
+        user.org_id,
+        ProjectId::from_uuid(Uuid::nil()),
+        true,
+        req,
+    )
+    .await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/workflows/catalog/upstream-ref-search",
+    request_body = CatalogUpstreamRefSearchRequest,
+    responses(
+        (status = 200, description = "Branches, tags, optional commits", body = CatalogUpstreamRefSearchResponse),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn catalog_upstream_ref_search_project(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<CatalogUpstreamRefSearchRequest>,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = met_store::repos::ProjectRepo::new(state.db())
+        .get(project_id)
+        .await?;
+    if project.org_id != user.org_id {
+        return Err(ApiError::forbidden("project is not in your organization"));
+    }
+
+    catalog_upstream_ref_search_execute(&state, user.org_id, project_id, false, req).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/catalog/import-git",
+    request_body = ImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Catalog workflow version created", body = WorkflowResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn import_catalog_workflow_git_organization(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Json(req): Json<ImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<WorkflowResponse>> {
+    if !user.has_any_permission(&["*", "org:admin"]) {
+        return Err(ApiError::forbidden(
+            "organization catalog Git import requires org:admin (or *) permission",
+        ));
+    }
+
+    let org_id = user.org_id;
+    let project_id_for_secrets = ProjectId::from_uuid(Uuid::nil());
+
+    let row = import_catalog_workflow_git_execute(
+        &state,
+        user.user_id,
+        org_id,
+        project_id_for_secrets,
+        req,
+    )
+    .await?;
+
+    Ok(Json(WorkflowResponse::from(row)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/workflows/catalog/import-git",
+    request_body = ImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Catalog workflow version created", body = WorkflowResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn import_catalog_workflow_git(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<ImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<WorkflowResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = met_store::repos::ProjectRepo::new(state.db())
+        .get(project_id)
+        .await?;
+    let org_id = project.org_id;
+
+    let row =
+        import_catalog_workflow_git_execute(&state, user.user_id, org_id, project_id, req).await?;
+
+    Ok(Json(WorkflowResponse::from(row)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CatalogVersionsQuery {
+    #[serde(default)]
+    pub q: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogVersionsPage {
+    pub workflow_name: String,
+    pub versions: Vec<WorkflowResponse>,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflows/{workflow_id}/catalog-versions",
+    tag = "workflows",
+)]
+#[instrument(skip(state))]
+async fn list_catalog_versions(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(workflow_id): Path<String>,
+    pagination: Pagination,
+    Query(query): Query<CatalogVersionsQuery>,
+) -> ApiResult<Json<CatalogVersionsPage>> {
+    let uuid: Uuid = workflow_id
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid workflow ID"))?;
+
+    let anchor = WorkflowRepo::new(state.db())
+        .get_by_id(user.org_id, uuid)
+        .await
+        .map_err(|_| ApiError::not_found("workflow not found"))?;
+
+    if anchor.scope != met_store::repos::WorkflowScope::Global {
+        return Err(ApiError::bad_request("not a global catalog workflow row"));
+    }
+
+    let offset = parse_catalog_list_offset(pagination.cursor.as_deref());
+    let rows = WorkflowRepo::new(state.db())
+        .list_global_catalog_versions(
+            user.org_id,
+            &anchor.name,
+            query.q.as_deref(),
+            pagination.sql_limit(),
+            offset,
+        )
+        .await?;
+
+    let limit_usize = pagination.limit as usize;
+    let mut versions: Vec<WorkflowResponse> =
+        rows.into_iter().map(WorkflowResponse::from).collect();
+    let fetched = versions.len();
+    let has_more = fetched > limit_usize;
+    if has_more {
+        versions.pop();
+    }
+    let count = versions.len();
+    let next_cursor = if has_more {
+        Some((offset as usize + count).to_string())
+    } else {
+        None
+    };
+
+    Ok(Json(CatalogVersionsPage {
+        workflow_name: anchor.name,
+        versions,
+        has_more,
+        next_cursor,
+    }))
+}

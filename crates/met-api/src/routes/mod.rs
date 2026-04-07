@@ -20,8 +20,11 @@ pub mod admin;
 pub mod agents;
 pub mod artifacts;
 pub mod auth;
+pub mod dashboard;
 pub mod debug;
 pub mod health;
+pub mod integration;
+pub mod meticulous_apps;
 pub mod oauth;
 pub mod orgs;
 pub mod pipelines;
@@ -30,10 +33,14 @@ pub mod runs;
 pub mod secrets;
 pub mod stored_secrets;
 pub mod tokens;
+pub mod triggers;
 pub mod variables;
+pub mod workspace_config;
 pub mod webhooks;
 pub mod websocket;
 pub mod workflows;
+pub mod workflows_catalog;
+pub mod admin_workflows;
 
 /// Build the complete API router with all middleware.
 pub fn build_router(state: AppState) -> Router {
@@ -53,8 +60,10 @@ pub fn build_router(state: AppState) -> Router {
 
     // Build versioned API routes
     let api_v1 = Router::new()
+        .merge(dashboard::router())
         .merge(projects::router())
         .merge(pipelines::router())
+        .merge(triggers::router())
         .merge(runs::router())
         .merge(agents::router())
         .merge(tokens::router())
@@ -62,11 +71,14 @@ pub fn build_router(state: AppState) -> Router {
         .merge(secrets::router())
         .merge(stored_secrets::router())
         .merge(variables::router())
+        .merge(workspace_config::router())
         .merge(workflows::router())
+        .merge(workflows_catalog::router())
         .merge(debug::router())
         .merge(artifacts::router())
         .merge(webhooks::router())
-        .merge(websocket::router());
+        .merge(websocket::router())
+        .merge(integration::router());
 
     let openapi_spec = ApiDoc::openapi();
     let swagger_router: Router<()> = SwaggerUi::new("/docs")

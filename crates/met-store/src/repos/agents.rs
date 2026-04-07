@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use met_core::ids::{AgentId, OrganizationId};
 use met_core::models::{Agent, AgentStatus};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
 
@@ -121,6 +122,25 @@ impl<'a> AgentRepo<'a> {
             SELECT {AGENT_ROW_SELECT}
             FROM agents
             WHERE id = $1 AND deregistered_at IS NULL
+            "#,
+            AGENT_ROW_SELECT = AGENT_ROW_SELECT
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("agent", id))
+    }
+
+    /// Load agent row by ID for persisting a job-run audit snapshot.
+    ///
+    /// Unlike [`Self::get`], this does **not** filter on `deregistered_at`, so a point-in-time
+    /// snapshot can still be captured if the row exists (e.g. decommission raced with a running job).
+    pub async fn get_for_audit_snapshot(&self, id: AgentId) -> Result<Agent> {
+        sqlx::query_as::<_, Agent>(&format!(
+            r#"
+            SELECT {AGENT_ROW_SELECT}
+            FROM agents
+            WHERE id = $1
             "#,
             AGENT_ROW_SELECT = AGENT_ROW_SELECT
         ))
@@ -456,6 +476,40 @@ impl<'a> AgentRepo<'a> {
         }
 
         Ok(())
+    }
+
+    /// Find at most one active agent whose last security bundle lists this Kubernetes pod UID.
+    ///
+    /// Returns [`StoreError::Constraint`] if more than one row matches (data integrity issue).
+    pub async fn find_active_id_by_kubernetes_pod_uid(
+        &self,
+        org_id: OrganizationId,
+        pod_uid: &str,
+    ) -> Result<Option<AgentId>> {
+        if pod_uid.is_empty() {
+            return Ok(None);
+        }
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            r#"
+            SELECT id FROM agents
+            WHERE org_id = $1
+              AND deregistered_at IS NULL
+              AND (last_security_bundle->>'kubernetes_pod_uid') = $2
+            LIMIT 2
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(pod_uid)
+        .fetch_all(self.pool)
+        .await?;
+
+        if rows.len() > 1 {
+            return Err(StoreError::Constraint(
+                "multiple agents match kubernetes_pod_uid for this organization".to_string(),
+            ));
+        }
+
+        Ok(rows.into_iter().next().map(|(id,)| AgentId::from(id)))
     }
 
     /// Soft-delete an agent (removed from listings; heartbeats ignored).

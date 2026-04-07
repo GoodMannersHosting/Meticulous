@@ -13,9 +13,14 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod extractors;
+pub mod github_scm;
 pub mod middleware;
 pub mod openapi;
+pub mod pipeline_execution;
+pub mod trigger_sync;
 pub mod routes;
+pub mod workflow_diagnostics;
+pub mod scheduling_hints;
 pub mod state;
 
 pub use config::ApiConfig;

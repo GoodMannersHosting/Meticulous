@@ -25,8 +25,8 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use met_agent::backend::{default_backend, ExecutionBackend, NativeBackend, StepSpec};
-    use met_agent::config::{AgentConfig, AgentIdentity};
+    use met_agent::backend::{create_execution_backend, ExecutionBackend, NativeBackend, StepSpec};
+    use met_agent::config::{AgentConfig, AgentIdentity, ExecutionRuntime};
     use met_agent::heartbeat::HeartbeatState;
     use met_agent::security::{
         normalize_arch, EnvironmentType, JobPki, SecurityBundleCollector,
@@ -321,6 +321,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-step".to_string(),
+            step_run_id: "sr-test-step".to_string(),
+            step_sequence: 0,
             name: "echo hello".to_string(),
             command: "echo hello".to_string(),
             image: String::new(),
@@ -350,6 +352,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-env".to_string(),
+            step_run_id: "sr-test-env".to_string(),
+            step_sequence: 0,
             name: "test env var".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -376,6 +380,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-exit".to_string(),
+            step_run_id: "sr-test-exit".to_string(),
+            step_sequence: 0,
             name: "exit with code".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -402,6 +408,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-cwd".to_string(),
+            step_run_id: "sr-test-cwd".to_string(),
+            step_sequence: 0,
             name: "check working dir".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -431,6 +439,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "test-timeout".to_string(),
+            step_run_id: "sr-test-timeout".to_string(),
+            step_sequence: 0,
             name: "long running command".to_string(),
             command: command.to_string(),
             image: String::new(),
@@ -445,21 +455,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_default_backend_is_available() {
-        let backend = default_backend().await;
-        assert!(backend.is_available().await, "default backend should be available");
+    async fn test_config_default_execution_runtime_is_native() {
+        let cfg = AgentConfig::default();
+        assert_eq!(cfg.execution_runtime, ExecutionRuntime::Native);
     }
 
     #[tokio::test]
-    async fn test_default_backend_name() {
-        let backend = default_backend().await;
-        let name = backend.name();
+    async fn test_native_execution_backend_is_available() {
+        let backend = create_execution_backend(ExecutionRuntime::Native).await;
+        assert!(backend.is_available().await);
+        assert_eq!(backend.name(), "native");
+    }
 
-        // Should be either "docker", "podman", "containerd", or "native"
+    #[tokio::test]
+    async fn test_auto_execution_backend_is_available() {
+        let backend = create_execution_backend(ExecutionRuntime::Auto).await;
+        assert!(backend.is_available().await);
+        let name = backend.name();
         let valid_names = ["docker", "podman", "containerd", "native"];
         assert!(
             valid_names.contains(&name),
-            "backend name '{}' should be one of {:?}",
+            "auto backend name '{}' should be one of {:?}",
             name,
             valid_names
         );
@@ -552,6 +568,8 @@ mod tests {
 
         let step = StepSpec {
             step_id: "isolation-test".to_string(),
+            step_run_id: "sr-isolation".to_string(),
+            step_sequence: 0,
             name: "test isolation".to_string(),
             command: command.to_string(),
             image: String::new(),

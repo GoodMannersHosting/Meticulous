@@ -58,6 +58,9 @@ fn test_job(id: JobId, name: &str, depends_on: Vec<JobId>) -> JobIR {
         condition: None,
         source_workflow: None,
         env: IndexMap::new(),
+        affinity_group: None,
+        share_workspace: false,
+        workflow_invocation_id: None,
     }
 }
 
@@ -73,6 +76,7 @@ fn test_pipeline(name: &str, jobs: Vec<JobIR>) -> PipelineIR {
         secret_refs: IndexMap::new(),
         jobs,
         default_pool_selector: None,
+        expose_workflow_secret_outputs: false,
     }
 }
 

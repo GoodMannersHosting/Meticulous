@@ -15,10 +15,13 @@ name = "met-api"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
 met-core = { workspace = true }
 met-store = { workspace = true }
 met-secrets = { workspace = true }
 met-engine = { workspace = true }
+met-parser = { workspace = true, features = ["database"] }
+met-secret-resolve = { workspace = true }
 met-controller = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
@@ -26,6 +29,7 @@ base64 = "0.22"
 clap = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 hex = "0.4"
 hmac = "0.12"
 http = "1"
@@ -35,10 +39,15 @@ argon2 = { workspace = true }
 oauth2 = "5"
 openidconnect = "4"
 rand = "0.8"
+rsa = { version = "0.9", features = ["pem", "sha2"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
+tempfile = "3"
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

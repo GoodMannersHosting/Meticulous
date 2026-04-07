@@ -8,12 +8,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use met_core::ids::{JobId, JobRunId, RunId};
+use futures::StreamExt;
+use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
-use met_parser::{JobIR, PipelineIR};
+use met_parser::{JobIR, PipelineIR, WorkflowScope as IrWorkflowScope};
+use met_store::repos::{
+    DefinitionSnapshotRepo, PipelineRepo, WorkflowRepo, WorkflowScope as DbWorkflowScope,
+};
 use met_secrets::BuiltinStoredCrypto;
+use met_store::repos::JobRunRepo;
+use rand::RngCore;
 use secrecy::SecretString;
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use tokio::time::interval;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -22,8 +29,19 @@ use crate::cel::{evaluate_condition, CelContext};
 use crate::context::ExecutionContext;
 use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
+use crate::parse_completion_message;
+use crate::persistence::{JobRunSourceRefs, RunPersistence};
 use crate::scheduler::{JobCompletionNotification, Scheduler};
 use crate::state::{JobState, RunState};
+
+/// How the `runs` table row was created before [`Executor::execute`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStartKind {
+    /// Create a new `runs` row from the engine (standalone execution).
+    New,
+    /// Row already exists (for example API trigger); only backfill org/trace when null.
+    Existing,
+}
 
 /// Executor configuration.
 #[derive(Debug, Clone)]
@@ -69,6 +87,8 @@ pub struct Executor<C: CacheBackend> {
     config: ExecutorConfig,
     /// When set, stored/builtin pipeline secrets are validated and resolved into the run context.
     builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
+    persistence: Arc<dyn RunPersistence>,
+    jetstream: async_nats::jetstream::Context,
 }
 
 impl<C: CacheBackend> Executor<C> {
@@ -80,6 +100,8 @@ impl<C: CacheBackend> Executor<C> {
         pool: PgPool,
         config: ExecutorConfig,
         builtin_stored_crypto: Option<Arc<BuiltinStoredCrypto>>,
+        persistence: Arc<dyn RunPersistence>,
+        jetstream: async_nats::jetstream::Context,
     ) -> Self {
         Self {
             scheduler,
@@ -88,12 +110,14 @@ impl<C: CacheBackend> Executor<C> {
             pool,
             config,
             builtin_stored_crypto,
+            persistence,
+            jetstream,
         }
     }
 
     /// Execute a pipeline run.
     #[instrument(skip(self, ctx), fields(run_id = %ctx.run_id(), pipeline = %ctx.pipeline().name))]
-    pub async fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult> {
+    pub async fn execute(&self, ctx: ExecutionContext, start: RunStartKind) -> Result<ExecutionResult> {
         let run_id = ctx.run_id();
         let pipeline_id = ctx.pipeline_id();
         let start_time = Utc::now();
@@ -130,12 +154,35 @@ impl<C: CacheBackend> Executor<C> {
             }
         }
 
+        match start {
+            RunStartKind::New => {
+                self.persistence
+                    .create_run(
+                        ctx.run_id(),
+                        ctx.pipeline_id(),
+                        ctx.org_id(),
+                        ctx.triggered_by(),
+                        ctx.trace_uuid(),
+                    )
+                    .await?;
+            }
+            RunStartKind::Existing => {
+                self.persistence
+                    .prepare_existing_run(ctx.run_id(), ctx.org_id(), Some(ctx.trace_uuid()))
+                    .await?;
+            }
+        }
+
+        if ctx.pipeline().jobs.is_empty() {
+            return Err(EngineError::EmptyPipeline);
+        }
+
         let run_state = RunState::new(run_id);
         run_state.set_status(RunStatus::Running).await;
 
         if let Err(e) = self
             .events
-            .run_started(run_id, pipeline_id, ctx.trace_id())
+            .run_started(run_id, pipeline_id, Some(ctx.trace_id()))
             .await
         {
             warn!(error = %e, "Failed to broadcast run started event");
@@ -143,15 +190,53 @@ impl<C: CacheBackend> Executor<C> {
 
         self.initialize_job_states(&ctx, &run_state).await?;
 
-        let exec_result = self.run_execution_loop(&ctx, &run_state).await;
+        self.persistence
+            .update_run_status(run_id, RunStatus::Running)
+            .await?;
+
+        let completion_horizon_ts = (Utc::now() - chrono::Duration::seconds(120)).timestamp();
+        let completion_horizon = time::OffsetDateTime::from_unix_timestamp(completion_horizon_ts)
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+
+        let (completion_tx, completion_rx) = mpsc::channel::<JobCompletionNotification>(64);
+        let comp_task = {
+            let js = self.jetstream.clone();
+            let org_id = ctx.org_id();
+            let run_id = ctx.run_id();
+            tokio::spawn(run_completion_pull_task(
+                js,
+                org_id,
+                run_id,
+                completion_tx,
+                completion_horizon,
+            ))
+        };
+
+        let exec_result = self
+            .run_execution_loop(&ctx, &run_state, completion_rx)
+            .await;
+        comp_task.abort();
 
         let final_status = match &exec_result {
-            Ok(_) => run_state.compute_final_status().await,
+            Ok(()) => run_state.compute_final_status().await,
             Err(EngineError::RunCancelled { .. }) => RunStatus::Cancelled,
             Err(_) => RunStatus::Failed,
         };
 
+        let persist_err_msg: Option<String> = match &exec_result {
+            Ok(()) | Err(EngineError::RunCancelled { .. }) => None,
+            Err(e) => Some(e.to_string()),
+        };
+
         run_state.set_status(final_status).await;
+
+        if let Err(e) = self
+            .persistence
+            .complete_run(run_id, final_status, persist_err_msg.as_deref())
+            .await
+        {
+            warn!(error = %e, %run_id, "failed to persist run completion");
+        }
 
         let end_time = Utc::now();
         let duration_ms = (end_time - start_time).num_milliseconds() as u64;
@@ -168,7 +253,7 @@ impl<C: CacheBackend> Executor<C> {
                 pipeline_id,
                 final_status.is_success(),
                 duration_ms,
-                ctx.trace_id(),
+                Some(ctx.trace_id()),
             )
             .await
         {
@@ -184,19 +269,88 @@ impl<C: CacheBackend> Executor<C> {
             "pipeline execution completed"
         );
 
-        Ok(ExecutionResult {
-            run_id,
-            status: final_status,
-            duration_ms,
-            jobs_succeeded,
-            jobs_failed,
-            jobs_skipped,
-        })
+        match exec_result {
+            Ok(()) => Ok(ExecutionResult {
+                run_id,
+                status: final_status,
+                duration_ms,
+                jobs_succeeded,
+                jobs_failed,
+                jobs_skipped,
+            }),
+            Err(EngineError::RunCancelled { .. }) => Ok(ExecutionResult {
+                run_id,
+                status: final_status,
+                duration_ms,
+                jobs_succeeded,
+                jobs_failed,
+                jobs_skipped,
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     async fn initialize_job_states(&self, ctx: &ExecutionContext, run_state: &RunState) -> Result<()> {
+        let pipeline_row = PipelineRepo::new(&self.pool).get(ctx.pipeline_id()).await?;
+        let pipeline_digest =
+            DefinitionSnapshotRepo::ensure_json(&self.pool, &pipeline_row.definition).await?;
+
+        let wf_repo = WorkflowRepo::new(&self.pool);
+
         for job in &ctx.pipeline().jobs {
+            let source_meta = job.source_workflow.as_ref().map(|wf| {
+                serde_json::json!({
+                    "scope": match wf.scope {
+                        IrWorkflowScope::Global => "global",
+                        IrWorkflowScope::Project => "project",
+                    },
+                    "name": wf.name,
+                    "version": wf.version,
+                })
+            });
+
+            let workflow_digest = if let Some(wf) = &job.source_workflow {
+                let scope = match wf.scope {
+                    IrWorkflowScope::Global => DbWorkflowScope::Global,
+                    IrWorkflowScope::Project => DbWorkflowScope::Project,
+                };
+                match wf_repo
+                    .get(ctx.org_id(), ctx.project_id(), scope, &wf.name, &wf.version)
+                    .await
+                {
+                    Ok(row) => Some(DefinitionSnapshotRepo::ensure_json(&self.pool, &row.definition).await?),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            job = %job.name,
+                            "could not load reusable workflow for definition snapshot; workflow digest omitted"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let job_run_id = JobRunId::new();
+            let mut output_wrap_secret = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut output_wrap_secret);
+            self.persistence
+                .create_job_run(
+                    job_run_id,
+                    ctx.run_id(),
+                    job.id,
+                    &job.name,
+                    JobRunSourceRefs {
+                        pipeline_definition_sha256: pipeline_digest,
+                        workflow_definition_sha256: workflow_digest,
+                        source_workflow: source_meta,
+                    },
+                    output_wrap_secret,
+                )
+                .await?;
+            ctx.register_output_wrap_x25519_secret(job_run_id, output_wrap_secret)
+                .await;
             let job_state = JobState::new(job.id, job_run_id, &job.name);
             run_state.register_job(job_state).await;
         }
@@ -207,42 +361,62 @@ impl<C: CacheBackend> Executor<C> {
         &self,
         ctx: &ExecutionContext,
         run_state: &RunState,
+        mut completion_rx: mpsc::Receiver<JobCompletionNotification>,
     ) -> Result<()> {
         let mut poll_interval = interval(self.config.poll_interval);
         let run_start = Utc::now();
 
         loop {
-            poll_interval.tick().await;
+            tokio::select! {
+                _ = poll_interval.tick() => {
+                    if run_state.is_cancellation_requested().await {
+                        return Err(EngineError::RunCancelled { run_id: ctx.run_id() });
+                    }
 
-            if run_state.is_cancellation_requested().await {
-                return Err(EngineError::RunCancelled { run_id: ctx.run_id() });
-            }
+                    if let Err(e) = self.reconcile_terminal_jobs_from_db(ctx, run_state).await {
+                        warn!(error = %e, "failed to reconcile job runs from database");
+                    }
 
-            let elapsed = Utc::now() - run_start;
-            if elapsed > chrono::Duration::from_std(self.config.run_timeout).unwrap_or(chrono::TimeDelta::MAX) {
-                error!("Run timed out");
-                return Err(EngineError::Internal("Run execution timed out".to_string()));
-            }
+                    let elapsed = Utc::now() - run_start;
+                    if elapsed > chrono::Duration::from_std(self.config.run_timeout).unwrap_or(chrono::TimeDelta::MAX) {
+                        error!("Run timed out");
+                        return Err(EngineError::Internal("Run execution timed out".to_string()));
+                    }
 
-            self.scheduler.check_timeouts(run_state).await;
+                    self.scheduler.check_timeouts(run_state).await;
 
-            let ready_jobs = self.find_ready_jobs(ctx, run_state).await?;
+                    let ready_jobs = self.find_ready_jobs(ctx, run_state).await?;
 
-            let active_count = self.scheduler.active_job_count(ctx.run_id()).await;
-            let can_dispatch = self.config.max_concurrent.saturating_sub(active_count);
+                    let active_count = self.scheduler.active_job_count(ctx.run_id()).await;
+                    let can_dispatch = self.config.max_concurrent.saturating_sub(active_count);
 
-            for job in ready_jobs.into_iter().take(can_dispatch) {
-                self.dispatch_job_if_ready(ctx, run_state, job).await?;
-            }
+                    for job in ready_jobs.into_iter().take(can_dispatch) {
+                        self.dispatch_job_if_ready(ctx, run_state, job).await?;
+                    }
 
-            if self.config.fail_fast && run_state.has_failures().await {
-                info!("Fail-fast triggered, cancelling remaining jobs");
-                self.cancel_pending_jobs(ctx, run_state).await?;
-                break;
-            }
+                    if self.config.fail_fast && run_state.has_failures().await {
+                        info!("Fail-fast triggered, cancelling remaining jobs");
+                        self.cancel_pending_jobs(ctx, run_state).await?;
+                        break;
+                    }
 
-            if run_state.is_complete().await {
-                break;
+                    if run_state.is_complete().await {
+                        break;
+                    }
+                }
+                note = completion_rx.recv() => {
+                    let Some(note) = note else {
+                        return Err(EngineError::Internal(
+                            "job completion subscriber disconnected".to_string(),
+                        ));
+                    };
+                    if note.run_id != ctx.run_id() {
+                        continue;
+                    }
+                    if let Err(e) = self.handle_job_completion(note, ctx, run_state).await {
+                        warn!(error = %e, "failed to apply job completion notification");
+                    }
+                }
             }
         }
 
@@ -358,9 +532,89 @@ impl<C: CacheBackend> Executor<C> {
         let job_state = run_state.get_job(&job.id).await
             .ok_or_else(|| EngineError::JobNotFound(job.id))?;
 
-        self.scheduler
+        match self
+            .scheduler
             .dispatch_job(ctx, run_state, job, job_state.job_run_id)
-            .await?;
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(EngineError::NoAvailableAgents { job: j, tags }) => {
+                info!(
+                    job = %j,
+                    ?tags,
+                    "no eligible agent yet; job stays pending until one is available (retrying on next poll)"
+                );
+                Ok(())
+            }
+            Err(EngineError::AffinityScheduling { job: j, reason }) => {
+                error!(job = %j, %reason, "affinity scheduling failed; failing job");
+                run_state
+                    .mark_job_completed(&job.id, false, None, Some(reason))
+                    .await;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// When the controller updates `job_runs` but a JetStream completion is missed (`DeliverPolicy::New`,
+    /// publish failure, etc.), engine `RunState` would never reach `is_complete`. Sync terminal rows from PG.
+    async fn reconcile_terminal_jobs_from_db(
+        &self,
+        ctx: &ExecutionContext,
+        run_state: &RunState,
+    ) -> Result<()> {
+        let repo = JobRunRepo::new(&self.pool);
+        let rows = repo.list_by_run(ctx.run_id()).await?;
+
+        for jr in rows {
+            if !jr.status.is_terminal() {
+                continue;
+            }
+            let Some(js) = run_state.get_job_by_run_id(jr.id).await else {
+                continue;
+            };
+            if run_state.is_job_complete(&js.job_id).await {
+                continue;
+            }
+
+            self.scheduler.forget_active_job(jr.id).await;
+
+            match jr.status {
+                JobStatus::Succeeded => {
+                    run_state
+                        .mark_job_completed(
+                            &js.job_id,
+                            true,
+                            jr.exit_code,
+                            jr.error_message.clone(),
+                        )
+                        .await;
+                }
+                JobStatus::Failed => {
+                    run_state
+                        .mark_job_completed(
+                            &js.job_id,
+                            false,
+                            jr.exit_code,
+                            jr.error_message.clone(),
+                        )
+                        .await;
+                }
+                JobStatus::Cancelled => {
+                    run_state.mark_job_cancelled(&js.job_id).await;
+                }
+                JobStatus::TimedOut => {
+                    run_state.mark_job_timed_out(&js.job_id).await;
+                }
+                JobStatus::Skipped => {
+                    run_state
+                        .mark_job_skipped(&js.job_id, jr.error_message.clone())
+                        .await;
+                }
+                JobStatus::Pending | JobStatus::Queued | JobStatus::Running => {}
+            }
+        }
 
         Ok(())
     }
@@ -394,6 +648,70 @@ impl<C: CacheBackend> Executor<C> {
     /// Request cancellation of a run.
     pub async fn cancel(&self, run_state: &RunState) {
         run_state.request_cancellation().await;
+    }
+}
+
+async fn run_completion_pull_task(
+    jetstream: async_nats::jetstream::Context,
+    org_id: OrganizationId,
+    run_id_filter: RunId,
+    tx: mpsc::Sender<JobCompletionNotification>,
+    completion_horizon: time::OffsetDateTime,
+) {
+    use async_nats::jetstream::consumer::pull::Config;
+
+    loop {
+        let stream = match jetstream.get_stream("COMPLETIONS").await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "get COMPLETIONS stream; retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        let filter_subject = format!("met.completions.{}", org_id.as_uuid());
+        let config = Config {
+            name: Some(format!("engine-{}", uuid::Uuid::new_v4())),
+            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::ByStartTime {
+                start_time: completion_horizon,
+            },
+            filter_subject,
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        };
+        let consumer = match stream.create_consumer(config).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(error = %e, "create ephemeral completion consumer; retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(error = %e, "completion consumer messages(); retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        while let Some(msg) = messages.next().await {
+            let msg = match msg {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(error = %e, "completion pull error");
+                    break;
+                }
+            };
+            if let Ok(note) = parse_completion_message(msg.payload.as_ref()) {
+                if note.run_id == run_id_filter && tx.send(note).await.is_err() {
+                    return;
+                }
+            }
+            let _ = msg.ack().await;
+        }
+        warn!("completion message stream ended; reconnecting");
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -463,6 +781,9 @@ mod tests {
             condition: None,
             source_workflow: None,
             env: Default::default(),
+            affinity_group: None,
+            share_workspace: false,
+            workflow_invocation_id: None,
         }
     }
 
@@ -477,6 +798,7 @@ mod tests {
             secret_refs: Default::default(),
             jobs,
             default_pool_selector: None,
+            expose_workflow_secret_outputs: false,
         }
     }
 

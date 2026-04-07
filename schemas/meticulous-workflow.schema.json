@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gmh/meticulous/schemas/meticulous-workflow.schema.json",
+  "title": "Meticulous reusable workflow",
+  "description": "YAML shape for a reusable workflow (met-parser RawWorkflowDef). Top-level keys use Rust field names (snake_case); job/step keys use kebab-case where noted.",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "version": { "type": "string" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/rawInputDef" }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/rawOutputDef" }
+    },
+    "jobs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rawJob" }
+    }
+  },
+  "$defs": {
+    "rawInputDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Input type; the parser defaults this to string when omitted"
+        },
+        "required": { "type": "boolean" },
+        "default": true,
+        "description": { "type": "string" }
+      }
+    },
+    "rawOutputDef": {
+      "type": "object",
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "rawJob": {
+      "type": "object",
+      "required": ["name", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "id": { "type": "string" },
+        "runs-on": { "$ref": "#/$defs/rawPoolSelector" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rawStep" }
+        },
+        "services": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rawService" }
+        },
+        "depends-on": { "type": "array", "items": { "type": "string" } },
+        "condition": { "type": "string" },
+        "timeout": { "type": "string" },
+        "retry": { "$ref": "#/$defs/rawRetryPolicy" }
+      }
+    },
+    "rawPoolSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "pool": { "type": "string" }
+      }
+    },
+    "rawStep": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "id": { "type": "string" },
+        "run": { "type": "string" },
+        "shell": { "type": "string" },
+        "uses": { "type": "string" },
+        "with": { "type": "object", "additionalProperties": true },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "working-directory": { "type": "string" },
+        "timeout": { "type": "string" },
+        "continue-on-error": { "type": "boolean" }
+      }
+    },
+    "rawService": {
+      "type": "object",
+      "required": ["name", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "image": { "type": "string" },
+        "ports": { "type": "array", "items": { "type": "integer" } },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "health-check": { "$ref": "#/$defs/rawHealthCheck" }
+      }
+    },
+    "rawHealthCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cmd": { "type": "array", "items": { "type": "string" } },
+        "http": { "type": "string" },
+        "tcp": { "type": "integer" },
+        "interval": { "type": "string" },
+        "timeout": { "type": "string" },
+        "retries": { "type": "integer" }
+      }
+    },
+    "rawRetryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "backoff": { "type": "string" }
+      }
+    }
+  }
+}

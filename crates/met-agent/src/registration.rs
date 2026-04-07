@@ -133,7 +133,13 @@ impl AgentRegistration {
             arch: normalize_arch(std::env::consts::ARCH),
             labels: self.config.labels.clone(),
             pool_tags: self.config.pool_tags.clone(),
+            max_jobs: self
+                .config
+                .max_jobs
+                .unwrap_or(self.config.concurrency.max(1)),
         };
+
+        let k = |k: &str| std::env::var(k).unwrap_or_default();
 
         // Create security bundle proto
         let security_bundle = SecurityBundle {
@@ -152,6 +158,9 @@ impl AgentRegistration {
             logical_cpus: bundle.logical_cpus,
             memory_total_bytes: bundle.memory_total_bytes,
             egress_public_ip: bundle.egress_public_ip.clone(),
+            kubernetes_pod_uid: k("MET_K8S_POD_UID"),
+            kubernetes_namespace: k("MET_K8S_NAMESPACE"),
+            kubernetes_node_name: k("MET_K8S_NODE_NAME"),
         };
 
         // Send registration request

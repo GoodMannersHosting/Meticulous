@@ -31,6 +31,7 @@ ADRs capture **one decision** each: context, the choice, consequences, and (for 
 | [010-project-and-scm-data-model.md](010-project-and-scm-data-model.md) | Project membership, secret scope hierarchy, SCM repo attachment | Proposed | 010, 020, 060 |
 | [011-remote-cache-key-derivation.md](011-remote-cache-key-derivation.md) | Remote cache key derivation and tenant isolation | Proposed | 030, 050 |
 | [012-custom-execution-engine.md](012-custom-execution-engine.md) | Custom execution engine (Tekton rejection and criteria) | Accepted | 030, 040, 110 |
+| [013-project-webhook-multi-pipeline-routing.md](013-project-webhook-multi-pipeline-routing.md) | Project-level SCM webhooks → one or many pipelines | Proposed | 020, 010 |
 
 Further ADRs to write: Bitbucket signature verification implementation, encrypted-at-rest webhook secrets (column-level KMS), pre-populated build-tool volume strategy (from random-thoughts.md).
 

@@ -5,7 +5,7 @@
 //! - Compute SHA256 checksums of executed binaries
 //! - Report execution metadata for security auditing
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -53,6 +53,8 @@ pub struct ExecutedBinaryRecord {
     pub last_executed_at: DateTime<Utc>,
     /// Step IDs where this binary was executed.
     pub step_ids: Vec<String>,
+    /// Step run IDs (`srun_…`) for rows that should join `step_runs` in the API.
+    pub step_run_ids: Vec<String>,
 }
 
 /// Job execution metadata summary.
@@ -64,6 +66,17 @@ pub struct JobExecutionMetadata {
     pub total_processes_spawned: u64,
     /// Maximum depth of the process tree.
     pub execution_tree_depth: u32,
+}
+
+/// SHA-256 placeholder for binaries **inferred from the step script** (not observed via `/proc`).
+/// UI may treat this as “referenced in run script”. Collapses to a real hash if the same path
+/// is later observed during execution ([`merge_execution_metadata`] merges by path).
+pub const SCRIPT_INFERRED_BINARY_SHA256: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+#[inline]
+pub fn is_script_inferred_sha256(s: &str) -> bool {
+    s == SCRIPT_INFERRED_BINARY_SHA256
 }
 
 /// Cache key for binary checksums.
@@ -100,6 +113,8 @@ pub struct ProcessWatcher {
     /// Polling interval (reserved for future eBPF-based implementation).
     #[allow(dead_code)]
     poll_interval: Duration,
+    /// Dedupe keys for Linux `/proc/net/tcp*` flow telemetry (per watched step).
+    net_flow_seen: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ProcessWatcher {
@@ -112,6 +127,7 @@ impl ProcessWatcher {
             current_step_id: Arc::new(RwLock::new(None)),
             active: Arc::new(RwLock::new(false)),
             poll_interval: Duration::from_millis(100),
+            net_flow_seen: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -120,6 +136,7 @@ impl ProcessWatcher {
         self.root_pid = Some(pid);
         *self.current_step_id.write().await = Some(step_id.to_string());
         *self.active.write().await = true;
+        self.net_flow_seen.write().await.clear();
 
         debug!(pid, step_id, "started process watching");
 
@@ -131,7 +148,33 @@ impl ProcessWatcher {
         *self.active.write().await = false;
         *self.current_step_id.write().await = None;
         self.root_pid = None;
+        self.net_flow_seen.write().await.clear();
         debug!("stopped process watching");
+    }
+
+    /// Pid → executable path + SHA-256 for processes tracked in the current step.
+    pub(crate) async fn tracked_pid_exe_map(&self) -> HashMap<u32, (PathBuf, String)> {
+        let tracked = self.tracked_processes.read().await;
+        tracked
+            .iter()
+            .map(|p| (p.pid, (p.exe_path.clone(), p.exe_sha256.clone())))
+            .collect()
+    }
+
+    /// Returns `true` if this dedupe key was newly inserted (caller should emit telemetry).
+    pub(crate) async fn net_flow_key_insert_if_new(&self, key: String) -> bool {
+        self.net_flow_seen.write().await.insert(key)
+    }
+
+    #[inline]
+    pub(crate) async fn is_watching_active(&self) -> bool {
+        *self.active.read().await
+    }
+
+    /// Root PID passed to [`Self::start_watching`], if any (used for `/proc` correlation).
+    #[inline]
+    pub(crate) fn watch_root_pid(&self) -> Option<u32> {
+        self.root_pid
     }
 
     /// Poll for new child processes and track them.
@@ -216,7 +259,7 @@ impl ProcessWatcher {
     }
 
     /// Aggregate execution metadata for a job.
-    pub async fn aggregate_metadata(&self, step_id: &str) -> JobExecutionMetadata {
+    pub async fn aggregate_metadata(&self, step_id: &str, step_run_id: &str) -> JobExecutionMetadata {
         let tracked = self.tracked_processes.read().await;
 
         // Group by (path, sha256)
@@ -244,6 +287,10 @@ impl ProcessWatcher {
                     if !record.step_ids.contains(&step_id.to_string()) {
                         record.step_ids.push(step_id.to_string());
                     }
+                    if !step_run_id.is_empty() && !record.step_run_ids.contains(&step_run_id.to_string())
+                    {
+                        record.step_run_ids.push(step_run_id.to_string());
+                    }
                 })
                 .or_insert_with(|| ExecutedBinaryRecord {
                     path: process.exe_path.to_string_lossy().to_string(),
@@ -252,6 +299,11 @@ impl ProcessWatcher {
                     first_executed_at: process.started_at,
                     last_executed_at: process.started_at,
                     step_ids: vec![step_id.to_string()],
+                    step_run_ids: if step_run_id.is_empty() {
+                        vec![]
+                    } else {
+                        vec![step_run_id.to_string()]
+                    },
                 });
         }
 
@@ -268,6 +320,7 @@ impl ProcessWatcher {
         self.root_pid = None;
         *self.active.write().await = false;
         *self.current_step_id.write().await = None;
+        self.net_flow_seen.write().await.clear();
     }
 
     /// Compute SHA-256 checksum, using cache if available.
@@ -551,7 +604,9 @@ pub async fn compute_file_sha256(path: &Path) -> Result<String> {
 pub fn merge_execution_metadata(
     step_metadata: Vec<(String, JobExecutionMetadata)>,
 ) -> JobExecutionMetadata {
-    let mut by_binary: HashMap<(String, String), ExecutedBinaryRecord> = HashMap::new();
+    use std::collections::hash_map::Entry;
+
+    let mut by_path: HashMap<String, ExecutedBinaryRecord> = HashMap::new();
     let mut total_processes = 0u64;
     let mut max_depth = 0u32;
 
@@ -560,12 +615,18 @@ pub fn merge_execution_metadata(
         max_depth = max_depth.max(metadata.execution_tree_depth);
 
         for binary in metadata.executed_binaries {
-            let key = (binary.path.clone(), binary.sha256.clone());
-
-            by_binary
-                .entry(key)
-                .and_modify(|record| {
+            match by_path.entry(binary.path.clone()) {
+                Entry::Vacant(v) => {
+                    v.insert(binary);
+                }
+                Entry::Occupied(mut o) => {
+                    let record = o.get_mut();
                     record.execution_count += binary.execution_count;
+                    if is_script_inferred_sha256(&record.sha256)
+                        && !is_script_inferred_sha256(&binary.sha256)
+                    {
+                        record.sha256 = binary.sha256.clone();
+                    }
                     if binary.first_executed_at < record.first_executed_at {
                         record.first_executed_at = binary.first_executed_at;
                     }
@@ -577,16 +638,21 @@ pub fn merge_execution_metadata(
                             record.step_ids.push(sid.clone());
                         }
                     }
+                    for srid in &binary.step_run_ids {
+                        if !record.step_run_ids.contains(srid) {
+                            record.step_run_ids.push(srid.clone());
+                        }
+                    }
                     if !record.step_ids.contains(&step_id) {
                         record.step_ids.push(step_id.clone());
                     }
-                })
-                .or_insert(binary);
+                }
+            }
         }
     }
 
     JobExecutionMetadata {
-        executed_binaries: by_binary.into_values().collect(),
+        executed_binaries: by_path.into_values().collect(),
         total_processes_spawned: total_processes,
         execution_tree_depth: max_depth,
     }
@@ -628,6 +694,7 @@ mod tests {
                 first_executed_at: Utc::now(),
                 last_executed_at: Utc::now(),
                 step_ids: vec!["step1".to_string()],
+                step_run_ids: vec![],
             }],
             total_processes_spawned: 1,
             execution_tree_depth: 1,
@@ -642,6 +709,7 @@ mod tests {
                     first_executed_at: Utc::now(),
                     last_executed_at: Utc::now(),
                     step_ids: vec!["step2".to_string()],
+                    step_run_ids: vec![],
                 },
                 ExecutedBinaryRecord {
                     path: "/bin/ls".to_string(),
@@ -650,6 +718,7 @@ mod tests {
                     first_executed_at: Utc::now(),
                     last_executed_at: Utc::now(),
                     step_ids: vec!["step2".to_string()],
+                    step_run_ids: vec![],
                 },
             ],
             total_processes_spawned: 3,

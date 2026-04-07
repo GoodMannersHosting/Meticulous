@@ -26,9 +26,15 @@ impl<'a> PipelineRepo<'a> {
 
         let pipeline = sqlx::query_as::<_, Pipeline>(
             r#"
-            INSERT INTO pipelines (id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $8)
-            RETURNING id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at
+            INSERT INTO pipelines (
+                id, project_id, name, slug, description, definition, definition_path,
+                scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                enabled, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, $14)
+            RETURNING id, project_id, name, slug, description, definition, definition_path,
+                      scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                      enabled, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -38,6 +44,12 @@ impl<'a> PipelineRepo<'a> {
         .bind(&input.description)
         .bind(&input.definition)
         .bind(&input.definition_path)
+        .bind(&input.scm_provider)
+        .bind(&input.scm_repository)
+        .bind(&input.scm_ref)
+        .bind(&input.scm_path)
+        .bind(&input.scm_credentials_secret_path)
+        .bind(&input.scm_revision)
         .bind(now)
         .fetch_one(self.pool)
         .await?;
@@ -49,7 +61,9 @@ impl<'a> PipelineRepo<'a> {
     pub async fn get(&self, id: PipelineId) -> Result<Pipeline> {
         sqlx::query_as::<_, Pipeline>(
             r#"
-            SELECT id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at
+            SELECT id, project_id, name, slug, description, definition, definition_path,
+                   scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                   enabled, created_at, updated_at
             FROM pipelines
             WHERE id = $1
             "#,
@@ -64,7 +78,9 @@ impl<'a> PipelineRepo<'a> {
     pub async fn get_by_slug(&self, project_id: ProjectId, slug: &str) -> Result<Pipeline> {
         sqlx::query_as::<_, Pipeline>(
             r#"
-            SELECT id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at
+            SELECT id, project_id, name, slug, description, definition, definition_path,
+                   scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                   enabled, created_at, updated_at
             FROM pipelines
             WHERE project_id = $1 AND slug = $2
             "#,
@@ -85,7 +101,9 @@ impl<'a> PipelineRepo<'a> {
     ) -> Result<Vec<Pipeline>> {
         let pipelines = sqlx::query_as::<_, Pipeline>(
             r#"
-            SELECT id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at
+            SELECT id, project_id, name, slug, description, definition, definition_path,
+                   scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                   enabled, created_at, updated_at
             FROM pipelines
             WHERE project_id = $1
             ORDER BY created_at DESC
@@ -109,13 +127,49 @@ impl<'a> PipelineRepo<'a> {
         let description = input.description.as_ref().or(existing.description.as_ref());
         let definition = input.definition.as_ref().unwrap_or(&existing.definition);
         let enabled = input.enabled.unwrap_or(existing.enabled);
+        let scm_provider = input
+            .scm_provider
+            .clone()
+            .or_else(|| existing.scm_provider.clone());
+        let scm_repository = input
+            .scm_repository
+            .clone()
+            .or_else(|| existing.scm_repository.clone());
+        let scm_ref = input
+            .scm_ref
+            .clone()
+            .or_else(|| existing.scm_ref.clone());
+        let scm_path = input
+            .scm_path
+            .clone()
+            .or_else(|| existing.scm_path.clone());
+        let scm_credentials = input
+            .scm_credentials_secret_path
+            .clone()
+            .or_else(|| existing.scm_credentials_secret_path.clone());
+        let scm_revision = input
+            .scm_revision
+            .clone()
+            .or_else(|| existing.scm_revision.clone());
 
         let pipeline = sqlx::query_as::<_, Pipeline>(
             r#"
             UPDATE pipelines
-            SET name = $2, description = $3, definition = $4, enabled = $5, updated_at = NOW()
+            SET name = $2,
+                description = $3,
+                definition = $4,
+                enabled = $5,
+                scm_provider = $6,
+                scm_repository = $7,
+                scm_ref = $8,
+                scm_path = $9,
+                scm_credentials_secret_path = $10,
+                scm_revision = $11,
+                updated_at = NOW()
             WHERE id = $1
-            RETURNING id, project_id, name, slug, description, definition, definition_path, enabled, created_at, updated_at
+            RETURNING id, project_id, name, slug, description, definition, definition_path,
+                      scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                      enabled, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -123,6 +177,12 @@ impl<'a> PipelineRepo<'a> {
         .bind(description)
         .bind(definition)
         .bind(enabled)
+        .bind(scm_provider)
+        .bind(scm_repository)
+        .bind(scm_ref)
+        .bind(scm_path)
+        .bind(scm_credentials)
+        .bind(scm_revision)
         .fetch_one(self.pool)
         .await?;
 

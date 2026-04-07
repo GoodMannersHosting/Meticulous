@@ -126,7 +126,25 @@ class ApiClient {
 
 			let apiError: ApiError;
 			try {
-				apiError = await response.json();
+				const raw = (await response.json()) as { error?: ApiError } | ApiError;
+				if (
+					raw &&
+					typeof raw === 'object' &&
+					'error' in raw &&
+					raw.error &&
+					typeof raw.error.message === 'string'
+				) {
+					apiError = raw.error;
+				} else {
+					apiError = raw as ApiError;
+				}
+				if (!apiError?.message) {
+					apiError = {
+						code: apiError?.code || 'UNKNOWN_ERROR',
+						message: response.statusText || 'Request failed',
+						details: apiError?.details
+					};
+				}
 			} catch {
 				apiError = {
 					code: 'UNKNOWN_ERROR',
@@ -137,11 +155,16 @@ class ApiClient {
 			throw ApiClientError.fromApiError(apiError, response.status);
 		}
 
-		if (response.status === 204) {
+		if (response.status === 204 || response.status === 205) {
 			return undefined as T;
 		}
 
-		return response.json();
+		const text = await response.text();
+		if (!text.trim()) {
+			return undefined as T;
+		}
+
+		return JSON.parse(text) as T;
 	}
 
 	async get<T>(endpoint: string, config?: RequestConfig): Promise<T> {
@@ -218,9 +241,17 @@ export const apiMethods = {
 
 	// Dashboard
 	dashboard: {
-		stats: () => api.get<import('./types').DashboardStats>('/api/v1/dashboard/stats'),
-		recentRuns: (limit = 10) =>
-			api.get<import('./types').RecentRun[]>('/api/v1/dashboard/recent-runs', { params: { limit } })
+		stats: (windowKey?: string) =>
+			api.get<import('./types').DashboardStats>('/api/v1/dashboard/stats', {
+				params: windowKey ? { window: windowKey } : {}
+			}),
+		recentRuns: (limit = 10, windowKey?: string) =>
+			api.get<import('./types').RecentRun[]>('/api/v1/dashboard/recent-runs', {
+				params: {
+					limit,
+					...(windowKey ? { window: windowKey } : {})
+				}
+			})
 	},
 
 	// Projects
@@ -231,9 +262,52 @@ export const apiMethods = {
 		getBySlug: (slug: string) => api.get<import('./types').Project>(`/api/v1/projects/by-slug/${slug}`),
 		create: (data: import('./types').CreateProjectInput) =>
 			api.post<import('./types').Project>('/api/v1/projects', data),
-		update: (id: string, data: Partial<import('./types').Project>) =>
+		update: (id: string, data: import('./types').UpdateProjectInput) =>
 			api.patch<import('./types').Project>(`/api/v1/projects/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
+	},
+
+	/** Project-scoped webhook registrations (SCM + generic fan-out). */
+	projectWebhooks: {
+		list: (projectId: string) =>
+			api.get<import('./types').ProjectWebhookRegistration[]>(`/api/v1/projects/${projectId}/webhooks`),
+		setup: (projectId: string, body: import('./types').SetupScmWebhookInput) =>
+			api.post<import('./types').SetupScmWebhookResponse>(
+				`/api/v1/projects/${projectId}/scm/setup`,
+				body
+			),
+		patch: (projectId: string, registrationId: string, body: import('./types').PatchProjectWebhookInput) =>
+			api.patch<import('./types').ProjectWebhookRegistration>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}`,
+				body
+			),
+		rotateInboundSecret: (projectId: string, registrationId: string) =>
+			api.post<import('./types').RotateProjectWebhookSecretResponse>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/rotate-inbound-secret`,
+				{}
+			),
+		clearInboundSecret: (projectId: string, registrationId: string) =>
+			api.post<import('./types').ProjectWebhookRegistration>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/clear-inbound-secret`,
+				{}
+			),
+		listTargets: (projectId: string, registrationId: string) =>
+			api.get<import('./types').WebhookRegistrationTargetRow[]>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets`
+			),
+		addTarget: (
+			projectId: string,
+			registrationId: string,
+			body: { pipeline_id: string; enabled?: boolean; filter_config?: Record<string, unknown> }
+		) =>
+			api.post<import('./types').WebhookRegistrationTargetRow>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets`,
+				body
+			),
+		deleteTarget: (projectId: string, registrationId: string, targetId: string) =>
+			api.delete<void>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets/${targetId}`
+			)
 	},
 
 	// Platform stored secrets (encrypted at rest; values never returned)
@@ -241,6 +315,17 @@ export const apiMethods = {
 		list: (projectId: string, params?: { pipeline_id?: string }) =>
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secrets`, {
 				params
+			}),
+		listVersions: (
+			projectId: string,
+			params: { path: string; pipeline_id?: string; organization_wide?: boolean }
+		) =>
+			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secret-versions`, {
+				params: {
+					path: params.path,
+					...(params.pipeline_id ? { pipeline_id: params.pipeline_id } : {}),
+					...(params.organization_wide ? { organization_wide: true } : {})
+				}
 			}),
 		create: (
 			projectId: string,
@@ -250,11 +335,76 @@ export const apiMethods = {
 				value: string;
 				description?: string;
 				pipeline_id?: string;
+				/** `"organization"` for org-wide secrets (requires org admin) */
+				scope?: string;
+				/** Org-wide only; default true. When false, secret is not exposed to pipelines/projects (e.g. workflow catalog import from source code only). */
+				propagate_to_projects?: boolean;
 			}
 		) => api.post<StoredSecret>(`/api/v1/projects/${projectId}/stored-secrets`, body),
 		rotate: (id: string, value: string) =>
 			api.post<StoredSecret>(`/api/v1/stored-secrets/${id}/rotate`, { value }),
-		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`)
+		activateVersion: (id: string) =>
+			api.post<{
+				message: string;
+				invalidated_newer_versions: number;
+				activated: StoredSecret;
+			}>(`/api/v1/stored-secrets/${id}/activate`, {}),
+		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`),
+		purgeVersionPermanent: (id: string) =>
+			api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}/permanent`)
+	},
+
+	// Environment variables (project / pipeline scope)
+	variables: {
+		list: (projectId: string) =>
+			api.get<import('./types').PaginatedResponse<import('./types').ProjectVariable>>(
+				`/api/v1/projects/${projectId}/variables`
+			),
+		create: (
+			projectId: string,
+			body: {
+				name: string;
+				value: string;
+				is_sensitive?: boolean;
+				pipeline_id?: string;
+				scope?: string;
+			}
+		) =>
+			api.post<import('./types').ProjectVariable>(`/api/v1/projects/${projectId}/variables`, {
+				scope: 'project',
+				...body
+			}),
+		update: (id: string, body: { name?: string; value?: string; is_sensitive?: boolean }) =>
+			api.patch<import('./types').ProjectVariable>(`/api/v1/variables/${id}`, body),
+		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/variables/${id}`)
+	},
+
+	/** Cross-project hub: variables and stored secrets with search + cursor pagination */
+	workspaceConfig: {
+		listVariables: (params?: {
+			q?: string;
+			project_id?: string;
+			pipeline_id?: string;
+			scope_level?: import('./types').WorkspaceScopeLevel;
+			cursor?: string;
+			per_page?: number;
+		}) =>
+			api.get<import('./types').PaginatedResponse<import('./types').WorkspaceVariableListItem>>(
+				'/api/v1/workspace/variables',
+				{ params }
+			),
+		listStoredSecrets: (params?: {
+			q?: string;
+			project_id?: string;
+			pipeline_id?: string;
+			scope_level?: import('./types').WorkspaceScopeLevel;
+			cursor?: string;
+			per_page?: number;
+		}) =>
+			api.get<import('./types').PaginatedResponse<import('./types').WorkspaceStoredSecretListItem>>(
+				'/api/v1/workspace/stored-secrets',
+				{ params }
+			)
 	},
 
 	// Pipelines
@@ -266,11 +416,109 @@ export const apiMethods = {
 			api.get<import('./types').Pipeline>(`/api/v1/pipelines/by-slug/${projectId}/${slug}`),
 		create: (data: import('./types').CreatePipelineInput) =>
 			api.post<import('./types').Pipeline>('/api/v1/pipelines', data),
-		update: (id: string, data: Partial<import('./types').Pipeline>) =>
-			api.patch<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
+		importGit: (projectId: string, data: import('./types').ImportPipelineGitInput) =>
+			api.post<import('./types').Pipeline>(
+				`/api/v1/projects/${projectId}/pipelines/import-git`,
+				data
+			),
+		syncFromGit: (id: string, data?: { git_ref?: string }) =>
+			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/sync-from-git`, data ?? {}),
+		update: (id: string, data: import('./types').UpdatePipelineInput) =>
+			api.put<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
-			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {})
+			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
+		workflowDiagnostics: (
+			id: string,
+			params?: { commit_sha?: string; branch?: string }
+		) =>
+			api.get<import('./types').WorkflowDiagnosticItem[]>(
+				`/api/v1/pipelines/${id}/workflow-diagnostics`,
+				{ params }
+			)
+	},
+
+	triggers: {
+		list: (pipelineId: string) =>
+			api.get<import('./types').PipelineTrigger[]>(`/api/v1/pipelines/${pipelineId}/triggers`),
+		create: (pipelineId: string, body: import('./types').CreatePipelineTriggerInput) =>
+			api.post<import('./types').PipelineTrigger>(`/api/v1/pipelines/${pipelineId}/triggers`, body),
+		update: (triggerId: string, body: import('./types').UpdatePipelineTriggerInput) =>
+			api.patch<import('./types').PipelineTrigger>(`/api/v1/triggers/${triggerId}`, body),
+		delete: (triggerId: string) => api.delete<void>(`/api/v1/triggers/${triggerId}`)
+	},
+
+	// Org workflow catalog (global reusable workflows)
+	wfCatalog: {
+		list: (params?: { status?: string; limit?: number; cursor?: string }) =>
+			api.get<import('./types').PaginatedResponse<import('./types').CatalogWorkflow>>(
+				'/api/v1/workflows/catalog',
+				{ params }
+			),
+		/** Import using organization-scoped GitHub App secrets only (`org:admin`). */
+		importGitOrganization: (body: {
+			repository: string;
+			git_ref: string;
+			workflow_path: string;
+			credentials_path: string;
+		}) =>
+			api.post<import('./types').CatalogWorkflow>('/api/v1/workflows/catalog/import-git', body),
+		/** List branches/tags (and optional recent commits) for catalog sync. Org: `org:admin`. */
+		upstreamRefSearchOrganization: (body: {
+			repository: string;
+			credentials_path: string;
+			q?: string;
+			commits_for_ref?: string;
+		}) =>
+			api.post<import('./types').CatalogUpstreamRefSearchResponse>(
+				'/api/v1/workflows/catalog/upstream-ref-search',
+				body
+			),
+		upstreamRefSearchProject: (
+			projectId: string,
+			body: {
+				repository: string;
+				credentials_path: string;
+				q?: string;
+				commits_for_ref?: string;
+			}
+		) =>
+			api.post<import('./types').CatalogUpstreamRefSearchResponse>(
+				`/api/v1/projects/${projectId}/workflows/catalog/upstream-ref-search`,
+				body
+			),
+		importGit: (
+			projectId: string,
+			body: {
+				repository: string;
+				git_ref: string;
+				workflow_path: string;
+				credentials_path: string;
+			}
+		) =>
+			api.post<import('./types').CatalogWorkflow>(
+				`/api/v1/projects/${projectId}/workflows/catalog/import-git`,
+				body
+			),
+		catalogVersions: (
+			workflowId: string,
+			params?: { q?: string; limit?: number; per_page?: number; cursor?: string }
+		) =>
+			api.get<import('./types').CatalogVersionsPage>(
+				`/api/v1/workflows/${workflowId}/catalog-versions`,
+				{ params }
+			),
+		get: (id: string) => api.get<import('./types').CatalogWorkflow>(`/api/v1/workflows/${id}`),
+		/** Global (execution-gated) + project-scoped workflows for pipeline authoring */
+		listAvailableForProject: (projectId: string) =>
+			api.get<import('./types').ProjectWorkflowsAvailable>(
+				`/api/v1/projects/${projectId}/workflows/available`
+			)
+	},
+
+	artifacts: {
+		sbom: (runId: string) =>
+			api.get<import('./types').SbomApiResponse>(`/api/v1/runs/${runId}/sbom`)
 	},
 
 	// Runs
@@ -281,8 +529,24 @@ export const apiMethods = {
 		cancel: (id: string) => api.post<{ run_id: string; status: string; message: string }>(`/api/v1/runs/${id}/cancel`),
 		retry: (id: string) => api.post<{ original_run_id: string; new_run_id: string; run_number: number }>(`/api/v1/runs/${id}/retry`),
 		jobs: (runId: string) => api.get<import('./types').JobRun[]>(`/api/v1/runs/${runId}/jobs`),
+		dag: (runId: string) => api.get<import('./types').RunDagResponse>(`/api/v1/runs/${runId}/dag`),
+		footprint: (runId: string) =>
+			api.get<import('./types').RunFootprintResponse>(`/api/v1/runs/${runId}/footprint`),
+		jobRunSnapshots: (runId: string, jobRunId: string) =>
+			api.get<import('./types').JobRunSnapshotsResponse>(
+				`/api/v1/runs/${runId}/jobs/${jobRunId}/snapshots`
+			),
+		assignments: (runId: string, jobRunId: string) =>
+			api.get<import('./types').JobAssignment[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/assignments`),
 		logs: (runId: string, jobRunId: string) =>
-			api.get<{ lines: import('./types').LogLinePayload[] }>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`)
+			api.get<{
+				content?: string;
+				lines?: import('./types').LogLinePayload[];
+				offset?: number;
+				has_more?: boolean;
+			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`),
+		jobSteps: (runId: string, jobRunId: string) =>
+			api.get<import('./types').StepRun[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/steps`)
 	},
 
 	// Agents
@@ -343,6 +607,30 @@ export const apiMethods = {
 			cancelDeletion: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/cancel-deletion`),
 			forceDelete: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/force-delete`)
 		},
+		workflows: {
+			approve: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/approve`,
+					{}
+				),
+			reject: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/reject`,
+					{}
+				),
+			trust: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/trust`,
+					{}
+				),
+			untrust: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/untrust`,
+					{}
+				),
+			delete: (workflowId: string) =>
+				api.post<{ ok: boolean }>(`/admin/workflows/${workflowId}/delete`, {})
+		},
 		// Auth provider management
 		authProviders: {
 			list: () => api.get<import('./types').AuthProviderResponse[]>('/admin/auth-providers'),
@@ -361,6 +649,89 @@ export const apiMethods = {
 				delete: (providerId: string, mappingId: string) => 
 					api.delete<{ message: string }>(`/admin/auth-providers/${providerId}/group-mappings/${mappingId}`)
 			}
+		},
+		ops: {
+			jobQueue: (params?: { limit?: number }) =>
+				api.get<{ count: number; data: JobQueueEntry[] }>('/admin/ops/job-queue', { params })
+		},
+		/** Meticulous Apps (machine / integration auth). */
+		meticulousApps: {
+			list: () => api.get<MeticulousAppSummary[]>('/admin/meticulous-apps'),
+			create: (data: { name: string; description?: string }) =>
+				api.post<CreateMeticulousAppResponse>('/admin/meticulous-apps', data),
+			get: (applicationId: string) =>
+				api.get<MeticulousAppSummary>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}`
+				),
+			addKey: (applicationId: string) =>
+				api.post<{ key_id: string; private_key_pem: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys`,
+					{}
+				),
+			revokeKey: (applicationId: string, keyId: string) =>
+				api.post<{ message: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys/${encodeURIComponent(keyId)}/revoke`,
+					{}
+				),
+			listInstallations: (applicationId: string) =>
+				api.get<MeticulousAppInstallationRow[]>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`
+				),
+			createInstallation: (
+				applicationId: string,
+				body: { project_id: string; permissions: string[] }
+			) =>
+				api.post<MeticulousAppInstallationRow>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`,
+					body
+				),
+			revokeInstallation: (applicationId: string, installationId: string) =>
+				api.post<{ message: string }>(
+					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations/${encodeURIComponent(installationId)}/revoke`,
+					{}
+				)
 		}
 	}
 };
+
+/** Admin: Meticulous App row (no secrets). */
+export interface MeticulousAppSummary {
+	id: string;
+	application_id: string;
+	name: string;
+	description?: string | null;
+	created_at: string;
+}
+
+/** Admin: response when creating an app or rotating a key (private key once). */
+export interface CreateMeticulousAppResponse {
+	app: MeticulousAppSummary;
+	key_id: string;
+	private_key_pem: string;
+}
+
+/** Admin: app installation row. */
+export interface MeticulousAppInstallationRow {
+	id: string;
+	project_id: string;
+	permissions: string[];
+	created_at: string;
+	revoked_at?: string | null;
+}
+
+/** Admin job queue row (`/admin/ops/job-queue`). */
+export interface JobQueueEntry {
+	job_run_id?: string;
+	run_id: string;
+	job_id?: string;
+	job_name: string;
+	job_status: string;
+	attempt: number;
+	job_run_created_at: string;
+	run_number: number;
+	run_status: string;
+	pipeline_id: string;
+	pipeline_name: string;
+	project_id: string;
+	project_slug: string;
+}

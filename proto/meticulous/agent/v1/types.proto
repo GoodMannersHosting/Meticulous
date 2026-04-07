@@ -3,6 +3,7 @@ syntax = "proto3";
 package meticulous.agent.v1;
 
 import "meticulous/common/v1/types.proto";
+import "meticulous/controller/v1/controller.proto";
 
 // Agent registration information.
 message AgentInfo {
@@ -59,6 +60,10 @@ message SecurityBundle {
     uint64 memory_total_bytes = 14;
     // Outbound (egress) public IPv4/IPv6 as seen by an external service, when discoverable.
     string egress_public_ip = 15;
+    // Kubernetes correlation (optional; set by operator / downward API).
+    string kubernetes_pod_uid = 16;
+    string kubernetes_namespace = 17;
+    string kubernetes_node_name = 18;
 }
 
 // Type of execution environment.
@@ -79,6 +84,8 @@ message AgentCapabilities {
     repeated string labels = 3;
     // Pool tags for NATS subject subscriptions.
     repeated string pool_tags = 4;
+    // Maximum concurrent jobs (and optional lifetime cap when controller enforces MET_AGENT_MAX_JOBS).
+    int32 max_jobs = 5;
 }
 
 // Resource utilization snapshot.
@@ -138,6 +145,14 @@ enum LogStream {
     LOG_STREAM_UNSPECIFIED = 0;
     LOG_STREAM_STDOUT = 1;
     LOG_STREAM_STDERR = 2;
+    // UTF-8 JSON: `ExecBinaryTelemetry` (path, sha256, step_sequence, pid, ppid) redacted before wire.
+    LOG_STREAM_EXEC_BINARY = 3;
+    // UTF-8 JSON: sanitized syscall record (nr/name, outcome, pid/tid) — never raw pointers / argv.
+    LOG_STREAM_SYSCALL = 4;
+    // Bounded runtime script evidence (audit + truncation metadata in JSON).
+    LOG_STREAM_RUNTIME_SCRIPT = 5;
+    // UTF-8 JSON network flow: src/dst IP+port, protocol, direction, pid, optional binary_path + binary_sha256 (best-effort association).
+    LOG_STREAM_NETWORK_FLOW = 6;
 }
 
 // Job status update from agent.
@@ -154,6 +169,12 @@ message JobStatusUpdate {
     meticulous.common.v1.Timestamp timestamp = 5;
     // Execution metadata (populated on job completion).
     optional JobExecutionMetadata execution_metadata = 6;
+    // Agent reporting this update (used when marking job running).
+    optional string agent_id = 7;
+    // CycloneDX JSON (UTF-8) written under the job workspace (e.g. `sbom.cdx.json`); optional on terminal updates.
+    optional string sbom_cyclonedx_json = 8;
+    // Declared workflow outputs for this job (public map + wrapped secrets); see design/workflow-invocation-outputs.md.
+    optional meticulous.controller.v1.WorkflowInvocationOutputs workflow_invocation_outputs = 9;
 }
 
 // Step status update from agent.
@@ -186,6 +207,8 @@ message ExecutedBinary {
     meticulous.common.v1.Timestamp last_executed_at = 5;
     // Step IDs where this binary was executed.
     repeated string step_ids = 6;
+    // Step run IDs ([`meticulous.common`]) for correlation with `step_runs` (footprint step name).
+    repeated string step_run_ids = 7;
 }
 
 // Execution metadata collected during job run.

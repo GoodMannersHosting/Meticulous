@@ -38,6 +38,9 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     /// When the user was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Last successful interactive login (password or OAuth).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_login_at: Option<DateTime<Utc>>,
     /// Soft-delete timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
@@ -65,6 +68,7 @@ impl User {
             external_id: None,
             created_at: now,
             updated_at: now,
+            last_login_at: None,
             deleted_at: None,
         }
     }

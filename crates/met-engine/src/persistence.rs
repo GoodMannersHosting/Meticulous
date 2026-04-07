@@ -12,6 +12,14 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{EngineError, Result};
 
+/// Content fingerprints and workflow reference recorded on each `job_run` (pipeline body is shared across jobs in the same run).
+#[derive(Debug, Clone)]
+pub struct JobRunSourceRefs {
+    pub pipeline_definition_sha256: [u8; 32],
+    pub workflow_definition_sha256: Option<[u8; 32]>,
+    pub source_workflow: Option<serde_json::Value>,
+}
+
 /// Trait for persisting run state to storage.
 #[async_trait]
 pub trait RunPersistence: Send + Sync {
@@ -23,6 +31,14 @@ pub trait RunPersistence: Send + Sync {
         org_id: OrganizationId,
         triggered_by: &str,
         trace_id: uuid::Uuid,
+    ) -> Result<()>;
+
+    /// Backfill org/trace on a run row created elsewhere (e.g. API `RunRepo::create`).
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
     ) -> Result<()>;
 
     /// Update run status.
@@ -43,7 +59,12 @@ pub trait RunPersistence: Send + Sync {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
+        output_wrap_x25519_secret: [u8; 32],
     ) -> Result<()>;
+
+    /// Mark job as queued after dispatch is successfully published (`pending` or already `queued` only).
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()>;
 
     /// Update job run status.
     async fn update_job_status(&self, job_run_id: JobRunId, status: JobStatus) -> Result<()>;
@@ -159,6 +180,32 @@ impl RunPersistence for PostgresRunPersistence {
     }
 
     #[instrument(skip(self))]
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE runs
+            SET org_id = COALESCE(org_id, $2),
+                trace_id = COALESCE(trace_id, $3)
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id.as_uuid())
+        .bind(org_id.as_uuid())
+        .bind(trace_id)
+        .execute(&self.pool)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+        debug!(%run_id, "prepared existing run row for engine");
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
     async fn update_run_status(&self, run_id: RunId, status: RunStatus) -> Result<()> {
         let now = Utc::now();
         
@@ -216,13 +263,19 @@ impl RunPersistence for PostgresRunPersistence {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
+        output_wrap_x25519_secret: [u8; 32],
     ) -> Result<()> {
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
-            INSERT INTO job_runs (id, run_id, job_id, job_name, status, attempt, created_at)
-            VALUES ($1, $2, $3, $4, 'pending', 1, $5)
+            INSERT INTO job_runs (
+                id, run_id, job_id, job_name, status, attempt, created_at,
+                pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
+                output_wrap_x25519_secret
+            )
+            VALUES ($1, $2, $3, $4, 'pending', 1, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(job_run_id.as_uuid())
@@ -230,11 +283,46 @@ impl RunPersistence for PostgresRunPersistence {
         .bind(job_id.as_uuid())
         .bind(job_name)
         .bind(now)
+        .bind(&source.pipeline_definition_sha256[..])
+        .bind(
+            source
+                .workflow_definition_sha256
+                .as_ref()
+                .map(|b| b.as_slice()),
+        )
+        .bind(source.source_workflow)
+        .bind(&output_wrap_x25519_secret[..])
         .execute(&self.pool)
         .await
         .map_err(met_store::StoreError::from)?;
 
         debug!(%job_run_id, %run_id, job_name, "created job run record");
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()> {
+        let res = sqlx::query(
+            r#"
+            UPDATE job_runs
+            SET status = 'queued'
+            WHERE id = $1
+              AND status IN ('pending', 'queued')
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+        if res.rows_affected() == 0 {
+            warn!(
+                %job_run_id,
+                "mark_job_queued: no row updated (job not pending/queued or missing)"
+            );
+        } else {
+            debug!(%job_run_id, "marked job run queued in database");
+        }
         Ok(())
     }
 
@@ -523,6 +611,10 @@ struct JobRunRecord {
     cache_key: Option<String>,
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
+    pipeline_definition_sha256: Option<[u8; 32]>,
+    workflow_definition_sha256: Option<[u8; 32]>,
+    source_workflow: Option<serde_json::Value>,
+    output_wrap_x25519_secret: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -580,6 +672,22 @@ impl RunPersistence for MemoryRunPersistence {
         Ok(())
     }
 
+    async fn prepare_existing_run(
+        &self,
+        run_id: RunId,
+        org_id: OrganizationId,
+        trace_id: Option<uuid::Uuid>,
+    ) -> Result<()> {
+        let mut runs = self.runs.lock().unwrap();
+        if let Some(run) = runs.iter_mut().find(|r| r.id == run_id) {
+            run.org_id = org_id;
+            if let Some(t) = trace_id {
+                run.trace_id = t;
+            }
+        }
+        Ok(())
+    }
+
     async fn update_run_status(&self, run_id: RunId, status: RunStatus) -> Result<()> {
         let mut runs = self.runs.lock().unwrap();
         if let Some(run) = runs.iter_mut().find(|r| r.id == run_id) {
@@ -612,6 +720,8 @@ impl RunPersistence for MemoryRunPersistence {
         run_id: RunId,
         job_id: JobId,
         job_name: &str,
+        source: JobRunSourceRefs,
+        output_wrap_x25519_secret: [u8; 32],
     ) -> Result<()> {
         let mut jobs = self.job_runs.lock().unwrap();
         jobs.push(JobRunRecord {
@@ -628,7 +738,21 @@ impl RunPersistence for MemoryRunPersistence {
             cache_key: None,
             started_at: None,
             finished_at: None,
+            pipeline_definition_sha256: Some(source.pipeline_definition_sha256),
+            workflow_definition_sha256: source.workflow_definition_sha256,
+            source_workflow: source.source_workflow,
+            output_wrap_x25519_secret,
         });
+        Ok(())
+    }
+
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()> {
+        let mut jobs = self.job_runs.lock().unwrap();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
+            if matches!(job.status, JobStatus::Pending | JobStatus::Queued) {
+                job.status = JobStatus::Queued;
+            }
+        }
         Ok(())
     }
 
@@ -764,5 +888,43 @@ impl RunPersistence for MemoryRunPersistence {
             timestamp: Utc::now(),
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod mark_job_queued_tests {
+    use super::{JobRunSourceRefs, MemoryRunPersistence, RunPersistence};
+    use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId};
+
+    #[tokio::test]
+    async fn mark_job_queued_memory_idempotent_and_no_downgrade_from_running() {
+        let p = MemoryRunPersistence::new();
+        let run_id = RunId::new();
+        let pipeline_id = PipelineId::new();
+        let org_id = OrganizationId::new();
+        p.create_run(
+            run_id,
+            pipeline_id,
+            org_id,
+            "tester",
+            uuid::Uuid::now_v7(),
+        )
+        .await
+        .unwrap();
+        let job_run_id = JobRunId::new();
+        let job_id = JobId::new();
+        let src = JobRunSourceRefs {
+            pipeline_definition_sha256: [9u8; 32],
+            workflow_definition_sha256: None,
+            source_workflow: None,
+        };
+        p.create_job_run(job_run_id, run_id, job_id, "j1", src, [7u8; 32])
+            .await
+            .unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.start_job(job_run_id, AgentId::new()).await.unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.complete_job(job_run_id, true, Some(0), None).await.unwrap();
     }
 }

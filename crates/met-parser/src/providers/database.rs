@@ -59,10 +59,15 @@ impl WorkflowProvider for DatabaseWorkflowProvider {
 
         let versions: Vec<(String,)> = sqlx::query_as(
             r#"
-            SELECT version
-            FROM reusable_workflows
-            WHERE org_id = $1 AND scope = 'global' AND name = $2 AND deprecated = false
-            ORDER BY created_at DESC
+            SELECT rw.version
+            FROM reusable_workflows rw
+            INNER JOIN organizations o ON o.id = rw.org_id
+            WHERE rw.org_id = $1 AND rw.scope = 'global' AND rw.name = $2
+              AND rw.deprecated = false
+              AND rw.deleted_at IS NULL
+              AND rw.submission_status = 'approved'
+              AND (rw.trust_state = 'trusted' OR o.allow_untrusted_workflows)
+            ORDER BY rw.created_at DESC
             "#,
         )
         .bind(self.org_id)
@@ -100,9 +105,13 @@ impl DatabaseWorkflowProvider {
 
         let row: Option<(serde_json::Value, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT definition, description
-            FROM reusable_workflows
-            WHERE org_id = $1 AND scope = 'global' AND name = $2 AND version = $3
+            SELECT rw.definition, rw.description
+            FROM reusable_workflows rw
+            INNER JOIN organizations o ON o.id = rw.org_id
+            WHERE rw.org_id = $1 AND rw.scope = 'global' AND rw.name = $2 AND rw.version = $3
+              AND rw.deleted_at IS NULL
+              AND rw.submission_status = 'approved'
+              AND (rw.trust_state = 'trusted' OR o.allow_untrusted_workflows)
             "#,
         )
         .bind(self.org_id)
@@ -134,10 +143,14 @@ impl DatabaseWorkflowProvider {
     async fn get_latest_version(&self, name: &str) -> Result<String, WorkflowFetchError> {
         let row: Option<(String,)> = sqlx::query_as(
             r#"
-            SELECT version
-            FROM reusable_workflows
-            WHERE org_id = $1 AND scope = 'global' AND name = $2 AND deprecated = false
-            ORDER BY created_at DESC
+            SELECT rw.version
+            FROM reusable_workflows rw
+            INNER JOIN organizations o ON o.id = rw.org_id
+            WHERE rw.org_id = $1 AND rw.scope = 'global' AND rw.name = $2 AND rw.deprecated = false
+              AND rw.deleted_at IS NULL
+              AND rw.submission_status = 'approved'
+              AND (rw.trust_state = 'trusted' OR o.allow_untrusted_workflows)
+            ORDER BY rw.created_at DESC
             LIMIT 1
             "#,
         )
@@ -183,6 +196,7 @@ mod tests {
                     working_directory: None,
                     timeout: None,
                     continue_on_error: false,
+                    outputs: IndexMap::new(),
                 }],
                 services: vec![],
                 depends_on: vec![],
@@ -196,7 +210,15 @@ mod tests {
     #[sqlx::test(migrations = "../met-store/migrations")]
     async fn test_fetch_global_workflow(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
-        
+        sqlx::query(
+            r#"INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'torg', $2, NOW(), NOW())"#,
+        )
+        .bind(org_id)
+        .bind(format!("torg-{}", org_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Insert a test workflow
         let workflow_def = test_workflow_def();
         let definition = serde_json::to_value(&workflow_def).unwrap();
@@ -230,7 +252,15 @@ mod tests {
     #[sqlx::test(migrations = "../met-store/migrations")]
     async fn test_fetch_latest_version(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
-        
+        sqlx::query(
+            r#"INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'torg', $2, NOW(), NOW())"#,
+        )
+        .bind(org_id)
+        .bind(format!("torg-{}", org_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Insert multiple versions
         for version in &["1.0.0", "1.1.0", "2.0.0"] {
             let mut workflow_def = test_workflow_def();
@@ -266,6 +296,14 @@ mod tests {
     #[sqlx::test(migrations = "../met-store/migrations")]
     async fn test_fetch_nonexistent_workflow(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'torg', $2, NOW(), NOW())"#,
+        )
+        .bind(org_id)
+        .bind(format!("torg-{}", org_id))
+        .execute(&pool)
+        .await
+        .unwrap();
         let provider = DatabaseWorkflowProvider::new(pool, org_id);
         
         let result = provider.fetch(WorkflowScope::Global, "nonexistent", "1.0.0").await;
@@ -275,7 +313,15 @@ mod tests {
     #[sqlx::test(migrations = "../met-store/migrations")]
     async fn test_list_versions(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
-        
+        sqlx::query(
+            r#"INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'torg', $2, NOW(), NOW())"#,
+        )
+        .bind(org_id)
+        .bind(format!("torg-{}", org_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Insert multiple versions
         for version in &["1.0.0", "1.1.0", "2.0.0"] {
             let workflow_def = test_workflow_def();
@@ -309,7 +355,15 @@ mod tests {
     #[sqlx::test(migrations = "../met-store/migrations")]
     async fn test_deprecated_workflow_excluded(pool: PgPool) {
         let org_id = uuid::Uuid::new_v4();
-        
+        sqlx::query(
+            r#"INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'torg', $2, NOW(), NOW())"#,
+        )
+        .bind(org_id)
+        .bind(format!("torg-{}", org_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Insert a deprecated workflow
         let workflow_def = test_workflow_def();
         let definition = serde_json::to_value(&workflow_def).unwrap();

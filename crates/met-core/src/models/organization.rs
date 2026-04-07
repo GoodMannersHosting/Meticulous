@@ -24,6 +24,8 @@ pub struct Organization {
     /// Soft-delete timestamp (None if active).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// When false, global catalog workflows marked untrusted are blocked from execution.
+    pub allow_untrusted_workflows: bool,
 }
 
 impl Organization {
@@ -38,6 +40,7 @@ impl Organization {
             created_at: now,
             updated_at: now,
             deleted_at: None,
+            allow_untrusted_workflows: true,
         }
     }
 
@@ -63,4 +66,7 @@ pub struct UpdateOrganization {
     /// New display name (if changing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Allow execution of org-global workflows in untrusted state (catalog trust model).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_untrusted_workflows: Option<bool>,
 }

@@ -12,6 +12,7 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod models;
+pub mod output_ipc;
 pub mod tokens;
 
 pub use config::MetConfig;

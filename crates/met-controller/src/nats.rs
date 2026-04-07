@@ -1,10 +1,13 @@
 //! NATS client for job dispatch and agent communication.
 
 use std::path::Path;
+use std::time::Duration;
 
 use async_nats::jetstream::{self, consumer::PullConsumer, stream::Stream};
 use async_nats::Client;
+use futures::StreamExt;
 use met_core::ids::OrganizationId;
+use met_proto::controller::v1::JobCompletion;
 use prost::Message;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -58,6 +61,24 @@ pub mod subjects {
     pub const JOBS_STREAM: &str = "JOBS";
     pub const STATUS_STREAM: &str = "STATUS";
     pub const CANCEL_STREAM: &str = "CANCEL";
+    /// Pipeline job completion notifications for the engine (protobuf `JobCompletion`).
+    pub const COMPLETIONS_STREAM: &str = "COMPLETIONS";
+
+    /// Undeliverable / poison job dispatches and advisory copies (limits retention; ops triage).
+    pub const JOBS_DLQ_STREAM: &str = "JOBS_DLQ";
+
+    /// `met.completions.{org_id}` — pipeline engine completion consumers filter on this prefix.
+    pub fn job_completion(org_id: OrganizationId) -> String {
+        format!("met.completions.{}", org_id.as_uuid())
+    }
+
+    /// `met.dlq.jobs.{org_id}` — JSON envelope for support / replay tooling.
+    ///
+    /// **Must not** use `met.jobs.dlq.*`: the `JOBS` stream owns `met.jobs.>`, and JetStream
+    /// rejects overlapping stream subjects (error 10065).
+    pub fn jobs_dlq(org_id: OrganizationId) -> String {
+        format!("met.dlq.jobs.{}", org_id.as_uuid())
+    }
 }
 
 /// NATS dispatcher for job dispatch and agent communication.
@@ -95,6 +116,83 @@ impl NatsDispatcher {
         Ok(dispatcher)
     }
 
+    /// Forward JetStream **max deliveries** advisories for the `JOBS` stream into `JOBS_DLQ`
+    /// ([`subjects::jobs_dlq`] / `met.dlq.jobs.{org}`; nil UUID when org is unknown).
+    pub fn spawn_max_deliveries_dlq_forwarder(&self) {
+        let nats = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_max_deliveries_dlq_forwarder(nats).await {
+                error!(error = %e, "DLQ advisory forwarder exited");
+            }
+        });
+    }
+
+    /// Fetch up to `limit` recent JSON payloads from `JOBS_DLQ` for [`subjects::jobs_dlq`] (admin/ops).
+    pub async fn fetch_recent_jobs_dlq(
+        &self,
+        org_id: OrganizationId,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>> {
+        let limit_u = limit.clamp(1, 500) as u64;
+        let mut stream = self
+            .jetstream
+            .get_stream(subjects::JOBS_DLQ_STREAM)
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+        let info = stream
+            .info()
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+        let last = info.state.last_sequence;
+        if last == 0 {
+            return Ok(Vec::new());
+        }
+        let start = last.saturating_sub(limit_u - 1).max(1);
+        let filter = subjects::jobs_dlq(org_id);
+        let consumer_name = format!("dlq-preview-{}", uuid::Uuid::new_v4());
+        let consumer = stream
+            .create_consumer(jetstream::consumer::pull::Config {
+                name: Some(consumer_name.clone()),
+                deliver_policy: jetstream::consumer::DeliverPolicy::ByStartSequence {
+                    start_sequence: start,
+                },
+                filter_subject: filter,
+                ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                inactive_threshold: Duration::from_secs(30),
+                max_ack_pending: 1024,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+
+        let mut messages = consumer
+            .messages()
+            .await
+            .map_err(|e| ControllerError::Nats(e.to_string()))?;
+
+        let mut out = Vec::new();
+        while (out.len() as u64) < limit_u {
+            match tokio::time::timeout(Duration::from_secs(3), messages.next()).await {
+                Ok(Some(Ok(m))) => {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&m.payload) {
+                        out.push(v);
+                    }
+                    let _ = m.ack().await;
+                }
+                Ok(Some(Err(e))) => {
+                    warn!(error = %e, "DLQ preview pull error");
+                    break;
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        let _ = stream.delete_consumer(&consumer_name).await;
+
+        Ok(out)
+    }
+
     /// Ensure required JetStream streams exist.
     async fn ensure_streams(&self) -> Result<()> {
         // JOBS stream for job dispatch
@@ -124,6 +222,40 @@ impl NatsDispatcher {
         )
         .await?;
 
+        self.ensure_stream(
+            subjects::COMPLETIONS_STREAM,
+            &["met.completions.>"],
+            jetstream::stream::RetentionPolicy::Limits,
+            Some(std::time::Duration::from_secs(24 * 60 * 60)),
+        )
+        .await?;
+
+        self.ensure_stream(
+            subjects::JOBS_DLQ_STREAM,
+            &["met.dlq.jobs.>"],
+            jetstream::stream::RetentionPolicy::Limits,
+            Some(std::time::Duration::from_secs(14 * 24 * 60 * 60)),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Publish a JSON record to the jobs dead-letter stream (operator triage).
+    pub async fn publish_jobs_dlq(
+        &self,
+        org_id: OrganizationId,
+        event: serde_json::Value,
+    ) -> Result<()> {
+        let subject = subjects::jobs_dlq(org_id);
+        let payload = serde_json::to_vec(&event)
+            .map_err(|e| ControllerError::Internal(format!("dlq json: {e}")))?;
+        self.jetstream
+            .publish(subject.clone(), payload.into())
+            .await
+            .map_err(|e| ControllerError::Nats(format!("publish {subject}: {e}")))?
+            .await
+            .map_err(|e| ControllerError::Nats(format!("publish ack {subject}: {e}")))?;
         Ok(())
     }
 
@@ -269,6 +401,23 @@ impl NatsDispatcher {
         &self.jetstream
     }
 
+    /// Publish a protobuf job completion to JetStream (`COMPLETIONS` / `met.completions.{org}`).
+    pub async fn publish_job_completion_proto(
+        &self,
+        org_id: OrganizationId,
+        message: &JobCompletion,
+    ) -> Result<()> {
+        let subject = subjects::job_completion(org_id);
+        let payload = message.encode_to_vec();
+        self.jetstream
+            .publish(subject.clone(), payload.into())
+            .await
+            .map_err(|e| ControllerError::Nats(format!("publish {subject}: {e}")))?
+            .await
+            .map_err(|e| ControllerError::Nats(format!("publish ack {subject}: {e}")))?;
+        Ok(())
+    }
+
     /// Delete the per-agent pull consumer on the JOBS stream (matches `met-agent` naming: `agent-{agent_id}`).
     pub async fn delete_agent_pull_consumer(&self, agent_id: &str) -> Result<()> {
         let stream = self
@@ -363,6 +512,39 @@ impl NatsDispatcher {
             error!(error = %e, "error draining NATS connection");
         }
     }
+}
+
+async fn run_max_deliveries_dlq_forwarder(nats: NatsDispatcher) -> Result<()> {
+    let mut subscriber = nats
+        .client()
+        .subscribe("$JS.EVENT.ADVISORY.>")
+        .await
+        .map_err(|e| ControllerError::Nats(e.to_string()))?;
+
+    info!("subscribed to JetStream advisory events (JOBS max deliveries → DLQ)");
+
+    while let Some(message) = subscriber.next().await {
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&message.payload) else {
+            continue;
+        };
+        let type_str = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if !type_str.contains("max_deliver") {
+            continue;
+        }
+        let stream_name = v.get("stream").and_then(|s| s.as_str()).unwrap_or("");
+        if stream_name != subjects::JOBS_STREAM {
+            continue;
+        }
+        let org = OrganizationId::from_uuid(uuid::Uuid::nil());
+        let event = serde_json::json!({
+            "source": "jetstream_consumer_max_deliveries",
+            "advisory": v,
+        });
+        if let Err(e) = nats.publish_jobs_dlq(org, event).await {
+            warn!(error = %e, "failed to publish DLQ record from advisory");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

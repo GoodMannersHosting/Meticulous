@@ -13,8 +13,8 @@
 use crate::extractors::CurrentUser;
 use met_core::hash_join_token;
 use met_core::ids::ProjectId;
-use met_store::repos::{ApiTokenRepo, UserRepo};
 use met_store::PgPool;
+use met_store::repos::{ApiTokenRepo, UserRepo};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -142,22 +142,22 @@ pub fn hash_token(token: &str) -> String {
 /// - hash: SHA-256 hash of the full token (stored in DB for validation)
 pub fn generate_token() -> (String, String, String) {
     use rand::Rng;
-    
+
     let mut rng = rand::thread_rng();
-    
+
     // Generate 32 random bytes and encode as hex (64 chars)
     let secret: [u8; 32] = rng.r#gen();
     let secret_hex = hex::encode(secret);
-    
+
     // Token format: met_<random_secret>
     let full_token = format!("met_{secret_hex}");
-    
+
     // Prefix is first 12 chars for display (met_ + 8 chars of secret)
     let prefix = full_token[..12].to_string();
-    
+
     // Hash the full token for storage
     let hash = hash_token(&full_token);
-    
+
     (full_token, prefix, hash)
 }
 
@@ -176,10 +176,10 @@ mod tests {
         let token = "met_abc123def456";
         let hash1 = hash_token(token);
         let hash2 = hash_token(token);
-        
+
         // Same input produces same hash
         assert_eq!(hash1, hash2);
-        
+
         // Hash is a hex string (64 chars for SHA-256)
         assert_eq!(hash1.len(), 64);
         assert!(hash1.chars().all(|c| c.is_ascii_hexdigit()));
@@ -188,17 +188,17 @@ mod tests {
     #[test]
     fn test_generate_token() {
         let (token, prefix, hash) = generate_token();
-        
+
         // Token starts with met_
         assert!(token.starts_with("met_"));
-        
+
         // Prefix is first 12 chars
         assert_eq!(prefix.len(), 12);
         assert!(token.starts_with(&prefix));
-        
+
         // Hash matches
         assert_eq!(hash, hash_token(&token));
-        
+
         // Token is correct length (met_ + 64 hex chars)
         assert_eq!(token.len(), 68);
     }
@@ -207,7 +207,7 @@ mod tests {
     fn test_unique_tokens() {
         let (token1, _, _) = generate_token();
         let (token2, _, _) = generate_token();
-        
+
         assert_ne!(token1, token2);
     }
 }

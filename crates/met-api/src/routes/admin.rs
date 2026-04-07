@@ -6,32 +6,36 @@
 //! - Role management (assign/revoke)
 //! - Project admin operations (schedule deletion, force delete)
 
+use crate::auth::hash_token;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use chrono::{Duration, Utc};
 use met_core::ids::{AuthProviderId, GroupId, JoinTokenId, OidcGroupMappingId, ProjectId, UserId};
 use met_core::models::{
-    AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership, GroupRole,
-    JoinToken, JoinTokenDescriptionHistory, JoinTokenScope, OidcGroupMapping, PermissionRole,
-    UpdateAuthProvider, User, UserRole, generate_join_token,
+    AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership,
+    GroupRole, JoinToken, JoinTokenDescriptionHistory, JoinTokenScope, OidcGroupMapping,
+    PermissionRole, UpdateAuthProvider, User, UserRole, generate_join_token,
 };
-use met_store::repos::{AgentRepo, AuthProviderRepo, GroupRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo};
-use crate::auth::hash_token;
+use met_store::repos::{
+    AuthProviderRepo, GroupRepo, JoinTokenRepo, JobRunRepo, ProjectRepo, RoleRepo, UserRepo,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
 /// Build the admin router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(crate::routes::admin_workflows::router())
+        .merge(crate::routes::meticulous_apps::admin_router())
         // User management
         .route("/admin/users", get(list_users))
         .route("/admin/users/{id}", get(get_user).patch(update_user))
@@ -44,24 +48,53 @@ pub fn router() -> Router<AppState> {
             "/admin/groups/{id}",
             get(get_group).patch(update_group).delete(delete_group),
         )
-        .route("/admin/groups/{id}/members", get(list_group_members).post(add_group_member))
-        .route("/admin/groups/{id}/members/{user_id}", delete(remove_group_member).patch(update_group_member))
+        .route(
+            "/admin/groups/{id}/members",
+            get(list_group_members).post(add_group_member),
+        )
+        .route(
+            "/admin/groups/{id}/members/{user_id}",
+            delete(remove_group_member).patch(update_group_member),
+        )
         // Role management
         .route("/admin/roles", get(list_roles))
-        .route("/admin/users/{id}/roles", get(get_user_roles).post(assign_role))
+        .route(
+            "/admin/users/{id}/roles",
+            get(get_user_roles).post(assign_role),
+        )
         .route("/admin/users/{id}/roles/{role}", delete(revoke_role))
         // Project admin operations
-        .route("/admin/projects/{id}/schedule-deletion", post(schedule_project_deletion))
-        .route("/admin/projects/{id}/cancel-deletion", post(cancel_project_deletion))
-        .route("/admin/projects/{id}/force-delete", post(force_delete_project))
+        .route(
+            "/admin/projects/{id}/schedule-deletion",
+            post(schedule_project_deletion),
+        )
+        .route(
+            "/admin/projects/{id}/cancel-deletion",
+            post(cancel_project_deletion),
+        )
+        .route(
+            "/admin/projects/{id}/force-delete",
+            post(force_delete_project),
+        )
         // Auth provider management
-        .route("/admin/auth-providers", get(list_auth_providers).post(create_auth_provider))
+        .route(
+            "/admin/auth-providers",
+            get(list_auth_providers).post(create_auth_provider),
+        )
         .route(
             "/admin/auth-providers/{id}",
-            get(get_auth_provider).patch(update_auth_provider).delete(delete_auth_provider),
+            get(get_auth_provider)
+                .patch(update_auth_provider)
+                .delete(delete_auth_provider),
         )
-        .route("/admin/auth-providers/{id}/enable", post(enable_auth_provider))
-        .route("/admin/auth-providers/{id}/disable", post(disable_auth_provider))
+        .route(
+            "/admin/auth-providers/{id}/enable",
+            post(enable_auth_provider),
+        )
+        .route(
+            "/admin/auth-providers/{id}/disable",
+            post(disable_auth_provider),
+        )
         // OIDC group mapping management
         .route(
             "/admin/auth-providers/{id}/group-mappings",
@@ -72,7 +105,10 @@ pub fn router() -> Router<AppState> {
             delete(delete_group_mapping),
         )
         // Join token management
-        .route("/admin/join-tokens", get(list_join_tokens).post(create_join_token))
+        .route(
+            "/admin/join-tokens",
+            get(list_join_tokens).post(create_join_token),
+        )
         .route("/admin/join-tokens/{id}/revoke", post(revoke_join_token))
         .route(
             "/admin/join-tokens/{id}",
@@ -80,17 +116,120 @@ pub fn router() -> Router<AppState> {
                 .patch(update_join_token)
                 .delete(delete_join_token),
         )
+        .route("/admin/ops/jobs-dlq", get(list_jobs_dlq))
+        .route("/admin/ops/job-queue", get(list_job_queue))
 }
 
 // ============================================================================
 // Middleware / Guards
 // ============================================================================
 
-fn require_admin(user: &crate::extractors::CurrentUser) -> ApiResult<()> {
+pub(crate) fn require_admin(user: &crate::extractors::CurrentUser) -> ApiResult<()> {
     if !user.has_permission("*") {
         return Err(ApiError::forbidden("admin access required"));
     }
     Ok(())
+}
+
+// ============================================================================
+// Ops / JetStream
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct JobsDlqQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobsDlqListResponse {
+    pub messages: Vec<serde_json::Value>,
+}
+
+#[instrument(skip(state))]
+async fn list_jobs_dlq(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Query(q): Query<JobsDlqQuery>,
+) -> ApiResult<Json<JobsDlqListResponse>> {
+    require_admin(&admin)?;
+    let Some(nats) = state.nats_ops.as_ref() else {
+        return Err(ApiError::unavailable(
+            "NATS is not connected; job DLQ preview is unavailable",
+        ));
+    };
+    let limit = q.limit.unwrap_or(50);
+    let messages = nats
+        .fetch_recent_jobs_dlq(admin.org_id, limit)
+        .await
+        .map_err(|e| ApiError::internal(format!("DLQ fetch failed: {e}")))?;
+    Ok(Json(JobsDlqListResponse { messages }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JobQueueQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobQueueEntryResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<String>,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    pub job_name: String,
+    pub job_status: String,
+    pub attempt: i32,
+    pub job_run_created_at: String,
+    pub run_number: i64,
+    pub run_status: String,
+    pub pipeline_id: String,
+    pub pipeline_name: String,
+    pub project_id: String,
+    pub project_slug: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobQueueListResponse {
+    pub count: usize,
+    pub data: Vec<JobQueueEntryResponse>,
+}
+
+#[instrument(skip(state))]
+async fn list_job_queue(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Query(q): Query<JobQueueQuery>,
+) -> ApiResult<Json<JobQueueListResponse>> {
+    require_admin(&admin)?;
+    let limit = i64::from(q.limit.unwrap_or(200).min(500));
+    let repo = JobRunRepo::new(state.db());
+    let rows = repo
+        .list_job_queue_for_org(admin.org_id, limit)
+        .await
+        .map_err(|e| ApiError::internal(format!("job queue query failed: {e}")))?;
+
+    let data: Vec<JobQueueEntryResponse> = rows
+        .into_iter()
+        .map(|r| JobQueueEntryResponse {
+            job_run_id: r.job_run_id.map(|u| u.to_string()),
+            run_id: r.run_id.to_string(),
+            job_id: r.job_id.map(|u| u.to_string()),
+            job_name: r.job_name,
+            job_status: format!("{:?}", r.status).to_lowercase(),
+            attempt: r.attempt,
+            job_run_created_at: r.job_run_created_at.to_rfc3339(),
+            run_number: r.run_number,
+            run_status: format!("{:?}", r.run_status).to_lowercase(),
+            pipeline_id: r.pipeline_id.to_string(),
+            pipeline_name: r.pipeline_name,
+            project_id: r.project_id.to_string(),
+            project_slug: r.project_slug,
+        })
+        .collect();
+
+    let count = data.len();
+    Ok(Json(JobQueueListResponse { count, data }))
 }
 
 // ============================================================================
@@ -107,6 +246,8 @@ pub struct UserResponse {
     pub is_active: bool,
     pub is_admin: bool,
     pub password_must_change: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_login_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -121,6 +262,7 @@ impl From<&User> for UserResponse {
             is_active: u.is_active,
             is_admin: u.is_admin,
             password_must_change: u.password_must_change,
+            last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
             created_at: u.created_at.to_rfc3339(),
             updated_at: u.updated_at.to_rfc3339(),
         }
@@ -136,9 +278,7 @@ async fn list_users(
     require_admin(&admin)?;
 
     let repo = UserRepo::new(state.db());
-    let users = repo
-        .list(admin.org_id, pagination.sql_limit(), 0)
-        .await?;
+    let users = repo.list(admin.org_id, pagination.sql_limit(), 0).await?;
 
     let response = PaginatedResponse::new(
         users.iter().map(UserResponse::from).collect(),
@@ -161,7 +301,9 @@ async fn get_user(
     let user = repo.get(user_id).await?;
 
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access users in other organizations",
+        ));
     }
 
     Ok(Json(UserResponse::from(&user)))
@@ -188,7 +330,9 @@ async fn update_user(
     let mut user = repo.get(user_id).await?;
 
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify users in other organizations",
+        ));
     }
 
     // Prevent admin from removing their own admin status
@@ -235,11 +379,15 @@ async fn lock_user(
     let user = repo.get(user_id).await?;
 
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot lock users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot lock users in other organizations",
+        ));
     }
 
     if user_id == admin.user_id {
-        return Err(ApiError::bad_request("cannot lock your own account"));
+        return Err(ApiError::forbidden(
+            "cannot lock your own account; use another admin if you need this account disabled",
+        ));
     }
 
     sqlx::query(
@@ -272,7 +420,9 @@ async fn unlock_user(
     let user = repo.get(user_id).await?;
 
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot unlock users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot unlock users in other organizations",
+        ));
     }
 
     sqlx::query(
@@ -305,7 +455,9 @@ async fn delete_user(
     let user = repo.get(user_id).await?;
 
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot delete users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete users in other organizations",
+        ));
     }
 
     if user_id == admin.user_id {
@@ -314,7 +466,7 @@ async fn delete_user(
 
     // Remove all privileges before soft-deleting (GDPR compliance)
     // This ensures that if the user is ever restored, they start fresh
-    
+
     // 1. Remove all role assignments
     sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
         .bind(user_id.as_uuid())
@@ -330,11 +482,13 @@ async fn delete_user(
         .map_err(met_store::StoreError::from)?;
 
     // 3. Revoke all API tokens (set revoked_at instead of deleting for audit trail)
-    sqlx::query("UPDATE api_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-        .bind(user_id.as_uuid())
-        .execute(state.db())
-        .await
-        .map_err(met_store::StoreError::from)?;
+    sqlx::query(
+        "UPDATE api_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id.as_uuid())
+    .execute(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
 
     // 4. Soft-delete the user and remove admin privileges
     sqlx::query(
@@ -353,8 +507,8 @@ async fn delete_user(
     .map_err(met_store::StoreError::from)?;
 
     tracing::info!(
-        admin_id = %admin.user_id, 
-        target_user_id = %user_id, 
+        admin_id = %admin.user_id,
+        target_user_id = %user_id,
         "user deleted with all privileges removed"
     );
 
@@ -385,9 +539,7 @@ async fn list_groups(
     require_admin(&admin)?;
 
     let repo = GroupRepo::new(state.db());
-    let groups = repo
-        .list(admin.org_id, pagination.sql_limit(), 0)
-        .await?;
+    let groups = repo.list(admin.org_id, pagination.sql_limit(), 0).await?;
 
     let mut responses = Vec::with_capacity(groups.len());
     for group in groups {
@@ -459,7 +611,9 @@ async fn get_group(
     let group = repo.get(group_id).await?;
 
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access groups in other organizations",
+        ));
     }
 
     let member_count = repo.count_members(group_id).await?;
@@ -495,7 +649,9 @@ async fn update_group(
     let existing = repo.get(group_id).await?;
 
     if existing.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify groups in other organizations",
+        ));
     }
 
     let group = repo
@@ -527,7 +683,9 @@ async fn delete_group(
     let group = repo.get(group_id).await?;
 
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot delete groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete groups in other organizations",
+        ));
     }
 
     repo.delete(group_id).await?;
@@ -565,7 +723,9 @@ async fn list_group_members(
 
     let group = group_repo.get(group_id).await?;
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access groups in other organizations",
+        ));
     }
 
     let memberships = group_repo.list_members(group_id).await?;
@@ -607,15 +767,21 @@ async fn add_group_member(
 
     let group = group_repo.get(group_id).await?;
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify groups in other organizations",
+        ));
     }
 
     let user = user_repo.get(req.user_id).await?;
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot add users from other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot add users from other organizations",
+        ));
     }
 
-    let membership = group_repo.add_member(group_id, req.user_id, req.role).await?;
+    let membership = group_repo
+        .add_member(group_id, req.user_id, req.role)
+        .await?;
 
     tracing::info!(
         admin_id = %admin.user_id,
@@ -653,11 +819,15 @@ async fn update_group_member(
 
     let group = group_repo.get(group_id).await?;
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify groups in other organizations",
+        ));
     }
 
     let user = user_repo.get(user_id).await?;
-    let membership = group_repo.update_member_role(group_id, user_id, req.role).await?;
+    let membership = group_repo
+        .update_member_role(group_id, user_id, req.role)
+        .await?;
 
     tracing::info!(
         admin_id = %admin.user_id,
@@ -689,7 +859,9 @@ async fn remove_group_member(
 
     let group = group_repo.get(group_id).await?;
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify groups in other organizations",
+        ));
     }
 
     group_repo.remove_member(group_id, user_id).await?;
@@ -726,22 +898,38 @@ async fn list_roles(
         RoleInfo {
             name: "admin".to_string(),
             description: "Full system access".to_string(),
-            permissions: PermissionRole::Admin.permissions().iter().map(|s| (*s).to_string()).collect(),
+            permissions: PermissionRole::Admin
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         },
         RoleInfo {
             name: "auditor".to_string(),
             description: "Read-only access to all resources and audit logs".to_string(),
-            permissions: PermissionRole::Auditor.permissions().iter().map(|s| (*s).to_string()).collect(),
+            permissions: PermissionRole::Auditor
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         },
         RoleInfo {
             name: "security_lead".to_string(),
             description: "User management, token revocation, and audit logs".to_string(),
-            permissions: PermissionRole::SecurityLead.permissions().iter().map(|s| (*s).to_string()).collect(),
+            permissions: PermissionRole::SecurityLead
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         },
         RoleInfo {
             name: "user".to_string(),
             description: "Standard read/write for assigned projects".to_string(),
-            permissions: PermissionRole::User.permissions().iter().map(|s| (*s).to_string()).collect(),
+            permissions: PermissionRole::User
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         },
     ];
 
@@ -777,7 +965,9 @@ async fn get_user_roles(
     let user_repo = UserRepo::new(state.db());
     let user = user_repo.get(user_id).await?;
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access users in other organizations",
+        ));
     }
 
     let role_repo = RoleRepo::new(state.db());
@@ -803,7 +993,9 @@ async fn assign_role(
     let user_repo = UserRepo::new(state.db());
     let user = user_repo.get(user_id).await?;
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify users in other organizations",
+        ));
     }
 
     let role = match req.role.to_lowercase().as_str() {
@@ -838,7 +1030,9 @@ async fn revoke_role(
     let user_repo = UserRepo::new(state.db());
     let user = user_repo.get(user_id).await?;
     if user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify users in other organizations",
+        ));
     }
 
     let role = match role_str.to_lowercase().as_str() {
@@ -894,10 +1088,14 @@ async fn schedule_project_deletion(
     let project = repo.get(project_id).await?;
 
     if project.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot delete projects in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete projects in other organizations",
+        ));
     }
 
-    let project = repo.schedule_deletion(project_id, req.retention_days).await?;
+    let project = repo
+        .schedule_deletion(project_id, req.retention_days)
+        .await?;
 
     tracing::info!(
         admin_id = %admin.user_id,
@@ -924,7 +1122,9 @@ async fn cancel_project_deletion(
     let project = repo.get(project_id).await?;
 
     if project.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify projects in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify projects in other organizations",
+        ));
     }
 
     repo.cancel_deletion(project_id).await?;
@@ -935,7 +1135,9 @@ async fn cancel_project_deletion(
         "project deletion cancelled"
     );
 
-    Ok(Json(serde_json::json!({ "message": "project deletion cancelled" })))
+    Ok(Json(
+        serde_json::json!({ "message": "project deletion cancelled" }),
+    ))
 }
 
 #[instrument(skip(state))]
@@ -950,7 +1152,9 @@ async fn force_delete_project(
     let project = repo.get_including_deleted(project_id).await?;
 
     if project.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot delete projects in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete projects in other organizations",
+        ));
     }
 
     repo.permanent_delete(project_id).await?;
@@ -962,7 +1166,9 @@ async fn force_delete_project(
         "project permanently deleted"
     );
 
-    Ok(Json(serde_json::json!({ "message": "project permanently deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "project permanently deleted" }),
+    ))
 }
 
 // ============================================================================
@@ -980,7 +1186,12 @@ async fn list_auth_providers(
     let repo = AuthProviderRepo::new(state.db());
     let providers = repo.list(admin.org_id).await?;
 
-    Ok(Json(providers.into_iter().map(AuthProviderResponse::from).collect()))
+    Ok(Json(
+        providers
+            .into_iter()
+            .map(AuthProviderResponse::from)
+            .collect(),
+    ))
 }
 
 /// Auth provider response (without secrets).
@@ -1032,12 +1243,16 @@ async fn create_auth_provider(
 
     // Validate provider type
     if req.provider_type != "oidc" && req.provider_type != "github" {
-        return Err(ApiError::bad_request("provider_type must be 'oidc' or 'github'"));
+        return Err(ApiError::bad_request(
+            "provider_type must be 'oidc' or 'github'",
+        ));
     }
 
     // OIDC requires issuer_url
     if req.provider_type == "oidc" && req.issuer_url.is_none() {
-        return Err(ApiError::bad_request("issuer_url is required for OIDC providers"));
+        return Err(ApiError::bad_request(
+            "issuer_url is required for OIDC providers",
+        ));
     }
 
     let repo = AuthProviderRepo::new(state.db());
@@ -1079,7 +1294,9 @@ async fn get_auth_provider(
     let provider = repo.get(provider_id).await?;
 
     if provider.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access providers in other organizations",
+        ));
     }
 
     Ok(Json(AuthProviderResponse::from(provider)))
@@ -1108,7 +1325,9 @@ async fn update_auth_provider(
     let existing = repo.get(provider_id).await?;
 
     if existing.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify providers in other organizations",
+        ));
     }
 
     let provider = repo
@@ -1147,7 +1366,9 @@ async fn enable_auth_provider(
     let existing = repo.get(provider_id).await?;
 
     if existing.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify providers in other organizations",
+        ));
     }
 
     let provider = repo.enable(provider_id).await?;
@@ -1174,7 +1395,9 @@ async fn disable_auth_provider(
     let existing = repo.get(provider_id).await?;
 
     if existing.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify providers in other organizations",
+        ));
     }
 
     let provider = repo.disable(provider_id).await?;
@@ -1201,7 +1424,9 @@ async fn delete_auth_provider(
     let existing = repo.get(provider_id).await?;
 
     if existing.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot delete providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot delete providers in other organizations",
+        ));
     }
 
     repo.delete(provider_id).await?;
@@ -1213,7 +1438,9 @@ async fn delete_auth_provider(
         "auth provider deleted"
     );
 
-    Ok(Json(serde_json::json!({ "message": "auth provider deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "auth provider deleted" }),
+    ))
 }
 
 // ============================================================================
@@ -1264,11 +1491,16 @@ async fn list_group_mappings(
     let provider = repo.get(provider_id).await?;
 
     if provider.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot access providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot access providers in other organizations",
+        ));
     }
 
     let mappings = repo.list_group_mappings(provider_id).await?;
-    let responses: Vec<GroupMappingResponse> = mappings.into_iter().map(GroupMappingResponse::from).collect();
+    let responses: Vec<GroupMappingResponse> = mappings
+        .into_iter()
+        .map(GroupMappingResponse::from)
+        .collect();
 
     Ok(Json(responses))
 }
@@ -1287,7 +1519,9 @@ async fn create_group_mapping(
     let provider = auth_repo.get(provider_id).await?;
 
     if provider.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify providers in other organizations",
+        ));
     }
 
     // Verify the target group exists and belongs to the same org
@@ -1295,7 +1529,9 @@ async fn create_group_mapping(
     let group = group_repo.get(req.meticulous_group_id).await?;
 
     if group.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot map to groups in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot map to groups in other organizations",
+        ));
     }
 
     let input = CreateOidcGroupMapping {
@@ -1330,7 +1566,9 @@ async fn delete_group_mapping(
     let provider = repo.get(provider_id).await?;
 
     if provider.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot modify providers in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot modify providers in other organizations",
+        ));
     }
 
     // Verify mapping exists and belongs to this provider
@@ -1348,7 +1586,9 @@ async fn delete_group_mapping(
         "OIDC group mapping deleted"
     );
 
-    Ok(Json(serde_json::json!({ "message": "group mapping deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "group mapping deleted" }),
+    ))
 }
 
 // ============================================================================
@@ -1566,7 +1806,7 @@ async fn list_join_tokens(
 }
 
 /// Enriches join tokens with creator names and associated agents.
-async fn enrich_join_tokens(
+pub(crate) async fn enrich_join_tokens(
     tokens: &[JoinToken],
     db: &sqlx::PgPool,
 ) -> ApiResult<Vec<JoinTokenResponse>> {
@@ -1584,13 +1824,12 @@ async fn enrich_join_tokens(
         username: String,
     }
 
-    let creators: Vec<CreatorRow> = sqlx::query_as(
-        "SELECT id, display_name, username FROM users WHERE id = ANY($1)",
-    )
-    .bind(&creator_ids)
-    .fetch_all(db)
-    .await
-    .map_err(met_store::StoreError::from)?;
+    let creators: Vec<CreatorRow> =
+        sqlx::query_as("SELECT id, display_name, username FROM users WHERE id = ANY($1)")
+            .bind(&creator_ids)
+            .fetch_all(db)
+            .await
+            .map_err(met_store::StoreError::from)?;
 
     let creator_map: std::collections::HashMap<uuid::Uuid, &CreatorRow> =
         creators.iter().map(|c| (c.id, c)).collect();
@@ -1616,12 +1855,15 @@ async fn enrich_join_tokens(
         std::collections::HashMap::new();
     for a in &agents {
         if let Some(jt_id) = a.join_token_id {
-            agent_map.entry(jt_id).or_default().push(JoinTokenAgentInfo {
-                id: a.id.to_string(),
-                name: a.name.clone(),
-                status: format!("{:?}", a.status).to_lowercase(),
-                registered_at: a.created_at.to_rfc3339(),
-            });
+            agent_map
+                .entry(jt_id)
+                .or_default()
+                .push(JoinTokenAgentInfo {
+                    id: a.id.to_string(),
+                    name: a.name.clone(),
+                    status: format!("{:?}", a.status).to_lowercase(),
+                    registered_at: a.created_at.to_rfc3339(),
+                });
         }
     }
 
@@ -1630,8 +1872,12 @@ async fn enrich_join_tokens(
         .map(|t| {
             let mut resp = JoinTokenResponse::from_token(t);
             if let Some(creator) = creator_map.get(&t.created_by.as_uuid()) {
-                resp.created_by_name =
-                    Some(creator.display_name.clone().unwrap_or_else(|| creator.username.clone()));
+                resp.created_by_name = Some(
+                    creator
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| creator.username.clone()),
+                );
             }
             if let Some(token_agents) = agent_map.remove(&t.id.as_uuid()) {
                 resp.agents = token_agents;
@@ -1657,7 +1903,9 @@ async fn get_join_token(
 
     if token.scope == JoinTokenScope::Tenant {
         if token.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden("cannot access tokens from other organizations"));
+            return Err(ApiError::forbidden(
+                "cannot access tokens from other organizations",
+            ));
         }
     }
 
@@ -1682,12 +1930,7 @@ async fn create_join_token(
 ) -> ApiResult<Json<CreateJoinTokenResponse>> {
     require_admin(&admin)?;
 
-    let description = req
-        .description
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let description = req.description.as_deref().unwrap_or("").trim().to_string();
     if description.is_empty() {
         return Err(ApiError::bad_request("description is required"));
     }
@@ -1698,7 +1941,11 @@ async fn create_join_token(
         "tenant" => JoinTokenScope::Tenant,
         "project" => JoinTokenScope::Project,
         "pipeline" => JoinTokenScope::Pipeline,
-        _ => return Err(ApiError::bad_request("invalid scope, must be: platform, tenant, project, or pipeline")),
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid scope, must be: platform, tenant, project, or pipeline",
+            ));
+        }
     };
 
     // Generate the plain token
@@ -1706,14 +1953,18 @@ async fn create_join_token(
     let token_hash = hash_token(&plain_token);
 
     // Calculate expiration
-    let expires_at = req.expires_in_days.map(|days| Utc::now() + Duration::days(days));
+    let expires_at = req
+        .expires_in_days
+        .map(|days| Utc::now() + Duration::days(days));
 
     // Determine scope_id based on scope type
     let scope_id = match scope {
         JoinTokenScope::Platform => None,
         JoinTokenScope::Tenant => Some(admin.org_id.as_uuid()),
         JoinTokenScope::Project | JoinTokenScope::Pipeline => {
-            req.scope_id.ok_or_else(|| ApiError::bad_request("scope_id is required for project and pipeline scopes"))?;
+            req.scope_id.ok_or_else(|| {
+                ApiError::bad_request("scope_id is required for project and pipeline scopes")
+            })?;
             req.scope_id
         }
     };
@@ -1786,13 +2037,12 @@ async fn join_token_history_to_api_entries(
             username: String,
             display_name: Option<String>,
         }
-        let users: Vec<UserNameRow> = sqlx::query_as(
-            "SELECT id, username, display_name FROM users WHERE id = ANY($1)",
-        )
-        .bind(&user_ids)
-        .fetch_all(db)
-        .await
-        .map_err(met_store::StoreError::from)?;
+        let users: Vec<UserNameRow> =
+            sqlx::query_as("SELECT id, username, display_name FROM users WHERE id = ANY($1)")
+                .bind(&user_ids)
+                .fetch_all(db)
+                .await
+                .map_err(met_store::StoreError::from)?;
         for u in users {
             name_map.insert(u.id, (u.username, u.display_name));
         }
@@ -1879,7 +2129,9 @@ async fn revoke_join_token(
     // Verify the token belongs to this org (tenant scope check)
     if token.scope == JoinTokenScope::Tenant {
         if token.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden("cannot revoke tokens from other organizations"));
+            return Err(ApiError::forbidden(
+                "cannot revoke tokens from other organizations",
+            ));
         }
     }
 

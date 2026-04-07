@@ -3,8 +3,11 @@
 use utoipa::OpenApi;
 
 use crate::error::{ErrorBody, ErrorResponse};
-use crate::extractors::pagination::{PaginatedResponse, PaginationMeta};
+use crate::extractors::pagination::PaginationMeta;
 use crate::routes::{
+    admin_workflows::{
+        AdminWorkflowDeleteResponse, AdminWorkflowOpResponse,
+    },
     agents::{AgentActionResponse, AgentResponse},
     artifacts::{ArtifactResponse, AttestationResponse, SbomResponse},
     auth::{
@@ -17,25 +20,42 @@ use crate::routes::{
     health::{CheckStatus, HealthResponse, ReadyChecks, ReadyResponse},
     orgs::{CreateOrgRequest, OrgResponse, UpdateOrgRequest},
     pipelines::{
-        CreatePipelineRequest, PipelineResponse, TriggerPipelineRequest, TriggerPipelineResponse,
-        UpdatePipelineRequest, ValidatePipelineRequest, ValidatePipelineResponse,
+        CreatePipelineRequest, ImportPipelineGitRequest, PipelineResponse, SyncPipelineGitRequest,
+        TriggerPipelineRequest, TriggerPipelineResponse, UpdatePipelineRequest,
+        ValidatePipelineRequest, ValidatePipelineResponse,
     },
     projects::{CreateProjectRequest, ProjectResponse, UpdateProjectRequest},
+    dashboard::{DashboardStatsResponse, RecentRunResponse},
     runs::{
-        CancelRunResponse, DagNodeResponse, JobRunResponse, LogsQuery, LogsResponse,
-        RetryRunResponse, RunDagResponse, RunResponse, StepRunResponse,
+        CancelRunResponse, DagNodeResponse, ExecutedBinarySummary, FootprintBinaryRow,
+        FootprintDirectoryEntry, FootprintDirectoryGroup, FootprintNetworkRow,
+        JobAssignmentResponse, JobRunResponse, JobRunSnapshotsResponse, LogsQuery, LogsResponse,
+        RetryRunResponse, RunDagResponse, RunFootprintResponse, RunResponse, StepRunResponse,
     },
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
-    stored_secrets::{
-        CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse,
-    },
+    stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
     tokens::{CreateTokenRequest, CreateTokenResponseBody, TokenResponse},
+    triggers::{
+        CreateTriggerRequest, TriggerPublicResponse, UpdateTriggerRequest,
+    },
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
-    webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
+    workspace_config::{WorkspaceStoredSecretListItem, WorkspaceVariableListItem},
+    webhooks::{
+        CreateWebhookTargetRequest, PatchProjectWebhookRequest, ProjectWebhookRegistrationResponse,
+        RotateInboundSecretResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
+        SetupScmWebhookTargetInput, UpdateWebhookTargetRequest, WebhookResponse,
+        WebhookTargetResponse,
+    },
     workflows::{
-        CreateWorkflowRequest, WorkflowResponse, WorkflowVersionsResponse,
+        CreateWorkflowRequest, ProjectWorkflowsAvailableResponse, WorkflowResponse,
+        WorkflowVersionsResponse,
+    },
+    workflows_catalog::{
+        CatalogCommitPreview, CatalogRefItem, CatalogUpstreamRefSearchRequest,
+        CatalogUpstreamRefSearchResponse, CatalogVersionsPage, ImportCatalogWorkflowGitRequest,
     },
 };
+use crate::workflow_diagnostics::WorkflowDiagnosticItem;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -56,6 +76,7 @@ use crate::routes::{
         (name = "projects", description = "Project management"),
         (name = "pipelines", description = "Pipeline management"),
         (name = "runs", description = "Pipeline run management"),
+        (name = "dashboard", description = "Org dashboard overview"),
         (name = "agents", description = "Agent management"),
         (name = "tokens", description = "API token management"),
         (name = "secrets", description = "Secret management"),
@@ -63,6 +84,7 @@ use crate::routes::{
         (name = "variables", description = "Variable management"),
         (name = "workflows", description = "Reusable workflow management"),
         (name = "webhooks", description = "Webhook management"),
+        (name = "triggers", description = "Pipeline trigger configuration"),
         (name = "artifacts", description = "Build artifact management"),
         (name = "debug", description = "Debug session management"),
     ),
@@ -99,15 +121,28 @@ use crate::routes::{
         crate::routes::pipelines::delete_pipeline,
         crate::routes::pipelines::trigger_pipeline,
         crate::routes::pipelines::validate_pipeline,
+        crate::routes::pipelines::pipeline_workflow_diagnostics,
+        crate::routes::pipelines::import_pipeline_git,
+        crate::routes::pipelines::sync_pipeline_from_git,
+        crate::routes::triggers::list_triggers,
+        crate::routes::triggers::create_trigger,
+        crate::routes::triggers::update_trigger,
+        crate::routes::triggers::delete_trigger,
+        // Dashboard
+        crate::routes::dashboard::dashboard_stats,
+        crate::routes::dashboard::dashboard_recent_runs,
         // Runs
         crate::routes::runs::list_runs,
         crate::routes::runs::get_run,
         crate::routes::runs::cancel_run,
         crate::routes::runs::retry_run,
         crate::routes::runs::get_run_jobs,
+        crate::routes::runs::get_job_run_snapshots,
         crate::routes::runs::get_job_steps,
+        crate::routes::runs::get_job_assignments,
         crate::routes::runs::get_job_logs,
         crate::routes::runs::get_run_dag,
+        crate::routes::runs::get_run_footprint,
         // Agents
         crate::routes::agents::list_agents,
         crate::routes::agents::get_agent,
@@ -126,26 +161,51 @@ use crate::routes::{
         crate::routes::secrets::delete_secret,
         // Stored secrets (builtin_secrets)
         crate::routes::stored_secrets::list_stored_secrets,
+        crate::routes::stored_secrets::list_stored_secret_versions,
         crate::routes::stored_secrets::create_stored_secret,
         crate::routes::stored_secrets::rotate_stored_secret,
         crate::routes::stored_secrets::delete_stored_secret,
+        crate::routes::stored_secrets::activate_stored_secret_version,
+        crate::routes::stored_secrets::purge_stored_secret_version,
         // Variables
         crate::routes::variables::list_variables,
         crate::routes::variables::create_variable,
         crate::routes::variables::update_variable,
         crate::routes::variables::delete_variable,
+        crate::routes::workspace_config::list_workspace_variables,
+        crate::routes::workspace_config::list_workspace_stored_secrets,
         // Workflows
         crate::routes::workflows::list_global_workflows,
+        crate::routes::workflows::list_project_workflows_available,
         crate::routes::workflows::list_project_workflows,
         crate::routes::workflows::create_project_workflow,
         crate::routes::workflows::get_workflow,
         crate::routes::workflows::list_versions,
+        crate::routes::workflows_catalog::list_catalog_workflows,
+        crate::routes::workflows_catalog::import_catalog_workflow_git_organization,
+        crate::routes::workflows_catalog::catalog_upstream_ref_search_organization,
+        crate::routes::workflows_catalog::import_catalog_workflow_git,
+        crate::routes::workflows_catalog::catalog_upstream_ref_search_project,
+        crate::routes::workflows_catalog::list_catalog_versions,
+        crate::routes::admin_workflows::approve_catalog_workflow,
+        crate::routes::admin_workflows::reject_catalog_workflow,
+        crate::routes::admin_workflows::trust_catalog_workflow,
+        crate::routes::admin_workflows::untrust_catalog_workflow,
+        crate::routes::admin_workflows::soft_delete_catalog_workflow,
         // Webhooks
         crate::routes::webhooks::handle_webhook,
         crate::routes::webhooks::handle_github_webhook,
         crate::routes::webhooks::handle_gitlab_webhook,
         crate::routes::webhooks::handle_bitbucket_webhook,
         crate::routes::webhooks::setup_scm_webhook,
+        crate::routes::webhooks::list_project_webhooks,
+        crate::routes::webhooks::patch_project_webhook,
+        crate::routes::webhooks::rotate_project_webhook_inbound_secret,
+        crate::routes::webhooks::clear_project_webhook_inbound_secret,
+        crate::routes::webhooks::list_webhook_targets,
+        crate::routes::webhooks::create_webhook_target,
+        crate::routes::webhooks::update_webhook_target,
+        crate::routes::webhooks::delete_webhook_target,
         // Artifacts
         crate::routes::artifacts::list_run_artifacts,
         crate::routes::artifacts::get_artifact,
@@ -175,15 +235,21 @@ use crate::routes::{
             OrgResponse, CreateOrgRequest, UpdateOrgRequest,
             // Projects
             ProjectResponse, CreateProjectRequest, UpdateProjectRequest,
+            // Dashboard
+            DashboardStatsResponse, RecentRunResponse,
             // Pipelines
             PipelineResponse, CreatePipelineRequest, UpdatePipelineRequest,
+            ImportPipelineGitRequest, SyncPipelineGitRequest,
             TriggerPipelineRequest, TriggerPipelineResponse,
             ValidatePipelineRequest, ValidatePipelineResponse,
+            TriggerPublicResponse, CreateTriggerRequest, UpdateTriggerRequest,
             // Runs
             RunResponse, CancelRunResponse, RetryRunResponse,
-            JobRunResponse, StepRunResponse,
+            JobRunResponse, JobRunSnapshotsResponse, JobAssignmentResponse, StepRunResponse,
+            RunFootprintResponse, FootprintBinaryRow, FootprintNetworkRow,
+            FootprintDirectoryGroup, FootprintDirectoryEntry,
             LogsQuery, LogsResponse,
-            DagNodeResponse, RunDagResponse,
+            DagNodeResponse, ExecutedBinarySummary, RunDagResponse,
             // Agents
             AgentResponse, AgentActionResponse,
             // Tokens
@@ -193,10 +259,20 @@ use crate::routes::{
             StoredSecretResponse, CreateStoredSecretRequest, RotateStoredSecretRequest,
             // Variables
             VariableResponse, CreateVariableRequest, UpdateVariableRequest,
+            WorkspaceVariableListItem, WorkspaceStoredSecretListItem,
             // Webhooks
-            WebhookResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
+            WebhookResponse, WebhookTargetResponse,
+            SetupScmWebhookRequest, SetupScmWebhookTargetInput, SetupScmWebhookResponse,
+            ProjectWebhookRegistrationResponse,
+            PatchProjectWebhookRequest, RotateInboundSecretResponse,
+            CreateWebhookTargetRequest, UpdateWebhookTargetRequest,
             // Workflows
-            WorkflowResponse, CreateWorkflowRequest, WorkflowVersionsResponse,
+            WorkflowResponse, ProjectWorkflowsAvailableResponse, CreateWorkflowRequest,
+            WorkflowVersionsResponse,
+            ImportCatalogWorkflowGitRequest, CatalogVersionsPage, CatalogUpstreamRefSearchRequest,
+            CatalogUpstreamRefSearchResponse, CatalogRefItem, CatalogCommitPreview,
+            WorkflowDiagnosticItem,
+            AdminWorkflowOpResponse, AdminWorkflowDeleteResponse,
             // Artifacts
             ArtifactResponse, SbomResponse, AttestationResponse,
             // Debug

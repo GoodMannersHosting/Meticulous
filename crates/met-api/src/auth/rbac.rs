@@ -29,9 +29,15 @@ impl ApiRole {
         if perms.contains("*") || perms.contains("platform_admin") {
             return Self::PlatformAdmin;
         }
-        if perms.contains("org_admin") { return Self::OrgAdmin; }
-        if perms.contains("project_admin") { return Self::ProjectAdmin; }
-        if perms.contains("developer") { return Self::Developer; }
+        if perms.contains("org_admin") {
+            return Self::OrgAdmin;
+        }
+        if perms.contains("project_admin") {
+            return Self::ProjectAdmin;
+        }
+        if perms.contains("developer") {
+            return Self::Developer;
+        }
         Self::Viewer
     }
 
@@ -193,9 +199,21 @@ mod tests {
 
     #[test]
     fn test_role_from_permissions() {
-        assert_eq!(ApiRole::from_permissions(&["*"].iter().map(|s| s.to_string()).collect()), ApiRole::PlatformAdmin);
-        assert_eq!(ApiRole::from_permissions(&["org_admin"].iter().map(|s| s.to_string()).collect()), ApiRole::OrgAdmin);
-        assert_eq!(ApiRole::from_permissions(&["developer"].iter().map(|s| s.to_string()).collect()), ApiRole::Developer);
-        assert_eq!(ApiRole::from_permissions(&["read"].iter().map(|s| s.to_string()).collect()), ApiRole::Viewer);
+        assert_eq!(
+            ApiRole::from_permissions(&["*"].iter().map(|s| s.to_string()).collect()),
+            ApiRole::PlatformAdmin
+        );
+        assert_eq!(
+            ApiRole::from_permissions(&["org_admin"].iter().map(|s| s.to_string()).collect()),
+            ApiRole::OrgAdmin
+        );
+        assert_eq!(
+            ApiRole::from_permissions(&["developer"].iter().map(|s| s.to_string()).collect()),
+            ApiRole::Developer
+        );
+        assert_eq!(
+            ApiRole::from_permissions(&["read"].iter().map(|s| s.to_string()).collect()),
+            ApiRole::Viewer
+        );
     }
 }

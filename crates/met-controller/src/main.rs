@@ -132,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctrl.nats_creds_path.as_deref(),
     )
     .await?;
+    nats.spawn_max_deliveries_dlq_forwarder();
 
     let stored_secret_crypto = std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY")
         .ok()

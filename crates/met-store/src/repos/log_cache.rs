@@ -74,7 +74,7 @@ impl<'a> LogCacheRepo<'a> {
             r#"
             INSERT INTO log_cache (job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL)
-            ON CONFLICT (job_run_id, sequence) DO UPDATE SET
+            ON CONFLICT (job_run_id, step_key, sequence) DO UPDATE SET
                 timestamp = EXCLUDED.timestamp,
                 stream = EXCLUDED.stream,
                 content = EXCLUDED.content,
@@ -98,24 +98,29 @@ impl<'a> LogCacheRepo<'a> {
     }
 
     /// Fetch lines for a job run (ordered by sequence).
+    ///
+    /// When `stream` is `Some`, only lines for that stream (e.g. `stdout`) are returned.
     pub async fn list_for_job_run(
         &self,
         job_run_id: JobRunId,
         limit: i64,
         offset: i64,
+        stream: Option<&str>,
     ) -> Result<Vec<LogCacheEntry>> {
         let rows = sqlx::query_as::<_, LogCacheEntry>(
             r#"
             SELECT job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at
             FROM log_cache
             WHERE job_run_id = $1
-            ORDER BY sequence ASC
+              AND ($4::text IS NULL OR stream = $4)
+            ORDER BY timestamp ASC, step_key ASC, sequence ASC
             LIMIT $2 OFFSET $3
             "#,
         )
         .bind(job_run_id.as_uuid())
         .bind(limit)
         .bind(offset)
+        .bind(stream)
         .fetch_all(self.pool)
         .await?;
 
@@ -128,7 +133,7 @@ impl<'a> LogCacheRepo<'a> {
             SELECT job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at
             FROM log_cache
             WHERE job_run_id = $1
-            ORDER BY sequence ASC
+            ORDER BY timestamp ASC, step_key ASC, sequence ASC
             "#,
         )
         .bind(job_run_id.as_uuid())
@@ -172,7 +177,7 @@ impl<'a> LogCacheRepo<'a> {
                 r#"
                 INSERT INTO log_cache (job_run_id, sequence, timestamp, stream, content, run_id, step_run_id, cached_at, expires_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
-                ON CONFLICT (job_run_id, sequence) DO UPDATE SET
+                ON CONFLICT (job_run_id, step_key, sequence) DO UPDATE SET
                     timestamp = EXCLUDED.timestamp,
                     stream = EXCLUDED.stream,
                     content = EXCLUDED.content,

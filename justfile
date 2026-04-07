@@ -393,6 +393,21 @@ db-migrate-repair-v12:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DELETE FROM _sqlx_migrations WHERE version = 12;"
     cargo sqlx migrate run --source crates/met-store/migrations
 
+# Fix "migration 28 was previously applied but has been modified" after changing
+# `028_log_cache_step_segment.sql` after it was already applied. Prefer this over deleting
+# the row: re-running 028 can fail if `step_key` / PK already exist.
+# Checksum must match the current file; if 028 changes again, run `cargo sqlx migrate info`
+# and update the decode(...) literal below (local migration line).
+db-migrate-repair-v28:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        echo "DATABASE_URL is not set; set it or add it to .env (just loads .env when dotenv-load is on)." >&2
+        exit 1
+    fi
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE _sqlx_migrations SET checksum = decode('ff882f9ea6dcf2cdfad95ae42b78ae4d4376caa90254d1af1262f17dd7f32804959b3e737e16848ca6e182b81719927e', 'hex') WHERE version = 28;"
+    cargo sqlx migrate run --source crates/met-store/migrations
+
 # Reset database (drop and recreate)
 db-reset:
     cargo sqlx database reset --source crates/met-store/migrations -y
@@ -514,7 +529,7 @@ frontend-install:
 
 # Run frontend dev server
 frontend-dev:
-    cd frontend && npm run dev
+    cd frontend && npm run dev -- --host 0.0.0.0
 
 # Build frontend for production
 frontend-build:

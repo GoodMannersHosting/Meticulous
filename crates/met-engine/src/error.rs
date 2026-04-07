@@ -33,6 +33,9 @@ pub enum EngineError {
     #[error("no available agents for job {job} with tags {tags:?}")]
     NoAvailableAgents { job: String, tags: Vec<String> },
 
+    #[error("affinity scheduling failed for job {job}: {reason}")]
+    AffinityScheduling { job: String, reason: String },
+
     #[error("job {job} timed out after {timeout_secs}s")]
     JobTimeout { job: String, timeout_secs: u64 },
 

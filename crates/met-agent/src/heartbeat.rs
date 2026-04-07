@@ -48,6 +48,9 @@ pub struct HeartbeatLoop {
     /// When set to true, the job executor stops pulling from NATS (drain).
     job_pause_tx: watch::Sender<bool>,
     action_tx: mpsc::Sender<HeartbeatAction>,
+    /// One message per busy/idle transition; each recv triggers a heartbeat so rapid job cycles are not
+    /// collapsed into a single update (unlike `Notify`, which can drop back-to-back wakes).
+    transition_wake: mpsc::UnboundedReceiver<()>,
 }
 
 impl HeartbeatLoop {
@@ -61,6 +64,7 @@ impl HeartbeatLoop {
         shutdown_rx: watch::Receiver<bool>,
         job_pause_tx: watch::Sender<bool>,
         action_tx: mpsc::Sender<HeartbeatAction>,
+        transition_wake: mpsc::UnboundedReceiver<()>,
     ) -> Self {
         Self {
             client,
@@ -71,6 +75,41 @@ impl HeartbeatLoop {
             shutdown_rx,
             job_pause_tx,
             action_tx,
+            transition_wake,
+        }
+    }
+
+    async fn pump_heartbeat(&mut self, system: &mut System) -> Result<bool> {
+        if *self.shutdown_rx.borrow() {
+            return Ok(true);
+        }
+        let mut shutdown_wake = self.shutdown_rx.clone();
+        tokio::select! {
+            _ = shutdown_wake.changed() => {
+                if *shutdown_wake.borrow() {
+                    info!("heartbeat loop shutting down");
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            res = self.send_heartbeat(system) => {
+                match res {
+                    Ok(action) => {
+                        if action != HeartbeatAction::Continue {
+                            info!(action = ?action, "received heartbeat action");
+                            if self.action_tx.send(action).await.is_err() {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        error!(error = %e, "heartbeat failed");
+                        Ok(false)
+                    }
+                }
+            }
         }
     }
 
@@ -87,45 +126,31 @@ impl HeartbeatLoop {
         'hb: loop {
             if *self.shutdown_rx.borrow() {
                 info!("heartbeat loop shutting down");
-                break;
+                break 'hb;
             }
 
             tokio::select! {
-                _ = interval.tick() => {
-                    if *self.shutdown_rx.borrow() {
-                        break 'hb;
-                    }
-                    // Do not block shutdown on a slow gRPC heartbeat: use a cloned watch receiver
-                    // so this `select!` does not borrow `self` mutably for `changed()` and `send_heartbeat` at once.
-                    let mut shutdown_wake = self.shutdown_rx.clone();
-                    tokio::select! {
-                        _ = shutdown_wake.changed() => {
-                            if *shutdown_wake.borrow() {
-                                info!("heartbeat loop shutting down");
-                                break 'hb;
-                            }
-                        }
-                        res = self.send_heartbeat(&mut system) => {
-                            match res {
-                                Ok(action) => {
-                                    if action != HeartbeatAction::Continue {
-                                        info!(action = ?action, "received heartbeat action");
-                                        if self.action_tx.send(action).await.is_err() {
-                                            break 'hb;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(error = %e, "heartbeat failed");
-                                }
-                            }
-                        }
-                    }
-                }
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
                         info!("heartbeat loop shutting down");
-                        break;
+                        break 'hb;
+                    }
+                }
+                _ = interval.tick() => {
+                    if self.pump_heartbeat(&mut system).await? {
+                        break 'hb;
+                    }
+                }
+                msg = self.transition_wake.recv() => {
+                    match msg {
+                        Some(()) => {
+                            if self.pump_heartbeat(&mut system).await? {
+                                break 'hb;
+                            }
+                        }
+                        None => {
+                            break 'hb;
+                        }
                     }
                 }
             }
@@ -227,6 +252,9 @@ impl HeartbeatLoop {
 }
 
 /// Spawn the heartbeat loop in a background task.
+///
+/// Returns an [`mpsc::UnboundedSender`] — send `()` after updating busy/idle heartbeat state so the
+/// controller (and Agents UI) see transitions without waiting for the next interval.
 pub fn spawn_heartbeat_loop(
     client: AgentServiceClient<Channel>,
     identity: AgentIdentity,
@@ -238,9 +266,11 @@ pub fn spawn_heartbeat_loop(
     tokio::task::JoinHandle<Result<()>>,
     watch::Sender<bool>,
     mpsc::Receiver<HeartbeatAction>,
+    mpsc::UnboundedSender<()>,
 ) {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (action_tx, action_rx) = mpsc::channel(16);
+    let (transition_wake_tx, transition_wake_rx) = mpsc::unbounded_channel();
 
     let heartbeat = HeartbeatLoop::new(
         client,
@@ -251,9 +281,10 @@ pub fn spawn_heartbeat_loop(
         shutdown_rx,
         job_pause_tx,
         action_tx,
+        transition_wake_rx,
     );
 
     let handle = tokio::spawn(async move { heartbeat.run().await });
 
-    (handle, shutdown_tx, action_rx)
+    (handle, shutdown_tx, action_rx, transition_wake_tx)
 }

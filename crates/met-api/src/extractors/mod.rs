@@ -5,10 +5,12 @@
 //! - Pagination (cursor-based)
 //! - Request ID (for tracing)
 
+pub mod app_installation;
 pub mod auth;
 pub mod pagination;
 pub mod request_id;
 
+pub use app_installation::AppInstallationAuth;
 pub use auth::{Auth, CurrentUser, OptionalAuth};
-pub use pagination::{Pagination, PaginatedResponse, PaginationMeta};
+pub use pagination::{PaginatedResponse, Pagination, PaginationMeta};
 pub use request_id::RequestId;

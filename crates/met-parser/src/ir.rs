@@ -29,6 +29,8 @@ pub struct PipelineIR {
     pub jobs: Vec<JobIR>,
     /// Default pool selector (can be overridden per-job).
     pub default_pool_selector: Option<PoolSelector>,
+    /// When true, `${{ workflows.*.outputs.*}}` may resolve **secret** outputs into plaintext env for dependent jobs.
+    pub expose_workflow_secret_outputs: bool,
 }
 
 impl PipelineIR {
@@ -72,6 +74,8 @@ pub struct WebhookTrigger {
     pub paths: Vec<String>,
     /// Path patterns to exclude.
     pub paths_ignore: Vec<String>,
+    /// When set (non-empty in YAML), repo sync manages a `triggers` row with this key.
+    pub sync_key: Option<String>,
 }
 
 /// Webhook event types.
@@ -164,6 +168,12 @@ pub struct JobIR {
     pub source_workflow: Option<WorkflowRef>,
     /// Job-level environment variables.
     pub env: IndexMap<String, EnvValue>,
+    /// Effective same-agent affinity group (pipeline default or invocation override).
+    pub affinity_group: Option<String>,
+    /// When true with [`Self::affinity_group`], jobs in this group share a workspace directory for the run.
+    pub share_workspace: bool,
+    /// Pipeline `workflows[].id` when this job was expanded from a reusable workflow.
+    pub workflow_invocation_id: Option<String>,
 }
 
 impl JobIR {

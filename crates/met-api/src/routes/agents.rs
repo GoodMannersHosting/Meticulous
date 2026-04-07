@@ -1,23 +1,23 @@
 //! Agent management routes.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::get,
-    Json, Router,
 };
 use met_core::{
     ids::{AgentId, OrganizationId},
     models::{Agent, AgentStatus},
 };
-use met_store::repos::AgentRepo;
 use met_store::StoreError;
+use met_store::repos::AgentRepo;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, Pagination, PaginatedResponse},
+    extractors::{Auth, PaginatedResponse, Pagination},
     state::AppState,
 };
 
@@ -68,9 +68,7 @@ pub struct AgentResponse {
 impl From<Agent> for AgentResponse {
     fn from(a: Agent) -> Self {
         let available_capacity = a.max_jobs - a.running_jobs;
-        let last_security_bundle = a
-            .last_security_bundle
-            .map(|j| j.0.clone());
+        let last_security_bundle = a.last_security_bundle.map(|j| j.0.clone());
         Self {
             id: a.id,
             org_id: a.org_id,
@@ -117,7 +115,9 @@ async fn list_agents(
 ) -> ApiResult<Json<PaginatedResponse<AgentResponse>>> {
     let repo = AgentRepo::new(state.db());
 
-    let agents = repo.list_by_org(user.org_id, pagination.sql_limit(), 0).await?;
+    let agents = repo
+        .list_by_org(user.org_id, pagination.sql_limit(), 0)
+        .await?;
 
     let filtered: Vec<AgentResponse> = agents
         .into_iter()
@@ -146,11 +146,7 @@ async fn list_agents(
         .map(AgentResponse::from)
         .collect();
 
-    let response = PaginatedResponse::new(
-        filtered,
-        pagination.limit,
-        |a| a.id.to_string(),
-    );
+    let response = PaginatedResponse::new(filtered, pagination.limit, |a| a.id.to_string());
 
     Ok(Json(response))
 }
@@ -298,7 +294,8 @@ async fn resume_agent(
         AgentStatus::Online
     };
 
-    repo.update_status_clear_drain_counter(id, new_status).await?;
+    repo.update_status_clear_drain_counter(id, new_status)
+        .await?;
 
     Ok(Json(AgentActionResponse {
         agent_id: id,

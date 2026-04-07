@@ -5,19 +5,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_nats::jetstream::consumer::pull::Stream as PullStream;
 use chrono::Utc;
+use async_nats::jetstream::AckKind;
 use futures::StreamExt;
 use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient, ExecutedBinary as ProtoExecutedBinary,
-    JobAssignment, JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange,
-    JobStatusUpdate, SecretMaterialKind, StepSpec, StepStatusUpdate,
+    JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange, JobStatusUpdate,
+    SecretMaterialKind, StepStatusUpdate,
 };
-use met_proto::common::v1::{RunStatus, StepKind, Timestamp};
+use met_proto::controller::v1::WorkflowInvocationOutputs;
+use met_proto::common::v1::{RunStatus, Timestamp};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, watch, RwLock};
+use tokio_stream;
 use tonic::transport::Channel;
+use tonic::Request;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::backend::ExecutionBackend;
@@ -26,6 +29,15 @@ use crate::error::{AgentError, Result};
 use crate::heartbeat::HeartbeatState;
 use crate::process_watcher::{merge_execution_metadata, JobExecutionMetadata, ProcessWatcher};
 use crate::security::JobPki;
+use crate::step_log::{step_log_spool_path, StepLogSession};
+
+/// In-flight job identity for operator interrupt → controller cancellation.
+#[derive(Clone)]
+struct ActiveJobTrace {
+    job_run_id: String,
+    step_run_id: Option<String>,
+    workspace_path: PathBuf,
+}
 
 /// Job executor that pulls jobs from NATS and executes them.
 pub struct JobExecutor {
@@ -37,9 +49,37 @@ pub struct JobExecutor {
     shutdown_rx: watch::Receiver<bool>,
     /// When true, stop pulling new jobs from NATS (controller requested drain).
     job_pause_rx: watch::Receiver<bool>,
+    /// Nudge heartbeat after busy/idle transitions so the controller sees `busy` without waiting for the interval.
+    heartbeat_transition_wake: mpsc::UnboundedSender<()>,
+    /// Updated while a job is active (after Running is reported) for SIGINT cancellation.
+    active_trace: Arc<RwLock<Option<ActiveJobTrace>>>,
+    /// Step log `StreamLogs` flushes; must finish before workspace cleanup deletes spool files.
+    pending_log_flushes: Vec<tokio::task::JoinHandle<()>>,
+    /// Footprint / blast-radius metadata from finished steps (for cancel and early-abort reporting).
+    footprint_accumulator: Arc<RwLock<Vec<(String, JobExecutionMetadata)>>>,
+    /// Signals the main loop to exit after graceful teardown (e.g. `MET_AGENT_EXIT_AFTER_JOBS`).
+    shutdown_tx: watch::Sender<bool>,
+    /// Successful jobs completed in this process (for `exit_after_jobs`).
+    jobs_completed: u32,
 }
 
 impl JobExecutor {
+    /// Wait until `rx` becomes `true` (process shutdown requested).
+    async fn wait_shutdown(rx: &watch::Receiver<bool>) {
+        let mut r = rx.clone();
+        if *r.borrow() {
+            return;
+        }
+        loop {
+            if r.changed().await.is_err() {
+                return;
+            }
+            if *r.borrow() {
+                return;
+            }
+        }
+    }
+
     /// Create a new job executor.
     pub fn new(
         config: AgentConfig,
@@ -49,6 +89,8 @@ impl JobExecutor {
         heartbeat_state: Arc<RwLock<HeartbeatState>>,
         shutdown_rx: watch::Receiver<bool>,
         job_pause_rx: watch::Receiver<bool>,
+        heartbeat_transition_wake: mpsc::UnboundedSender<()>,
+        shutdown_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             config,
@@ -58,6 +100,39 @@ impl JobExecutor {
             heartbeat_state,
             shutdown_rx,
             job_pause_rx,
+            heartbeat_transition_wake,
+            active_trace: Arc::new(RwLock::new(None)),
+            pending_log_flushes: Vec::new(),
+            footprint_accumulator: Arc::new(RwLock::new(Vec::new())),
+            shutdown_tx,
+            jobs_completed: 0,
+        }
+    }
+
+    async fn clear_footprint_accumulator(&self) {
+        self.footprint_accumulator.write().await.clear();
+    }
+
+    async fn record_footprint_step(&self, step_id: String, meta: JobExecutionMetadata) {
+        self.footprint_accumulator
+            .write()
+            .await
+            .push((step_id, meta));
+    }
+
+    async fn merged_footprint_metadata(&self) -> Option<JobExecutionMetadata> {
+        let acc = self.footprint_accumulator.read().await;
+        if acc.is_empty() {
+            return None;
+        }
+        Some(merge_execution_metadata(acc.clone()))
+    }
+
+    async fn join_pending_log_flushes(&mut self) {
+        for h in self.pending_log_flushes.drain(..) {
+            if let Err(e) = h.await {
+                warn!(error = %e, "step log flush task panicked or was cancelled");
+            }
         }
     }
 
@@ -89,7 +164,13 @@ impl JobExecutor {
                         error = %e,
                         "job pull session failed; retrying after delay (controller may be reconciling JetStream consumers)"
                     );
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+                        _ = Self::wait_shutdown(&self.shutdown_rx) => {
+                            info!("executor shutting down during NATS retry backoff");
+                            return Ok(());
+                        }
+                    }
                 }
             }
 
@@ -156,18 +237,55 @@ impl JobExecutor {
                 msg = messages.next() => {
                     match msg {
                         Some(Ok(message)) => {
-                            match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref()) {
+                            match met_proto::controller::v1::JobDispatch::decode(message.payload.as_ref())
+                            {
                                 Ok(job) => {
-                                    if let Err(e) = message.ack().await {
-                                        warn!(error = %e, "failed to ack message");
-                                    }
-
-                                    if let Err(e) = self.execute_job(job).await {
-                                        error!(error = %e, "job execution failed");
+                                    let job_run_id = job.job_run_id.clone();
+                                    let suppress_exit_after_jobs = job.suppress_exit_after_jobs_increment;
+                                    let shutdown_watcher = self.shutdown_rx.clone();
+                                    tokio::select! {
+                                        exec_res = self.execute_job(job) => {
+                                            match exec_res {
+                                                Ok(()) => {
+                                                    if let Err(e) = message.ack().await {
+                                                        warn!(error = %e, "failed to ack message after job success");
+                                                    } else if let Some(limit) = self.config.exit_after_jobs {
+                                                        if !suppress_exit_after_jobs {
+                                                            self.jobs_completed =
+                                                                self.jobs_completed.saturating_add(1);
+                                                            if self.jobs_completed >= limit {
+                                                                info!(
+                                                                    jobs_completed = self.jobs_completed,
+                                                                    limit,
+                                                                    "exit_after_jobs reached; requesting graceful shutdown"
+                                                                );
+                                                                let _ = self.shutdown_tx.send(true);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "job execution failed; NAK for redelivery");
+                                                    let _ = message
+                                                        .ack_with(AckKind::Nak(None))
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                        _ = Self::wait_shutdown(&shutdown_watcher) => {
+                                            self.report_interrupted_job_to_controller(&job_run_id)
+                                                .await;
+                                            info!(
+                                                job_run_id = %job_run_id,
+                                                "agent shutdown: dropping in-flight job (child processes use kill_on_drop)"
+                                            );
+                                            let _ = message.ack_with(AckKind::Nak(None)).await;
+                                            return Ok(());
+                                        }
                                     }
                                 }
                                 Err(e) => {
-                                    warn!(error = %e, "failed to decode job dispatch");
+                                    warn!(error = %e, "failed to decode job dispatch; ACK to drop poison payload");
                                     let _ = message.ack().await;
                                 }
                             }
@@ -197,9 +315,96 @@ impl JobExecutor {
         }
     }
 
+    /// Report job (and current step, if any) cancelled when the operator stops the agent.
+    async fn report_interrupted_job_to_controller(&mut self, job_run_id: &str) {
+        const MSG: &str = "Agent shut down by operator (SIGINT)";
+        let step_run_id = {
+            let trace = self.active_trace.read().await;
+            trace.as_ref().and_then(|t| {
+                if t.job_run_id == job_run_id {
+                    t.step_run_id.clone()
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(ref sid) = step_run_id {
+            let _ = self
+                .report_step_status(
+                    sid,
+                    job_run_id,
+                    RunStatus::Cancelled,
+                    None,
+                    Some(MSG.to_string()),
+                )
+                .await;
+        }
+
+        self.join_pending_log_flushes().await;
+
+        let merged = self.merged_footprint_metadata().await;
+        let ws = {
+            let trace = self.active_trace.read().await;
+            if let Some(t) = trace.as_ref() {
+                if t.job_run_id == job_run_id {
+                    t.workspace_path.clone()
+                } else {
+                    self.config.workspace_dir.join(job_run_id)
+                }
+            } else {
+                self.config.workspace_dir.join(job_run_id)
+            }
+        };
+        let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
+
+        let _ = self
+            .report_job_status(
+                job_run_id,
+                RunStatus::Cancelled,
+                None,
+                Some(MSG.to_string()),
+                merged,
+                sbom,
+                None,
+            )
+            .await;
+
+        self.release_job_heartbeat_slot().await;
+
+        *self.active_trace.write().await = None;
+    }
+
+    async fn clear_step_trace_slot(&self, job_run_id: &str) {
+        let mut g = self.active_trace.write().await;
+        if let Some(t) = g.as_mut() {
+            if t.job_run_id == job_run_id {
+                t.step_run_id = None;
+            }
+        }
+    }
+
+    /// Clear busy heartbeat after a job slot was claimed (matches increment in `run_job_dispatch`).
+    async fn release_job_heartbeat_slot(&self) {
+        let mut state = self.heartbeat_state.write().await;
+        state.running_jobs = state.running_jobs.saturating_sub(1);
+        state.current_job_id = None;
+        if state.running_jobs == 0 {
+            state.status = met_proto::AgentStatus::Online;
+        }
+        drop(state);
+        let _ = self.heartbeat_transition_wake.send(());
+    }
+
     /// Execute a single job.
     #[instrument(skip(self, job), fields(job_run_id = %job.job_run_id))]
     async fn execute_job(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+        let out = self.run_job_dispatch(job).await;
+        *self.active_trace.write().await = None;
+        out
+    }
+
+    async fn run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
         info!(
             job_name = %job.job_name,
             pipeline = %job.pipeline_name,
@@ -207,45 +412,147 @@ impl JobExecutor {
             "executing job"
         );
 
-        // Update heartbeat state
+        if crate::job_claim::job_successfully_completed(&self.config, &job.job_run_id).await {
+            info!(
+                job_run_id = %job.job_run_id,
+                "skipping job: already completed successfully on this agent (idempotent)"
+            );
+            return Ok(());
+        }
+
+        // Update heartbeat state — any early error must still clear this (see `release_job_heartbeat_slot` below).
         {
             let mut state = self.heartbeat_state.write().await;
             state.running_jobs += 1;
             state.current_job_id = Some(job.job_run_id.clone());
             state.status = met_proto::AgentStatus::Busy;
         }
+        let _ = self.heartbeat_transition_wake.send(());
 
-        // Report job accepted
-        self.report_job_status(&job.job_run_id, RunStatus::Running, None, None, None)
-            .await?;
+        let workspace_key_for_paths = if job.workspace_root_id.is_empty() {
+            job.job_run_id.clone()
+        } else {
+            job.workspace_root_id.clone()
+        };
+        let job_run_id = job.job_run_id.clone();
+        let res = self.do_run_job_dispatch(job).await;
+        self.release_job_heartbeat_slot().await;
+        match res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = format!("{e}");
+                error!(
+                    job_run_id = %job_run_id,
+                    error = %msg,
+                    "job aborted before completion; reporting failed to controller"
+                );
+                let merged = self.merged_footprint_metadata().await;
+                let ws = self.config.workspace_dir.join(&workspace_key_for_paths);
+                let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
+                let _ = self
+                    .report_job_status(
+                        &job_run_id,
+                        RunStatus::Failed,
+                        Some(1),
+                        Some(msg),
+                        merged,
+                        sbom,
+                        None,
+                    )
+                    .await;
+                Ok(())
+            }
+        }
+    }
 
-        // Create workspace
-        let workspace = self.create_workspace(&job.job_run_id).await?;
+    async fn do_run_job_dispatch(&mut self, job: met_proto::controller::v1::JobDispatch) -> Result<()> {
+        if !self.pending_log_flushes.is_empty() {
+            warn!(
+                count = self.pending_log_flushes.len(),
+                "draining leftover step log flush handle(s) before starting job"
+            );
+            self.join_pending_log_flushes().await;
+        }
 
+        self.clear_footprint_accumulator().await;
+
+        let ws_key = if job.workspace_root_id.is_empty() {
+            job.job_run_id.as_str()
+        } else {
+            job.workspace_root_id.as_str()
+        };
+        let workspace = self.create_workspace(ws_key).await?;
+
+        *self.active_trace.write().await = Some(ActiveJobTrace {
+            job_run_id: job.job_run_id.clone(),
+            step_run_id: None,
+            workspace_path: workspace.clone(),
+        });
+
+        let job_result = self.run_job_in_workspace(&job, &workspace).await;
+
+        self.join_pending_log_flushes().await;
+
+        if let Err(e) = self
+            .cleanup_workspace(&workspace, job.workspace_delete_after_job)
+            .await
+        {
+            warn!(
+                error = %e,
+                job_run_id = %job.job_run_id,
+                "workspace cleanup failed (one-time job directory may remain on disk)"
+            );
+        }
+
+        job_result
+    }
+
+    /// Job lifecycle after the per-run workspace directory exists; workspace is removed by the caller.
+    async fn run_job_in_workspace(
+        &mut self,
+        job: &met_proto::controller::v1::JobDispatch,
+        workspace: &std::path::Path,
+    ) -> Result<()> {
         // Generate per-job PKI and exchange keys
-        let pki = JobPki::generate().map_err(|e| AgentError::Certificate(e))?;
+        let pki = JobPki::generate().map_err(AgentError::Certificate)?;
 
         let secrets = if job.requires_secret_exchange {
-            self.exchange_keys(&job, &pki, &workspace).await?
+            self.exchange_keys(job, &pki, workspace).await?
         } else {
             HashMap::new()
         };
+
+        // First Running report after workspace and secrets are ready (DB may already be `queued` from dispatch).
+        self.report_job_status(
+            &job.job_run_id,
+            RunStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
 
         // Collect execution metadata from all steps
         let mut step_metadata: Vec<(String, JobExecutionMetadata)> = Vec::new();
 
         // Execute steps sequentially
         let mut job_success = true;
+        let mut last_exit_code: Option<i32> = None;
+        let mut job_output_ipc = Vec::new();
         for step in &job.steps {
-            let step_result = self
-                .execute_step(step, &workspace, &job.variables, &secrets)
-                .await;
-
-            match step_result {
-                Ok((exit_code, metadata)) => {
-                    // Collect step metadata
+            match self
+                .execute_step(&job.job_run_id, step, workspace, &job.variables, &secrets)
+                .await
+            {
+                Ok((exit_code, metadata, ipc)) => {
+                    job_output_ipc.extend_from_slice(&ipc);
+                    last_exit_code = Some(exit_code);
                     if let Some(meta) = metadata {
-                        step_metadata.push((step.step_id.clone(), meta));
+                        step_metadata.push((step.step_id.clone(), meta.clone()));
+                        self.record_footprint_step(step.step_id.clone(), meta)
+                            .await;
                     }
 
                     if exit_code != 0 && !step.continue_on_error {
@@ -291,25 +598,48 @@ impl JobExecutor {
             }
         }
 
+        let sbom_json = maybe_read_workspace_sbom_cyclonedx(workspace).await;
+
+        let workflow_outputs = match crate::workflow_outputs::build_workflow_invocation_outputs(
+            job,
+            &job_output_ipc,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                error!(error = %e, "workflow invocation outputs");
+                job_success = false;
+                None
+            }
+        };
+
         // Report job completion with execution metadata
         let final_status = if job_success {
             RunStatus::Succeeded
         } else {
             RunStatus::Failed
         };
-        self.report_job_status(&job.job_run_id, final_status, Some(0), None, job_metadata)
-            .await?;
+        let job_exit = if job_success {
+            Some(0)
+        } else {
+            last_exit_code.or(Some(1))
+        };
+        self.report_job_status(
+            &job.job_run_id,
+            final_status,
+            job_exit,
+            None,
+            job_metadata,
+            sbom_json,
+            workflow_outputs,
+        )
+        .await?;
 
-        // Cleanup workspace
-        self.cleanup_workspace(&workspace).await?;
-
-        // Update heartbeat state
-        {
-            let mut state = self.heartbeat_state.write().await;
-            state.running_jobs -= 1;
-            state.current_job_id = None;
-            if state.running_jobs == 0 {
-                state.status = met_proto::AgentStatus::Online;
+        if job_success {
+            if let Err(e) =
+                crate::job_claim::record_job_successful_completion(&self.config, &job.job_run_id)
+                    .await
+            {
+                warn!(error = %e, "failed to persist local job completion idempotency marker");
             }
         }
 
@@ -327,25 +657,66 @@ impl JobExecutor {
     #[instrument(skip(self, step, workspace, variables, secrets), fields(step_name = %step.name))]
     async fn execute_step(
         &mut self,
+        job_run_id: &str,
         step: &met_proto::controller::v1::StepSpec,
         workspace: &Path,
         variables: &HashMap<String, String>,
         secrets: &HashMap<String, String>,
-    ) -> Result<(i32, Option<JobExecutionMetadata>)> {
+    ) -> Result<(i32, Option<JobExecutionMetadata>, Vec<u8>)> {
         info!(step = %step.name, "executing step");
 
+        let step_run_id = step.step_run_id.as_str();
+
+        let spool_path = step_log_spool_path(workspace, &step.step_run_id);
+        let log_session = StepLogSession::spawn(
+            self.client.clone(),
+            job_run_id.to_string(),
+            step.step_run_id.clone(),
+            spool_path,
+            128,
+            128,
+        )?;
+        let log_pipe = log_session
+            .pipe()
+            .ok_or_else(|| AgentError::Internal("step log pipe not initialized".to_string()))?;
+        info!(step = %step.name, "step log stream pipeline started");
+
         // Report step started
-        self.report_step_status(&step.step_run_id, &step.step_id, RunStatus::Running, None, None)
+        self.report_step_status(step_run_id, job_run_id, RunStatus::Running, None, None)
             .await?;
+        info!(step = %step.name, "reported step Running to controller");
+
+        {
+            let mut g = self.active_trace.write().await;
+            if let Some(t) = g.as_mut() {
+                if t.job_run_id == job_run_id {
+                    t.step_run_id = Some(step.step_run_id.clone());
+                }
+            }
+        }
 
         // Build environment
         let mut env = step.environment.clone();
         env.extend(variables.clone());
         env.extend(secrets.clone());
+        if !env.contains_key("METICULOUS_WORKSPACE") {
+            let ws = if self.backend.name() == "container" {
+                "/workspace".to_string()
+            } else {
+                tokio::fs::canonicalize(workspace)
+                    .await
+                    .unwrap_or_else(|_| workspace.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            env.insert("METICULOUS_WORKSPACE".into(), ws);
+        }
 
         // Convert to backend step spec
         let backend_step = crate::backend::StepSpec {
             step_id: step.step_id.clone(),
+            step_run_id: step.step_run_id.clone(),
+            step_sequence: step.sequence,
             name: step.name.clone(),
             command: step.command.clone(),
             image: step.image.clone(),
@@ -358,13 +729,26 @@ impl JobExecutor {
         // Create a process watcher for this step
         let mut watcher = ProcessWatcher::new();
 
-        // Execute with process watching
+        info!(
+            step = %step.name,
+            image = %backend_step.image,
+            "invoking execution backend (container/native)"
+        );
+
+        // Execute with process watching and live log shipping
         let result = self
             .backend
-            .execute_with_watcher(&backend_step, workspace, &mut watcher)
+            .execute_with_watcher(
+                &backend_step,
+                workspace,
+                &mut watcher,
+                Some(&log_pipe),
+            )
             .await;
 
-        match result {
+        // Report terminal step status before awaiting log drain: `finish()` waits on `stream_logs`
+        // and must not delay controller updates or heartbeat release.
+        match &result {
             Ok(step_result) => {
                 let exit_code = step_result.exit_code;
                 let status = if exit_code == 0 {
@@ -373,43 +757,72 @@ impl JobExecutor {
                     RunStatus::Failed
                 };
                 self.report_step_status(
-                    &step.step_run_id,
-                    &step.step_id,
+                    step_run_id,
+                    job_run_id,
                     status,
                     Some(exit_code),
                     None,
                 )
                 .await?;
-
-                // Create metadata from step result
-                let metadata = JobExecutionMetadata {
-                    executed_binaries: step_result.executed_binaries,
-                    total_processes_spawned: step_result.processes_spawned,
-                    execution_tree_depth: step_result.execution_tree_depth,
-                };
-
-                Ok((exit_code, Some(metadata)))
             }
             Err(e) => {
                 self.report_step_status(
-                    &step.step_run_id,
-                    &step.step_id,
+                    step_run_id,
+                    job_run_id,
                     RunStatus::Failed,
                     None,
                     Some(e.to_string()),
                 )
                 .await?;
-                Err(e)
+            }
+        }
+        self.clear_step_trace_slot(job_run_id).await;
+
+        // Flush logs in the background; `join_pending_log_flushes` runs before workspace deletion.
+        let step_run_for_log = step.step_run_id.clone();
+        let flush = tokio::spawn(async move {
+            if let Err(log_err) = log_session.finish().await {
+                warn!(
+                    error = %log_err,
+                    step_run_id = %step_run_for_log,
+                    "step log pipeline flush failed after status was reported to controller"
+                );
+            }
+        });
+        self.pending_log_flushes.push(flush);
+
+        match result {
+            Ok(step_result) => {
+                let mut metadata = JobExecutionMetadata {
+                    executed_binaries: step_result.executed_binaries,
+                    total_processes_spawned: step_result.processes_spawned,
+                    execution_tree_depth: step_result.execution_tree_depth,
+                };
+                crate::script_exec_hints::merge_command_hints_into_metadata(
+                    &step.command,
+                    &step.step_id,
+                    &step.step_run_id,
+                    &mut metadata,
+                );
+                Ok((
+                    step_result.exit_code,
+                    Some(metadata),
+                    step_result.output_ipc_bytes,
+                ))
+            }
+            Err(e) => {
+                let meta = watcher
+                    .aggregate_metadata(&step.step_id, &step.step_run_id)
+                    .await;
+                error!(step = %step.name, error = %e, "step backend error; still shipping footprint metadata");
+                Ok((1, Some(meta), Vec::new()))
             }
         }
     }
 
     /// Create a workspace directory for a job.
-    async fn create_workspace(&self, job_run_id: &str) -> Result<PathBuf> {
-        let workspace = self
-            .config
-            .workspace_dir
-            .join(job_run_id);
+    async fn create_workspace(&self, workspace_key: &str) -> Result<PathBuf> {
+        let workspace = self.config.workspace_dir.join(workspace_key);
 
         tokio::fs::create_dir_all(&workspace)
             .await
@@ -421,7 +834,10 @@ impl JobExecutor {
     }
 
     /// Cleanup workspace after job completion.
-    async fn cleanup_workspace(&self, workspace: &Path) -> Result<()> {
+    async fn cleanup_workspace(&self, workspace: &Path, delete: bool) -> Result<()> {
+        if !delete {
+            return Ok(());
+        }
         if workspace.exists() {
             tokio::fs::remove_dir_all(workspace)
                 .await
@@ -449,18 +865,10 @@ impl JobExecutor {
 
         let response = self.client.exchange_job_keys(request).await?.into_inner();
 
-        // Derive HMAC key from agent identity for secret verification
-        // This must match the key derivation in the controller
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.identity.jwt_token.as_bytes());
-        hasher.update(b"meticulous-secrets-hmac-v1");
-        let hmac_key = hasher.finalize();
-
-        // Decrypt secrets using X25519 + AES-256-GCM hybrid decryption
+        // Decrypt secrets using X25519 + AES-256-GCM; plaintext HMAC key is ECDH-derived (see met_secrets).
         let mut secrets = HashMap::new();
         for secret in response.secrets {
-            match pki.decrypt(&secret.encrypted_value, &hmac_key) {
+            match pki.decrypt(&secret.encrypted_value) {
                 Ok(plaintext) => {
                     // Verify SHA-256 checksum
                     let mut checksum_hasher = Sha256::new();
@@ -551,31 +959,37 @@ impl JobExecutor {
         exit_code: Option<i32>,
         error_message: Option<String>,
         execution_metadata: Option<JobExecutionMetadata>,
+        sbom_cyclonedx_json: Option<String>,
+        workflow_invocation_outputs: Option<WorkflowInvocationOutputs>,
     ) -> Result<()> {
         // Convert execution metadata to protobuf format
-        let proto_metadata = execution_metadata.map(|meta| ProtoJobExecutionMetadata {
-            job_run_id: job_run_id.to_string(),
-            executed_binaries: meta
-                .executed_binaries
-                .into_iter()
-                .map(|b| ProtoExecutedBinary {
-                    path: b.path,
-                    sha256: b.sha256,
-                    execution_count: b.execution_count,
-                    first_executed_at: Some(Timestamp {
-                        seconds: b.first_executed_at.timestamp(),
-                        nanos: 0,
-                    }),
-                    last_executed_at: Some(Timestamp {
-                        seconds: b.last_executed_at.timestamp(),
-                        nanos: 0,
-                    }),
-                    step_ids: b.step_ids,
-                })
-                .collect(),
-            total_processes_spawned: meta.total_processes_spawned,
-            execution_tree_depth: meta.execution_tree_depth,
-            unique_binaries_count: 0, // Will be set from executed_binaries.len()
+        let proto_metadata = execution_metadata.map(|meta| {
+            let unique_binaries_count = meta.executed_binaries.len() as u32;
+            ProtoJobExecutionMetadata {
+                job_run_id: job_run_id.to_string(),
+                executed_binaries: meta
+                    .executed_binaries
+                    .into_iter()
+                    .map(|b| ProtoExecutedBinary {
+                        path: b.path,
+                        sha256: b.sha256,
+                        execution_count: b.execution_count,
+                        first_executed_at: Some(Timestamp {
+                            seconds: b.first_executed_at.timestamp(),
+                            nanos: 0,
+                        }),
+                        last_executed_at: Some(Timestamp {
+                            seconds: b.last_executed_at.timestamp(),
+                            nanos: 0,
+                        }),
+                        step_ids: b.step_ids,
+                        step_run_ids: b.step_run_ids,
+                    })
+                    .collect(),
+                total_processes_spawned: meta.total_processes_spawned,
+                execution_tree_depth: meta.execution_tree_depth,
+                unique_binaries_count,
+            }
         });
 
         let update = JobStatusUpdate {
@@ -588,15 +1002,14 @@ impl JobExecutor {
                 nanos: 0,
             }),
             execution_metadata: proto_metadata,
+            agent_id: Some(self.identity.agent_id.clone()),
+            sbom_cyclonedx_json,
+            workflow_invocation_outputs,
         };
 
-        // Would stream this in production
-        debug!(
-            job_run_id,
-            status = ?status,
-            has_metadata = update.execution_metadata.is_some(),
-            "reported job status"
-        );
+        self.client
+            .report_job_status(Request::new(tokio_stream::iter(vec![update])))
+            .await?;
 
         Ok(())
     }
@@ -622,9 +1035,46 @@ impl JobExecutor {
             }),
         };
 
-        // Would stream this in production
-        debug!(step_run_id, status = ?status, "reported step status");
+        self.client
+            .report_step_status(Request::new(tokio_stream::iter(vec![update])))
+            .await?;
 
         Ok(())
     }
+}
+
+/// CycloneDX JSON at the job workspace root (written by workflows such as `git-clone-snippet`).
+const WORKSPACE_SBOM_CYCLONEDX_FILENAME: &str = "sbom.cdx.json";
+const MAX_SBOM_INLINE_BYTES: u64 = 6 * 1024 * 1024;
+
+async fn maybe_read_workspace_sbom_cyclonedx(workspace: &Path) -> Option<String> {
+    let path = workspace.join(WORKSPACE_SBOM_CYCLONEDX_FILENAME);
+    let meta = tokio::fs::metadata(&path).await.ok()?;
+    if !meta.is_file() || meta.len() > MAX_SBOM_INLINE_BYTES {
+        if meta.is_file() && meta.len() > MAX_SBOM_INLINE_BYTES {
+            warn!(
+                path = %path.display(),
+                len = meta.len(),
+                max = MAX_SBOM_INLINE_BYTES,
+                "sbom file too large to inline on job status; skipping controller ingest"
+            );
+        }
+        return None;
+    }
+    let raw = tokio::fs::read_to_string(&path).await.ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .filter(|v| v.is_object())
+        .is_none()
+    {
+        warn!(
+            path = %path.display(),
+            "sbom file is not valid JSON object; skipping controller ingest"
+        );
+        return None;
+    }
+    Some(raw)
 }

@@ -15,6 +15,9 @@ pub struct Run {
     pub id: RunId,
     /// The pipeline being executed.
     pub pipeline_id: PipelineId,
+    /// When this run was created with **Retry** from another run; `None` for a fresh trigger (Run Pipeline, webhook, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<RunId>,
     /// The trigger that initiated this run (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_id: Option<TriggerId>,
@@ -30,6 +33,9 @@ pub struct Run {
     pub branch: Option<String>,
     /// Who or what triggered the run.
     pub triggered_by: String,
+    /// Observed HTTP client IP (or leftmost `X-Forwarded-For` hop) when triggered via webhook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_remote_addr: Option<String>,
     /// When the run was created.
     pub created_at: DateTime<Utc>,
     /// When execution started.
@@ -47,12 +53,14 @@ impl Run {
         Self {
             id: RunId::new(),
             pipeline_id,
+            parent_run_id: None,
             trigger_id: None,
             status: RunStatus::Pending,
             run_number,
             commit_sha: None,
             branch: None,
             triggered_by: triggered_by.into(),
+            webhook_remote_addr: None,
             created_at: Utc::now(),
             started_at: None,
             finished_at: None,
@@ -144,6 +152,23 @@ pub struct JobRun {
     /// Path to log storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
+    /// Cache key when restored from cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub cache_key: Option<String>,
+    /// Job outputs JSON (when recorded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(json, default))]
+    pub outputs: Option<serde_json::Value>,
+    /// SHA-256 of the pipeline definition JSON snapshot (`definition_snapshots`) at job_run creation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_definition_sha256: Option<Vec<u8>>,
+    /// SHA-256 of the reusable workflow definition JSON when this job was expanded from one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_definition_sha256: Option<Vec<u8>>,
+    /// Resolved reusable workflow reference (`scope`, `name`, `version`) when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_workflow: Option<serde_json::Value>,
     /// When execution started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<DateTime<Utc>>,
@@ -152,6 +177,16 @@ pub struct JobRun {
     pub finished_at: Option<DateTime<Utc>>,
     /// When the record was created.
     pub created_at: DateTime<Utc>,
+    /// Agent identity and host/security fields captured when this job entered `running` on an agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_snapshot: Option<serde_json::Value>,
+    /// When [`Self::agent_snapshot`] was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_snapshot_captured_at: Option<DateTime<Utc>>,
+    /// X25519 static secret for `met-output secret` envelopes (32 bytes). Never log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub output_wrap_x25519_secret: Option<Vec<u8>>,
 }
 
 impl JobRun {
@@ -170,9 +205,17 @@ impl JobRun {
             error_message: None,
             cache_hit: false,
             log_path: None,
+            cache_key: None,
+            outputs: None,
+            pipeline_definition_sha256: None,
+            workflow_definition_sha256: None,
+            source_workflow: None,
             started_at: None,
             finished_at: None,
             created_at: Utc::now(),
+            agent_snapshot: None,
+            agent_snapshot_captured_at: None,
+            output_wrap_x25519_secret: None,
         }
     }
 

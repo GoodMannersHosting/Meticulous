@@ -120,7 +120,8 @@ met-cli = { path = "crates/met-cli" }
 met-operator = { path = "crates/met-operator" }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so crates may `#[allow(unsafe_code)]` for narrowly scoped platform hooks (e.g. `pre_exec` + `dup2`).
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

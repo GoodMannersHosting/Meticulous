@@ -20,6 +20,7 @@ export interface PaginatedResponse<T> {
 	pagination: {
 		has_more: boolean;
 		next_cursor?: string;
+		count?: number;
 	};
 }
 
@@ -49,6 +50,74 @@ export interface Organization {
 	name: string;
 	slug: string;
 	created_at: string;
+	/** When false, untrusted global catalog workflows cannot run. */
+	allow_untrusted_workflows?: boolean;
+}
+
+/** Global catalog workflow row (API `/workflows/catalog` and related). */
+export interface CatalogWorkflow {
+	id: string;
+	scope: string;
+	project_id?: string | null;
+	name: string;
+	version: string;
+	definition: Record<string, unknown>;
+	description?: string | null;
+	deprecated: boolean;
+	tags: string[];
+	created_at: string;
+	updated_at: string;
+	source: string;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_revision?: string | null;
+	submission_status: string;
+	trust_state: string;
+	submitted_by?: string | null;
+	reviewed_by?: string | null;
+	reviewed_at?: string | null;
+	deleted_at?: string | null;
+	catalog_metadata: Record<string, unknown>;
+}
+
+export interface WorkflowDiagnosticItem {
+	invocation_id: string;
+	reference: string;
+	scope: string;
+	name: string;
+	version_requested: string;
+	version_resolved?: string | null;
+	status: string;
+	detail?: string | null;
+	blocking: boolean;
+	/** Declared output names from the workflow definition, when parseable */
+	declared_outputs?: string[] | null;
+}
+
+export interface CatalogVersionsPage {
+	workflow_name: string;
+	versions: CatalogWorkflow[];
+	has_more?: boolean;
+	next_cursor?: string | null;
+}
+
+/** POST /workflows/catalog/upstream-ref-search (org admin or project-scoped variant). */
+export interface CatalogRefItem {
+	name: string;
+	commit_sha: string;
+}
+
+export interface CatalogCommitPreview {
+	sha: string;
+	title: string;
+	committed_at?: string | null;
+}
+
+export interface CatalogUpstreamRefSearchResponse {
+	branches: CatalogRefItem[];
+	tags: CatalogRefItem[];
+	commits: CatalogCommitPreview[];
 }
 
 // Project Types
@@ -74,6 +143,19 @@ export interface CreateProjectInput {
 	owner_id: string;
 }
 
+/** PATCH /api/v1/projects/{id} */
+export interface UpdateProjectInput {
+	name?: string;
+	slug?: string;
+	description?: string | null;
+}
+
+/** GET /api/v1/projects/{id}/workflows/available */
+export interface ProjectWorkflowsAvailable {
+	global_workflows: CatalogWorkflow[];
+	project_workflows: CatalogWorkflow[];
+}
+
 /** Metadata for a platform-stored secret (no plaintext). */
 export interface StoredSecret {
 	id: string;
@@ -86,6 +168,8 @@ export interface StoredSecret {
 	description?: string | null;
 	created_at: string;
 	updated_at: string;
+	/** Org-wide only: when `false`, not listed in project/pipeline secret UIs or used for `stored:` / checkout (catalog SCM may still use). */
+	propagate_to_projects?: boolean;
 }
 
 // Pipeline Types
@@ -95,11 +179,116 @@ export interface Pipeline {
 	name: string;
 	slug: string;
 	description?: string;
-	definition: PipelineDefinition;
+	definition: PipelineDefinition | Record<string, unknown>;
 	definition_path?: string;
+	scm_provider?: string | null;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_credentials_secret_path?: string | null;
+	scm_revision?: string | null;
 	enabled: boolean;
 	created_at: string;
 	updated_at: string;
+}
+
+/** `GET/POST /api/v1/pipelines/{id}/triggers` — `config` never includes `secret`. */
+export interface PipelineTrigger {
+	id: string;
+	pipeline_id: string;
+	kind: string;
+	config: Record<string, unknown>;
+	/** Effective inbound mode for webhooks: `none` | `hmac` | `query`. */
+	inbound_auth?: string | null;
+	inbound_query_param?: string | null;
+	secret_configured: boolean;
+	enabled: boolean;
+	description?: string | null;
+	created_by_user_id?: string | null;
+	created_by_username?: string | null;
+	created_at: string;
+	updated_at: string;
+	/** Only present on create when `generate_webhook_secret` was true. */
+	generated_secret?: string | null;
+}
+
+export interface CreatePipelineTriggerInput {
+	kind: string;
+	config: Record<string, unknown>;
+	description?: string;
+	generate_webhook_secret?: boolean;
+}
+
+export interface UpdatePipelineTriggerInput {
+	enabled?: boolean;
+	description?: string;
+	config_patch?: Record<string, unknown>;
+}
+
+/** `GET /api/v1/projects/{id}/webhooks` */
+export interface ProjectWebhookRegistration {
+	id: string;
+	provider: string;
+	events: string[];
+	active: boolean;
+	payload_mapping: Record<string, unknown>;
+	created_at: string;
+	/** Path starting with `/api/v1/webhooks/...` — prepend public API origin. */
+	inbound_path: string;
+	/** `generic` only: `none` | `hmac` | `query` */
+	generic_inbound_auth?: string;
+	generic_query_param_name?: string | null;
+	/** Whether a signing secret is stored (HMAC / query value material). */
+	inbound_secret_configured?: boolean;
+	/** Only on PATCH/create when a new verifier was generated. */
+	signing_secret?: string | null;
+	description?: string | null;
+	created_by_user_id?: string | null;
+	created_by_username?: string | null;
+}
+
+/** `PATCH /api/v1/projects/{id}/webhooks/{registration_id}` */
+export interface PatchProjectWebhookInput {
+	description?: string;
+	target_pipeline_ids?: string[];
+	generic_inbound_auth?: 'none' | 'hmac' | 'query';
+	generic_query_param_name?: string;
+}
+
+/** `POST .../rotate-inbound-secret` */
+export interface RotateProjectWebhookSecretResponse {
+	signing_secret: string;
+}
+
+/** `POST /api/v1/projects/{id}/scm/setup` (SCM + `generic` multi-pipeline webhooks). */
+export interface SetupScmWebhookInput {
+	provider: string;
+	repository_url?: string;
+	events?: string[];
+	targets: Array<{ pipeline_id: string; filter_config?: Record<string, unknown> }>;
+	/** For `provider: generic` — optional [`WebhookConfig`] JSON without `secret`. */
+	payload_mapping?: Record<string, unknown>;
+	generic_inbound_auth?: 'none' | 'hmac' | 'query';
+	/** Required when `generic_inbound_auth` is `query`. */
+	generic_query_param_name?: string;
+	description?: string;
+}
+
+export interface SetupScmWebhookResponse {
+	webhook_id: string;
+	webhook_url: string;
+	provider: string;
+	events: string[];
+	/** Only for `generic`: HMAC signing key (store securely; shown once). */
+	signing_secret?: string;
+}
+
+/** Webhook routing target (`webhook_registration_targets`). */
+export interface WebhookRegistrationTargetRow {
+	id: string;
+	pipeline_id: string;
+	enabled: boolean;
+	filter_config: Record<string, unknown>;
 }
 
 export interface PipelineDefinition {
@@ -135,22 +324,167 @@ export interface CreatePipelineInput {
 	definition_path?: string;
 }
 
+export interface ImportPipelineGitInput {
+	name: string;
+	slug: string;
+	description?: string;
+	repository: string;
+	git_ref: string;
+	scm_path: string;
+	credentials_path: string;
+}
+
+/** Body for PUT /api/v1/pipelines/{id} — omit fields you do not want to change */
+export interface UpdatePipelineInput {
+	name?: string;
+	description?: string;
+	enabled?: boolean;
+	definition?: PipelineDefinition | Record<string, unknown>;
+	scm_provider?: string | null;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_credentials_secret_path?: string | null;
+	scm_revision?: string | null;
+}
+
+/** Project or pipeline-scoped environment variable (non-secret config). */
+export interface ProjectVariable {
+	id: string;
+	project_id: string;
+	pipeline_id?: string | null;
+	name: string;
+	/** Omitted when `is_sensitive` is true. */
+	value?: string | null;
+	scope: string;
+	is_sensitive: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+/** `scope_level` for GET /api/v1/workspace/* hub lists. */
+export type WorkspaceScopeLevel = 'all' | 'organization' | 'project' | 'pipeline';
+
+/** Row from GET /api/v1/workspace/variables */
+export interface WorkspaceVariableListItem extends ProjectVariable {
+	project_name: string;
+	project_slug: string;
+	pipeline_name?: string | null;
+}
+
+/** Row from GET /api/v1/workspace/stored-secrets (secret fields flattened in JSON). */
+export interface WorkspaceStoredSecretListItem extends StoredSecret {
+	project_name?: string | null;
+	project_slug?: string | null;
+	pipeline_name?: string | null;
+}
+
 // Run Types
 export type RunStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
 
 export interface Run {
 	id: string;
 	pipeline_id: string;
+	/** Present when this run was created via **Retry** from another run (null for Run Pipeline / new triggers). */
+	parent_run_id?: string | null;
+	/** Populated on run detail API when `parent_run_id` is set (parent's `run_number`). */
+	parent_run_number?: number | null;
+	/** Set when listing runs by project (all pipelines). */
+	pipeline_name?: string;
 	trigger_id?: string;
 	status: RunStatus;
 	run_number: number;
 	commit_sha?: string;
 	branch?: string;
 	triggered_by: string;
+	/** Observed webhook client IP when the run was created from an HTTP webhook. */
+	webhook_remote_addr?: string | null;
 	created_at: string;
 	started_at?: string;
 	finished_at?: string;
 	duration_ms?: number;
+	/** Prefer for badges when set (API: run is executing but no job is on an agent yet). */
+	status_display?: RunStatus | null;
+}
+
+/** GET /api/v1/runs/:id/dag — layout + exec telemetry per job. */
+export interface RunDagExecutedBinary {
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+}
+
+export interface RunDagNode {
+	job_id: string;
+	job_name: string;
+	status: string;
+	depends_on: string[];
+	executed_binaries?: RunDagExecutedBinary[];
+}
+
+export interface RunDagResponse {
+	run_id: string;
+	nodes: RunDagNode[];
+}
+
+/** GET /api/v1/runs/:run_id/sbom */
+export interface SbomApiResponse {
+	run_id: string;
+	format: string;
+	status: string;
+	sbom: Record<string, unknown> | null;
+	/** Job that uploaded the SBOM artifact (when known). */
+	job_name?: string | null;
+	/** Step hint from artifact metadata when present. */
+	step_name?: string | null;
+}
+
+/** GET /api/v1/runs/:id/footprint — execution surface for Blast Radius tab */
+export interface FootprintBinaryRow {
+	job_name: string;
+	step_name?: string | null;
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+}
+
+export interface FootprintNetworkRow {
+	job_name?: string | null;
+	dst_ip: string;
+	dst_port: number;
+	protocol: string;
+	direction: string;
+	connected_at: string;
+	binary_path?: string | null;
+	binary_sha256?: string | null;
+}
+
+export interface FootprintDirectoryEntry {
+	binary_path: string;
+	sha256: string;
+	execution_count: number;
+	job_names: string[];
+}
+
+export interface FootprintDirectoryGroup {
+	directory: string;
+	entries: FootprintDirectoryEntry[];
+	entries_truncated: boolean;
+}
+
+export interface RunFootprintResponse {
+	run_id: string;
+	executed_binaries: FootprintBinaryRow[];
+	network_connections: FootprintNetworkRow[];
+	filesystem_by_directory: FootprintDirectoryGroup[];
+	filesystem_directories_truncated: boolean;
+	filesystem_more_directory_count?: number | null;
+}
+
+/** GET /api/v1/runs/:run_id/jobs/:job_run_id/snapshots */
+export interface JobRunSnapshotsResponse {
+	pipeline_definition?: Record<string, unknown> | null;
+	workflow_definition?: Record<string, unknown> | null;
 }
 
 export interface TriggerRunInput {
@@ -185,19 +519,50 @@ export interface JobRun {
 	id: string;
 	run_id: string;
 	job_id: string;
+	job_name: string;
 	agent_id?: string;
 	status: JobStatus;
 	attempt: number;
+	exit_code?: number;
+	error_message?: string;
+	cache_hit?: boolean;
 	log_path?: string;
 	started_at?: string;
 	finished_at?: string;
+	duration_ms?: number;
+	/** SHA-256 (hex) of pipeline definition JSON in `definition_snapshots`. */
+	pipeline_definition_sha256?: string;
+	/** SHA-256 (hex) of reusable workflow definition when this job used one. */
+	workflow_definition_sha256?: string;
+	/** Resolved reusable workflow: scope, name, version (or other JSON from API). */
+	source_workflow?: Record<string, unknown>;
+	/** Best-effort explanation when status is pending or queued (from API). */
+	scheduling_note?: string;
+	/** Agent/host audit JSON when the job entered running (stored for forensics). */
+	agent_snapshot?: Record<string, unknown> | null;
+	agent_snapshot_captured_at?: string;
 	created_at: string;
+}
+
+/** One agent dispatch attempt for a job run (retries create multiple rows). */
+export interface JobAssignment {
+	id: string;
+	job_run_id: string;
+	agent_id: string;
+	status: string;
+	attempt: number;
+	accepted_at: string;
+	started_at?: string;
+	completed_at?: string;
+	exit_code?: number;
+	failure_reason?: string;
 }
 
 export interface StepRun {
 	id: string;
 	job_run_id: string;
 	step_id: string;
+	step_name: string;
 	status: JobStatus;
 	exit_code?: number;
 	log_path?: string;
@@ -233,13 +598,19 @@ export interface Agent {
 // Dashboard Stats
 export interface DashboardStats {
 	active_runs: number;
-	completed_today: number;
-	failed_today: number;
+	completed_runs: number;
+	failed_runs: number;
+	/** Cancelled runs finished (or updated) in the metrics window. */
+	cancelled_runs: number;
+	/** Runs created in the org during the selected metrics window (any status). */
+	total_runs: number;
 	avg_duration_ms: number;
 	agents_online: number;
 	agents_total: number;
 	pipelines_count: number;
 	projects_count: number;
+	/** Time window key echoed from the API: 1h, 4h, 12h, 1d, 3d, 7d */
+	window: string;
 }
 
 export interface RecentRun {
@@ -248,6 +619,7 @@ export interface RecentRun {
 	run_number: number;
 	status: RunStatus;
 	triggered_by: string;
+	webhook_remote_addr?: string | null;
 	duration_ms?: number;
 	created_at: string;
 }
@@ -289,6 +661,7 @@ export interface ListProjectsParams {
 	[key: string]: string | number | boolean | undefined;
 	page?: number;
 	per_page?: number;
+	cursor?: string;
 	search?: string;
 }
 
@@ -297,14 +670,23 @@ export interface ListPipelinesParams {
 	project_id: string;
 	page?: number;
 	per_page?: number;
+	cursor?: string;
 }
 
 export interface ListRunsParams {
 	[key: string]: string | number | boolean | undefined;
-	pipeline_id: string;
+	/** Use this or `project_id`, not both. */
+	pipeline_id?: string;
+	/** All pipelines in the project; mutually exclusive with `pipeline_id`. */
+	project_id?: string;
 	status?: string;
 	page?: number;
 	per_page?: number;
+	limit?: number;
+	/** Offset into the pipeline's run list (API uses `cursor` query param). */
+	cursor?: string;
+	/** With `pipeline_id`, return the single run with this run number (e.g. previous = current − 1). */
+	run_number?: number;
 }
 
 export interface ListAgentsParams {
@@ -325,6 +707,8 @@ export interface AdminUser {
 	is_active: boolean;
 	is_admin: boolean;
 	password_must_change: boolean;
+	/** ISO 8601; absent or null if the user has never logged in interactively. */
+	last_login_at?: string | null;
 	created_at: string;
 	updated_at: string;
 }

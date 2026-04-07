@@ -8,22 +8,22 @@
 //! Uses the `openidconnect` crate for OIDC and `oauth2` for GitHub.
 
 use axum::{
+    Router,
     extract::{Path, Query, State},
     http::HeaderMap,
     response::Redirect,
     routing::get,
-    Router,
 };
 use met_core::ids::AuthProviderId;
 use met_store::repos::{AuthProviderRepo, GroupRepo, UserRepo};
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse as OAuth2TokenResponse,
-    TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse as OAuth2TokenResponse, TokenUrl,
+    basic::BasicClient,
 };
 use openidconnect::{
-    core::{CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata},
     IssuerUrl, Nonce, TokenResponse as OidcTokenResponse,
+    core::{CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -36,7 +36,6 @@ use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
 };
-
 
 /// In-memory storage for OAuth state (CSRF tokens, PKCE verifiers, nonces).
 /// In production, this should be stored in Redis or the database with expiration.
@@ -102,14 +101,17 @@ async fn oauth_login(
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or_else(|| if host.contains(":443") { "https" } else { "http" });
+        .unwrap_or_else(|| {
+            if host.contains(":443") {
+                "https"
+            } else {
+                "http"
+            }
+        });
 
     // Use a simple, predictable callback URL without provider ID in path
     // Provider ID is stored in the state parameter for the callback to retrieve
-    let callback_url = format!(
-        "{}://{}/auth/oauth/callback",
-        scheme, host
-    );
+    let callback_url = format!("{}://{}/auth/oauth/callback", scheme, host);
 
     let (auth_url, csrf_state, pkce_verifier, nonce) = match provider.provider_type.as_str() {
         "oidc" => build_oidc_auth_url(&provider, &callback_url).await?,
@@ -266,19 +268,23 @@ async fn oauth_callback(
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or_else(|| if host.contains(":443") { "https" } else { "http" });
+        .unwrap_or_else(|| {
+            if host.contains(":443") {
+                "https"
+            } else {
+                "http"
+            }
+        });
 
     // Use the same simple callback URL as in login
-    let callback_url = format!(
-        "{}://{}/auth/oauth/callback",
-        scheme, host
-    );
+    let callback_url = format!("{}://{}/auth/oauth/callback", scheme, host);
 
     // Exchange code for tokens and get user info
     let (email, name, _external_id, oidc_groups) = match provider.provider_type.as_str() {
         "oidc" => exchange_oidc_code(&provider, &query.code, &callback_url, &pending).await?,
         "github" => {
-            let (email, name, external_id) = exchange_github_code(&provider, &query.code, &callback_url).await?;
+            let (email, name, external_id) =
+                exchange_github_code(&provider, &query.code, &callback_url).await?;
             (email, name, external_id, Vec::new())
         }
         _ => return Err(ApiError::bad_request("unsupported provider type")),
@@ -291,7 +297,10 @@ async fn oauth_callback(
     let user = if let Some(existing) = user_repo.get_by_email(provider.org_id, &email).await? {
         // Active user found
         existing
-    } else if let Some(deleted_user) = user_repo.get_by_email_including_deleted(provider.org_id, &email).await? {
+    } else if let Some(deleted_user) = user_repo
+        .get_by_email_including_deleted(provider.org_id, &email)
+        .await?
+    {
         // User was soft-deleted, restore them
         tracing::info!(
             user_id = %deleted_user.id,
@@ -319,12 +328,12 @@ async fn oauth_callback(
     if !oidc_groups.is_empty() {
         let auth_repo = AuthProviderRepo::new(state.db());
         let group_repo = GroupRepo::new(state.db());
-        
+
         // Find mappings for the user's OIDC groups
         let mappings = auth_repo
             .find_mappings_for_claims(provider_id, &oidc_groups)
             .await?;
-        
+
         // Add user to each mapped group
         for mapping in mappings {
             if let Err(e) = group_repo
@@ -340,13 +349,18 @@ async fn oauth_callback(
                 );
             }
         }
-        
+
         tracing::info!(
             user_id = %user.id,
             oidc_groups = ?oidc_groups,
             "Synced OIDC group memberships"
         );
     }
+
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Generate JWT
     let permissions = if user.is_admin {
@@ -479,27 +493,27 @@ fn extract_groups_from_id_token(id_token: &CoreIdToken) -> Vec<String> {
         Ok(s) => s.trim_matches('"').to_string(),
         Err(_) => return Vec::new(),
     };
-    
+
     let parts: Vec<&str> = token_str.split('.').collect();
-    
+
     if parts.len() != 3 {
         return Vec::new();
     }
-    
+
     // Decode the payload (second part)
     use base64::Engine;
     let payload = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1]) {
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };
-    
+
     // Parse as JSON and extract groups
     #[derive(Deserialize)]
     struct TokenPayload {
         #[serde(default)]
         groups: Vec<String>,
     }
-    
+
     match serde_json::from_slice::<TokenPayload>(&payload) {
         Ok(p) => p.groups,
         Err(_) => Vec::new(),
@@ -513,9 +527,7 @@ async fn exchange_github_code(
 ) -> ApiResult<(String, Option<String>, String)> {
     let client = BasicClient::new(ClientId::new(provider.client_id.clone()))
         .set_client_secret(ClientSecret::new(provider.client_secret_ref.clone()))
-        .set_auth_uri(
-            AuthUrl::new("https://github.com/login/oauth/authorize".to_string()).unwrap(),
-        )
+        .set_auth_uri(AuthUrl::new("https://github.com/login/oauth/authorize".to_string()).unwrap())
         .set_token_uri(
             TokenUrl::new("https://github.com/login/oauth/access_token".to_string()).unwrap(),
         )

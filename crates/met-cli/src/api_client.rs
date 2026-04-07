@@ -80,7 +80,22 @@ impl ApiClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/api/v1{}", self.base_url, path)
+        let base = self.base_url.trim_end_matches('/');
+        // Auth, admin, and OAuth live at the API root (not under `/api/v1`).
+        let root_paths = [
+            "/auth/",
+            "/admin/",
+            "/oauth/",
+            "/health",
+            "/ready",
+            "/live",
+        ];
+        let use_root = root_paths.iter().any(|p| path == *p || path.starts_with(p));
+        if use_root {
+            format!("{base}{path}")
+        } else {
+            format!("{base}/api/v1{path}")
+        }
     }
 
     fn add_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

@@ -23,13 +23,14 @@ Organization (tenant) → Project → Pipelines (Jobs as DAG, Steps) with scoped
 
 ## Deeper reference
 
-| File | Contents |
-| --- | --- |
-| [references/system-diagram-and-domain.md](references/system-diagram-and-domain.md) | Mermaid diagram, hierarchy text, key decisions |
-| [references/phased-roadmap.md](references/phased-roadmap.md) | Phased build order (0–7) |
-| [references/plan-index.md](references/plan-index.md) | Index of `.cursor/plans/*.plan.md` |
-| [../../design/adr/README.md](../../design/adr/README.md) | ADRs (run/job lifecycle, NATS, gRPC, secrets); check **Status** in each file—**Accepted** is normative for implementers |
-| [../../design/prd/README.md](../../design/prd/README.md) | Product requirements index, overlap resolution, verification matrix |
+| File                                                                                                                             | Contents                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [references/system-diagram-and-domain.md](references/system-diagram-and-domain.md)                                               | Mermaid diagram, hierarchy text, key decisions                                                                          |
+| [references/phased-roadmap.md](references/phased-roadmap.md)                                                                     | Phased build order (0–7)                                                                                                |
+| [references/plan-index.md](references/plan-index.md)                                                                             | Index of `.cursor/plans/*.plan.md`                                                                                      |
+| [../../design/adr/README.md](../../design/adr/README.md)                                                                         | ADRs (run/job lifecycle, NATS, gRPC, secrets); check **Status** in each file—**Accepted** is normative for implementers |
+| [../../design/prd/README.md](../../design/prd/README.md)                                                                         | Product requirements index, overlap resolution, verification matrix                                                     |
+| [../../design/adr/013-project-webhook-multi-pipeline-routing.md](../../design/adr/013-project-webhook-multi-pipeline-routing.md) | Project webhook multi-pipeline routing                                                                                  |
 
 Frontend stack for the web UI is **SvelteKit** and **Svelte 5** under `frontend/` (not React).
 

@@ -51,6 +51,7 @@ fn mock_docker_workflow() -> RawWorkflowDef {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![],
             depends_on: vec![],
@@ -83,6 +84,7 @@ fn mock_test_workflow() -> RawWorkflowDef {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![],
             depends_on: vec![],
@@ -115,7 +117,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
@@ -144,7 +146,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -177,7 +179,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -213,7 +215,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -245,13 +247,40 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
     let ir = result.unwrap();
     
     assert!(ir.triggers.len() >= 3);
+}
+
+#[tokio::test]
+async fn test_parse_webhook_sync_key() {
+    let yaml = r#"
+name: Sync webhook
+triggers:
+  webhook:
+    sync-key: primary
+    events: [push]
+    branches: [main]
+workflows:
+  - name: Build
+    id: build
+    workflow: global/docker-build
+    inputs:
+      image: myapp
+"#;
+
+    let provider = create_provider();
+    let mut parser = PipelineParser::new(&provider);
+    let ir = parser.parse(yaml).await.unwrap();
+    let wh = ir.triggers.iter().find_map(|t| match t {
+        met_parser::ir::Trigger::Webhook(w) => Some(w),
+        _ => None,
+    });
+    assert_eq!(wh.and_then(|w| w.sync_key.as_deref()), Some("primary"));
 }
 
 #[tokio::test]
@@ -273,7 +302,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -303,7 +332,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -331,7 +360,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -365,7 +394,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -387,7 +416,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -415,7 +444,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -439,7 +468,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -467,7 +496,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -488,7 +517,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -509,7 +538,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -537,7 +566,7 @@ workflows:
         strict: true,
         ..Default::default()
     };
-    let parser = PipelineParser::new(&provider).with_config(config);
+    let mut parser = PipelineParser::new(&provider).with_config(config);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -596,7 +625,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());

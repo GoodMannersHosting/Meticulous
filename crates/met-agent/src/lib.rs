@@ -18,9 +18,9 @@
 //! ├── Heartbeat Task       ← periodic gRPC heartbeat
 //! ├── Job Executor Loop    ← pull NATS → execute → report
 //! │   ├── PKI Manager      ← per-job X509 keypair
-//! │   ├── Execution Backend
-//! │   │   ├── ContainerBackend (Linux)
-//! │   │   └── NativeBackend (macOS/Win)
+//! │   ├── Execution Backend (see [`config::ExecutionRuntime`]: native default, optional container)
+//! │   │   ├── NativeBackend (host processes; all platforms)
+//! │   │   └── ContainerBackend (Docker/Podman; Linux, when configured)
 //! │   └── Log Shipper      ← streams logs to controller
 //! └── Signal Handler       ← SIGTERM/SIGINT → graceful drain
 //! ```
@@ -30,11 +30,19 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod heartbeat;
+pub mod job_claim;
+mod output_drain;
+mod output_seal;
+mod workflow_outputs;
 pub mod process_watcher;
 pub mod registration;
+pub mod script_exec_hints;
+pub mod seccomp_exec;
 pub mod security;
+pub mod step_log;
+pub mod telemetry;
 
-pub use config::{AgentConfig, JoinTokenSource};
+pub use config::{AgentConfig, ExecutionRuntime, JoinTokenSource};
 pub use error::{AgentError, Result};
 pub use executor::JobExecutor;
 pub use process_watcher::{

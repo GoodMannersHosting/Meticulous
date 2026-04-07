@@ -35,6 +35,7 @@
 //! let result = parser.parse(yaml).await;
 //! ```
 
+pub mod affinity;
 pub mod dag;
 pub mod error;
 pub mod hash_files;
@@ -47,6 +48,7 @@ pub mod span;
 pub mod variable;
 pub mod workflow;
 
+pub use affinity::validate_share_workspace_affinity;
 pub use dag::{build_dag, DagNode, ValidatedDag};
 pub use error::{ErrorCode, ParseDiagnostics, ParseError, Result, Severity, SourceLocation};
 pub use hash_files::{hash_files, hash_files_with_glob, HashFilesOptions};
@@ -55,15 +57,18 @@ pub use ir::{
     RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
     TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
 };
-pub use parser::{ParserConfig, PipelineParser};
+pub use parser::{secret_refs_from_raw_secrets, ParserConfig, PipelineParser};
 #[cfg(feature = "database")]
-pub use providers::DatabaseWorkflowProvider;
+pub use providers::{CompositeWorkflowProvider, DatabaseWorkflowProvider};
 pub use providers::GitWorkflowProvider;
 pub use schema::{
-    RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef, RawService,
-    RawStep, RawStoredSecretRef, RawTriggers, RawWorkflowDef, RawWorkflowInvocation,
+    RawAgentAffinity, RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy,
+    RawSecretRef, RawService, RawStep, RawStoredSecretRef, RawTriggers, RawWorkflowDef,
+    RawWorkflowInvocation,
 };
 pub use semver::{parse_version_constraint, resolve_version, VersionConstraint};
 pub use span::{SpanTracker, SpannedYamlParser};
-pub use variable::{extract_vars, has_refs, interpolate, validate_refs, VariableContext};
+pub use variable::{
+    extract_vars, has_refs, interpolate, validate_refs, validate_refs_in_run_script, VariableContext,
+};
 pub use workflow::{MockWorkflowProvider, WorkflowFetchError, WorkflowProvider, WorkflowResolver};

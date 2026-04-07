@@ -5,6 +5,7 @@ use met_parser::{
     MockWorkflowProvider, PipelineParser, RawJob, RawStep, RawWorkflowDef, WorkflowScope,
     EnvValue, StepCommand, Trigger,
 };
+use met_parser::schema::{RawInputDef, RawOutputDef};
 
 fn create_full_provider() -> MockWorkflowProvider {
     let mut provider = MockWorkflowProvider::new();
@@ -39,6 +40,7 @@ fn create_full_provider() -> MockWorkflowProvider {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![],
             depends_on: vec![],
@@ -79,6 +81,7 @@ fn create_full_provider() -> MockWorkflowProvider {
                     working_directory: None,
                     timeout: None,
                     continue_on_error: false,
+                    outputs: IndexMap::new(),
                 },
                 RawStep {
                     name: "Compile".to_string(),
@@ -91,6 +94,7 @@ fn create_full_provider() -> MockWorkflowProvider {
                     working_directory: None,
                     timeout: None,
                     continue_on_error: false,
+                    outputs: IndexMap::new(),
                 },
             ],
             services: vec![],
@@ -126,6 +130,7 @@ fn create_full_provider() -> MockWorkflowProvider {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![met_parser::schema::RawService {
                 name: "postgres".to_string(),
@@ -241,7 +246,7 @@ workflows:
 "#;
 
     let provider = create_full_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     
     let result = parser.parse(yaml).await;
     assert!(result.is_ok(), "Parse failed: {:?}", result.err());
@@ -315,7 +320,7 @@ workflows:
 "#;
 
     let provider = create_full_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let ir = parser.parse(yaml).await.expect("Parse should succeed");
 
     assert!(!ir.id.as_uuid().is_nil());
@@ -337,8 +342,8 @@ workflows:
     for job in &ir.jobs {
         for step in &job.steps {
             match &step.command {
-                StepCommand::Run { shell, script } => {
-                    assert!(!script.is_empty() || !shell.to_string().is_empty());
+                StepCommand::Run { script, .. } => {
+                    assert!(!script.is_empty());
                 }
                 StepCommand::Action { name, version, .. } => {
                     assert!(!name.is_empty());
@@ -374,7 +379,7 @@ workflows:
 "#;
 
     let provider = create_full_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let ir = parser.parse(yaml).await.expect("Parse should succeed");
 
     let topo_order = met_engine::topological_order(&ir).expect("Should have valid ordering");
@@ -408,7 +413,7 @@ workflows:
 "#;
 
     let provider = create_full_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let ir = parser.parse(yaml).await.expect("Parse should succeed");
 
     let job = &ir.jobs[0];
@@ -417,4 +422,144 @@ workflows:
     let source = job.source_workflow.as_ref().unwrap();
     assert_eq!(source.scope, WorkflowScope::Global);
     assert_eq!(source.name, "rust-build");
+}
+
+#[tokio::test]
+async fn test_e2e_workflow_outputs_reference_in_inputs() {
+    let mut provider = MockWorkflowProvider::new();
+
+    let mut build_outputs = IndexMap::new();
+    build_outputs.insert(
+        "image_uri".to_string(),
+        RawOutputDef {
+            value: None,
+            description: Some("OCI reference".to_string()),
+            secret: false,
+        },
+    );
+
+    let build_wf = RawWorkflowDef {
+        name: "build".to_string(),
+        description: None,
+        version: Some("1.0.0".to_string()),
+        inputs: IndexMap::new(),
+        outputs: build_outputs,
+        jobs: vec![RawJob {
+            name: "Build".to_string(),
+            id: "build_job".to_string(),
+            runs_on: None,
+            steps: vec![RawStep {
+                name: "noop".to_string(),
+                id: Some("noop".to_string()),
+                run: Some("true".to_string()),
+                shell: None,
+                uses: None,
+                action_inputs: IndexMap::new(),
+                env: IndexMap::new(),
+                working_directory: None,
+                timeout: None,
+                continue_on_error: false,
+                outputs: IndexMap::new(),
+            }],
+            services: vec![],
+            depends_on: vec![],
+            condition: None,
+            timeout: None,
+            retry: None,
+        }],
+    };
+
+    let mut deploy_inputs = IndexMap::new();
+    deploy_inputs.insert(
+        "image".to_string(),
+        RawInputDef {
+            input_type: "string".to_string(),
+            required: true,
+            default: None,
+            description: None,
+        },
+    );
+
+    let deploy_wf = RawWorkflowDef {
+        name: "deploy".to_string(),
+        description: None,
+        version: Some("1.0.0".to_string()),
+        inputs: deploy_inputs,
+        outputs: IndexMap::new(),
+        jobs: vec![RawJob {
+            name: "Deploy".to_string(),
+            id: "deploy_job".to_string(),
+            runs_on: None,
+            steps: vec![RawStep {
+                name: "apply".to_string(),
+                id: Some("apply".to_string()),
+                run: Some("echo \"$IMAGE\"".to_string()),
+                shell: None,
+                uses: None,
+                action_inputs: IndexMap::new(),
+                env: {
+                    let mut m = IndexMap::new();
+                    m.insert("IMAGE".to_string(), "${{ inputs.image }}".to_string());
+                    m
+                },
+                working_directory: None,
+                timeout: None,
+                continue_on_error: false,
+                outputs: IndexMap::new(),
+            }],
+            services: vec![],
+            depends_on: vec![],
+            condition: None,
+            timeout: None,
+            retry: None,
+        }],
+    };
+
+    provider.add_workflow(WorkflowScope::Global, "build", build_wf);
+    provider.add_workflow(WorkflowScope::Global, "deploy", deploy_wf);
+
+    let yaml = r#"
+name: workflow outputs chain
+triggers:
+  manual: {}
+workflows:
+  - name: Build
+    id: build
+    workflow: global/build
+    version: "1.0.0"
+  - name: Deploy
+    id: deploy
+    workflow: global/deploy
+    version: "1.0.0"
+    depends-on: [build]
+    inputs:
+      image: "${{ workflows.build.outputs.image_uri }}"
+"#;
+
+    let mut parser = PipelineParser::new(&provider);
+    let ir = parser.parse(yaml).await.expect("parse");
+    assert_eq!(ir.jobs.len(), 2, "build + deploy jobs");
+    let build_job = ir
+        .jobs
+        .iter()
+        .find(|j| j.workflow_invocation_id.as_deref() == Some("build"))
+        .expect("build job");
+    let deploy_job = ir
+        .jobs
+        .iter()
+        .find(|j| j.workflow_invocation_id.as_deref() == Some("deploy"))
+        .expect("deploy job");
+    assert!(
+        deploy_job.depends_on.contains(&build_job.id),
+        "deploy must depend on concrete build job id"
+    );
+    let step = &deploy_job.steps[0];
+    let env_img = step.env.get("IMAGE").expect("IMAGE env");
+    let EnvValue::Expression(e) = env_img else {
+        panic!("expected expression env for inputs.image");
+    };
+    assert!(
+        e.contains("inputs.image"),
+        "deploy step should reference injected input (got {e})"
+    );
 }

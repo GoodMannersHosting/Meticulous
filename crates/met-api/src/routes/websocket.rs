@@ -5,27 +5,23 @@
 //! and referrer headers.
 
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::get,
-    Router,
 };
-use futures::{stream, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, stream};
 use met_core::ids::{JobRunId, RunId};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
-use crate::{
-    auth::JwtValidator,
-    extractors::CurrentUser,
-    state::AppState,
-};
+use crate::{auth::JwtValidator, extractors::CurrentUser, state::AppState};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -73,7 +69,10 @@ pub enum WsMessage {
     #[serde(rename = "connected")]
     Connected { run_id: String },
     #[serde(rename = "end")]
-    End { run_id: String, final_status: String },
+    End {
+        run_id: String,
+        final_status: String,
+    },
 }
 
 #[instrument(skip(state, ws))]
@@ -218,9 +217,7 @@ async fn wait_for_auth(
             Ok(Message::Text(text)) => {
                 if let Ok(WsClientMessage::Auth { token }) = serde_json::from_str(&text) {
                     let validator = JwtValidator::new(&state.config.jwt);
-                    return validator
-                        .validate(&token)
-                        .map_err(|e| e.to_string());
+                    return validator.validate(&token).map_err(|e| e.to_string());
                 }
             }
             Ok(Message::Close(_)) => {

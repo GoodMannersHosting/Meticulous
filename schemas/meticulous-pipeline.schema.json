@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gmh/meticulous/schemas/meticulous-pipeline.schema.json",
+  "title": "Meticulous pipeline definition",
+  "description": "YAML shape accepted as an inline pipeline definition (met-parser RawPipeline). Field names use kebab-case where noted.",
+  "type": "object",
+  "required": ["name", "workflows"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "triggers": { "$ref": "#/$defs/rawTriggers" },
+    "runs-on": { "$ref": "#/$defs/rawPoolSelector" },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/rawSecretRef" }
+    },
+    "vars": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "workflows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rawWorkflowInvocation" }
+    }
+  },
+  "$defs": {
+    "rawTriggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "manual": { "$ref": "#/$defs/rawManualTrigger" },
+        "webhook": { "$ref": "#/$defs/rawWebhookTrigger" },
+        "tag": { "$ref": "#/$defs/rawTagTrigger" },
+        "schedule": { "$ref": "#/$defs/rawScheduleTrigger" },
+        "release": { "$ref": "#/$defs/rawReleaseTrigger" }
+      }
+    },
+    "rawManualTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" }
+      }
+    },
+    "rawWebhookTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "events": { "type": "array", "items": { "type": "string" } },
+        "branches": { "type": "array", "items": { "type": "string" } },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "paths-ignore": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "rawTagTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "patterns": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "rawReleaseTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tag": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "rawScheduleTrigger": {
+      "type": "object",
+      "required": ["cron"],
+      "additionalProperties": false,
+      "properties": {
+        "cron": { "type": "string", "description": "Cron expression (UTC)" },
+        "timezone": { "type": "string" }
+      }
+    },
+    "rawPoolSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "pool": { "type": "string" }
+      }
+    },
+    "rawSecretRef": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "aws": { "$ref": "#/$defs/rawAwsSecretRef" },
+        "vault": { "$ref": "#/$defs/rawVaultSecretRef" },
+        "builtin": { "$ref": "#/$defs/rawBuiltinSecretRef" },
+        "stored": { "$ref": "#/$defs/rawStoredSecretRef" }
+      }
+    },
+    "rawAwsSecretRef": {
+      "type": "object",
+      "required": ["arn"],
+      "additionalProperties": false,
+      "properties": {
+        "arn": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "rawVaultSecretRef": {
+      "type": "object",
+      "required": ["path", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "key": { "type": "string" },
+        "mount": { "type": "string" }
+      }
+    },
+    "rawBuiltinSecretRef": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" }
+      }
+    },
+    "rawStoredSecretRef": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" }
+      }
+    },
+    "rawWorkflowInvocation": {
+      "type": "object",
+      "required": ["name", "id", "workflow"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "id": { "type": "string" },
+        "workflow": {
+          "type": "string",
+          "description": "e.g. global/docker-build or project/my-workflow"
+        },
+        "version": { "type": "string" },
+        "inputs": { "type": "object", "additionalProperties": true },
+        "depends-on": { "type": "array", "items": { "type": "string" } },
+        "condition": { "type": "string", "description": "CEL expression" },
+        "timeout": {
+          "type": "string",
+          "description": "Duration string, e.g. 30m, 1h"
+        },
+        "retry": { "$ref": "#/$defs/rawRetryPolicy" },
+        "cache": { "$ref": "#/$defs/rawCacheConfig" }
+      }
+    },
+    "rawRetryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "backoff": { "type": "string", "description": "humantime duration" }
+      }
+    },
+    "rawCacheConfig": {
+      "type": "object",
+      "required": ["key"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "restore-keys": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

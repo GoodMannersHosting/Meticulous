@@ -1,17 +1,19 @@
 //! Container execution backend for Linux.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
-use super::{ExecutionBackend, StepResult, StepSpec};
+use super::{poll_watcher_emit_telemetry, ExecutionBackend, StepResult, StepSpec};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
+use crate::step_log::StepLogPipe;
 
 /// Container runtime type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,20 +89,34 @@ impl ContainerBackend {
     }
 
     /// Build the docker/podman run command.
-    fn build_run_command(&self, step: &StepSpec, workspace: &Path) -> Command {
+    fn build_run_command(
+        &self,
+        step: &StepSpec,
+        workspace: &Path,
+        met_output_path_in_container: Option<&str>,
+    ) -> Command {
         let mut cmd = Command::new(self.runtime.command());
 
         match self.runtime {
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
                 cmd.arg("run")
                     .arg("--rm")
-                    .arg("--network=none") // Isolated by default
+                    // Default bridge network (outbound NAT) — required for git clone, curl, etc.
+                    // Opt-in isolation can be added later via pipeline/step settings.
                     .arg("-w")
                     .arg("/workspace");
 
                 // Mount workspace
                 cmd.arg("-v")
                     .arg(format!("{}:/workspace", workspace.display()));
+
+                // Non-interactive git/SSH in CI (avoid credential-helper prompts blocking forever).
+                cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
+
+                if let Some(p) = met_output_path_in_container {
+                    cmd.arg("-e")
+                        .arg(format!("METICULOUS_OUTPUT_PATH={p}"));
+                }
 
                 // Set environment variables
                 for (key, value) in &step.environment {
@@ -166,6 +182,7 @@ impl ExecutionBackend for ContainerBackend {
         step: &StepSpec,
         workspace: &Path,
         watcher: &mut ProcessWatcher,
+        logs: Option<&StepLogPipe>,
     ) -> Result<StepResult> {
         if step.image.is_empty() {
             return Err(AgentError::ContainerRuntime(
@@ -175,18 +192,65 @@ impl ExecutionBackend for ContainerBackend {
 
         let start = Instant::now();
 
-        debug!(
+        let workspace_canon = tokio::fs::canonicalize(workspace)
+            .await
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let mut runtime_budget = crate::telemetry::MAX_RUNTIME_SCRIPT_BYTES_PER_STEP;
+        let mut runtime_seen = HashSet::new();
+
+        info!(
             runtime = ?self.runtime,
+            step = %step.name,
             image = %step.image,
-            command = %step.command,
-            "executing step in container"
+            "container backend: begin (pull if needed, then run)"
         );
 
-        // Pull image first (ignore errors - it might already exist)
-        let _ = self.pull_image(&step.image).await;
+        let pull_start = Instant::now();
+        let pull_res = self.pull_image(&step.image).await;
+        info!(
+            step = %step.name,
+            image = %step.image,
+            elapsed = ?pull_start.elapsed(),
+            pull_ok = pull_res.is_ok(),
+            "container backend: image pull attempt finished"
+        );
+
+
+        let (output_fifo_file, fifo_cleanup, met_out_container_path) = {
+            use std::fs::OpenOptions;
+            let met_dir = workspace.join(".meticulous");
+            tokio::fs::create_dir_all(&met_dir).await.map_err(|e| {
+                AgentError::ContainerRuntime(format!("create .meticulous: {e}"))
+            })?;
+            let fifo_path = met_dir.join(format!("met-output-{}.fifo", step.step_run_id));
+            if tokio::fs::metadata(&fifo_path).await.is_ok() {
+                let _ = tokio::fs::remove_file(&fifo_path).await;
+            }
+            let st = std::process::Command::new("mkfifo")
+                .arg("-m")
+                .arg("0600")
+                .arg(&fifo_path)
+                .status()
+                .map_err(|e| AgentError::ContainerRuntime(format!("mkfifo: {e}")))?;
+            if !st.success() {
+                return Err(AgentError::ContainerRuntime(
+                    "mkfifo failed (required for met-output)".into(),
+                ));
+            }
+            let canon = tokio::fs::canonicalize(&fifo_path)
+                .await
+                .unwrap_or_else(|_| fifo_path.clone());
+            let p_in_ctr = format!("/workspace/.meticulous/met-output-{}.fifo", step.step_run_id);
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&canon)
+                .map_err(|e| AgentError::ContainerRuntime(format!("open output fifo: {e}")))?;
+            (Some(f), Some(canon), Some(p_in_ctr))
+        };
 
         // Build and run command
-        let mut cmd = self.build_run_command(step, workspace);
+        let mut cmd = self.build_run_command(step, workspace, met_out_container_path.as_deref());
 
         let mut child = cmd.spawn().map_err(|e| {
             AgentError::ContainerRuntime(format!("failed to spawn container: {e}"))
@@ -204,29 +268,46 @@ impl ExecutionBackend for ContainerBackend {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Spawn tasks to read output
         let stdout_handle = if let Some(stdout) = stdout {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    info!(step = %step_name, "[stdout] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stdout_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
 
         let stderr_handle = if let Some(stderr) = stderr {
-            let step_name = step.name.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    warn!(step = %step_name, "[stderr] {}", line);
-                }
-            }))
+            if let Some(pipe) = logs.cloned() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if pipe.send_stderr_line(&line).await.is_err() {
+                            break;
+                        }
+                    }
+                }))
+            } else {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(_line)) = lines.next_line().await {}
+                }))
+            }
         } else {
             None
         };
@@ -239,7 +320,7 @@ impl ExecutionBackend for ContainerBackend {
         };
 
         // Poll for child processes while waiting for completion
-        let poll_interval = Duration::from_millis(100);
+        let poll_interval = super::PROCESS_WATCHER_POLL_INTERVAL;
         let result: std::result::Result<std::process::ExitStatus, AgentError> = loop {
             // Check if we've exceeded the timeout
             if let Some(deadline) = deadline {
@@ -264,16 +345,29 @@ impl ExecutionBackend for ContainerBackend {
                     }
                 }
                 _ = tokio::time::sleep(poll_interval) => {
-                    // Poll for new child processes
-                    if let Err(e) = watcher.poll().await {
-                        trace!(error = %e, "process watcher poll error");
-                    }
+                    poll_watcher_emit_telemetry(
+                        watcher,
+                        logs,
+                        step,
+                        &workspace_canon,
+                        &mut runtime_budget,
+                        &mut runtime_seen,
+                    )
+                    .await?;
                 }
             }
         };
 
         // Final poll to catch any remaining processes
-        let _ = watcher.poll().await;
+        poll_watcher_emit_telemetry(
+            watcher,
+            logs,
+            step,
+            &workspace_canon,
+            &mut runtime_budget,
+            &mut runtime_seen,
+        )
+        .await?;
 
         // Wait for output tasks
         if let Some(h) = stdout_handle {
@@ -295,7 +389,9 @@ impl ExecutionBackend for ContainerBackend {
         };
 
         // Aggregate execution metadata
-        let metadata = watcher.aggregate_metadata(&step.step_id).await;
+        let metadata = watcher
+            .aggregate_metadata(&step.step_id, &step.step_run_id)
+            .await;
         watcher.stop_watching().await;
 
         let exit_code = status.code().unwrap_or(-1);
@@ -310,12 +406,24 @@ impl ExecutionBackend for ContainerBackend {
             "container step completed"
         );
 
+        let mut output_ipc_bytes = Vec::new();
+        {
+            use std::io::Read;
+            if let Some(mut f) = output_fifo_file {
+                let _ = f.read_to_end(&mut output_ipc_bytes);
+            }
+            if let Some(p) = fifo_cleanup {
+                let _ = tokio::fs::remove_file(&p).await;
+            }
+        }
+
         Ok(StepResult {
             exit_code,
             duration,
             executed_binaries: metadata.executed_binaries,
             processes_spawned: metadata.total_processes_spawned,
             execution_tree_depth: metadata.execution_tree_depth,
+            output_ipc_bytes,
         })
     }
 

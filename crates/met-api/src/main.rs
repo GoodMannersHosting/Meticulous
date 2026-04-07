@@ -9,6 +9,7 @@ use met_core::MetConfig;
 use met_store::repos::AgentRepo;
 use met_store::{PoolConfig, create_pool};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -72,6 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("CORS allowed from any origin - DO NOT use in production");
     }
 
+    if let Ok(secret) = std::env::var("MET_JWT__SECRET") {
+        if !secret.is_empty() {
+            api_config.jwt.secret = secret;
+        }
+    }
+
     // Create database pool
     let mut pool_config = PoolConfig::from(&met_config.database);
     if let Some(url) = args.database_url {
@@ -80,6 +87,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(url = %pool_config.url, "connecting to database");
     let db = create_pool(&pool_config).await?;
+
+    if std::env::var("MET_API__RUN_MIGRATIONS")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        met_store::run_migrations(&db).await?;
+    }
 
     let stale_after = api_config.agent_stale_after_secs;
     let sweep_secs = api_config.agent_stale_sweep_interval_secs.max(5);
@@ -100,14 +114,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let stored_secret_crypto = std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
-        .map(std::sync::Arc::new);
+    let stored_secret_crypto = match std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY") {
+        Err(_) => None,
+        Ok(s) if s.trim().is_empty() => None,
+        Ok(k) => {
+            let trimmed = k.trim();
+            let r = met_secrets::BuiltinStoredCrypto::from_master_key_b64(trimmed, None);
+            if let Err(ref e) = r {
+                tracing::warn!(
+                    error = %e,
+                    "MET_BUILTIN_SECRETS_MASTER_KEY is set but could not be loaded; stored secrets API disabled. Expect standard base64 encoding with at least 16 bytes after decode (e.g. openssl rand -base64 32)."
+                );
+            }
+            r.ok().map(std::sync::Arc::new)
+        }
+    };
+
+    let nats_ops =
+        match met_controller::nats::NatsDispatcher::connect(&met_config.nats.url, None).await {
+            Ok(n) => Some(Arc::new(n)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "NATS ops client not connected; admin JOBS_DLQ preview disabled"
+                );
+                None
+            }
+        };
+
+    let (engine, engine_init_error) = match met_engine::Engine::new(met_engine::EngineConfig {
+        nats_url: met_config.nats.url.clone(),
+        pool: db.clone(),
+        executor: Default::default(),
+        scheduler: Default::default(),
+        cache_prefix: String::new(),
+        builtin_secrets_master_key: std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY").ok(),
+        builtin_secrets_key_id: None,
+    })
+    .await
+    {
+        Ok(e) => (Some(Arc::new(e)), None),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "met-engine failed to initialize (is NATS up?); pipeline trigger returns 503 until fixed"
+            );
+            (None, Some(e.to_string()))
+        }
+    };
 
     // Build application state
-    let state = AppState::new(db, api_config.clone(), stored_secret_crypto);
+    let state = AppState::new(
+        db,
+        api_config.clone(),
+        stored_secret_crypto,
+        engine,
+        engine_init_error,
+        api_config.max_concurrent_engine_runs,
+        nats_ops,
+    );
 
     // Build router
     let router = routes::build_router(state);
@@ -128,9 +193,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Start server with graceful shutdown
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     tracing::info!("server shutdown complete");
     Ok(())

@@ -4,9 +4,9 @@
 //! Each session gets a proxy URL and single-use secret access.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{get, post},
-    Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -68,17 +68,25 @@ async fn create_debug_session(
     Json(req): Json<CreateDebugSessionRequest>,
 ) -> ApiResult<Json<DebugSessionResponse>> {
     if req.ttl_minutes < 1 || req.ttl_minutes > 480 {
-        return Err(ApiError::bad_request("ttl_minutes must be between 1 and 480"));
+        return Err(ApiError::bad_request(
+            "ttl_minutes must be between 1 and 480",
+        ));
     }
 
     let project_id: Option<Uuid> = req
         .project_id
-        .map(|r| r.parse().map_err(|_| ApiError::bad_request("invalid project_id")))
+        .map(|r| {
+            r.parse()
+                .map_err(|_| ApiError::bad_request("invalid project_id"))
+        })
         .transpose()?;
 
     let pipeline_id: Option<Uuid> = req
         .pipeline_id
-        .map(|r| r.parse().map_err(|_| ApiError::bad_request("invalid pipeline_id")))
+        .map(|r| {
+            r.parse()
+                .map_err(|_| ApiError::bad_request("invalid pipeline_id"))
+        })
         .transpose()?;
 
     let id = Uuid::now_v7();

@@ -2,12 +2,13 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { 
-		User, Mail, Calendar, Shield, ShieldCheck, Lock, Unlock, 
+		Mail, Calendar, Clock, Shield, ShieldCheck, Lock, Unlock, 
 		Trash2, Key, ArrowLeft, Users, Plus, X, Check, AlertTriangle
 	} from 'lucide-svelte';
 	import { apiMethods } from '$lib/api';
 	import type { AdminUser, UserRoleAssignment, RoleInfo, GroupMember } from '$lib/api/types';
 	import { getGravatarUrl } from '$lib/utils/gravatar';
+	import { auth } from '$stores';
 
 	let { data } = $props();
 
@@ -148,13 +149,18 @@
 		});
 	}
 
-	async function lockUser() {
-		if (!user) return;
-		try {
-			user = await apiMethods.admin.users.lock(user.id);
-		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to lock user');
-		}
+	function requestLockAccount() {
+		if (!user || isSelf) return;
+		const userName = user.display_name || user.username;
+		openConfirmModal({
+			title: 'Are you sure?',
+			message: `Lock account for ${userName}? They will not be able to sign in until an admin unlocks the account.`,
+			buttonText: 'Lock account',
+			danger: true,
+			onConfirm: async () => {
+				user = await apiMethods.admin.users.lock(user!.id);
+			}
+		});
 	}
 
 	async function unlockUser() {
@@ -240,6 +246,8 @@
 	const unassignedRoles = $derived(
 		availableRoles.filter(r => !roles.some(ur => ur.role === r.name))
 	);
+
+	const isSelf = $derived(!!user && !!auth.user && user.id === auth.user.id);
 </script>
 
 <div class="space-y-6">
@@ -307,6 +315,21 @@
 							<Calendar class="h-4 w-4 text-[var(--text-tertiary)]" />
 							<span class="text-[var(--text-secondary)]">Joined {new Date(user.created_at).toLocaleDateString()}</span>
 						</div>
+						<div class="flex items-center gap-3 text-sm">
+							<Clock class="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+							<span class="text-[var(--text-secondary)]">
+								Last login:
+								{#if user.last_login_at}
+									{' '}
+									{new Date(user.last_login_at).toLocaleString(undefined, {
+										dateStyle: 'medium',
+										timeStyle: 'short'
+									})}
+								{:else}
+									<span class="text-[var(--text-tertiary)]"> — never</span>
+								{/if}
+							</span>
+						</div>
 					</div>
 
 					<div class="mt-6 space-y-2 border-t border-[var(--border-primary)] pt-6">
@@ -324,14 +347,16 @@
 							{/if}
 						</button>
 						{#if user.is_active}
-							<button
-								type="button"
-								onclick={lockUser}
-								class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-primary)]"
-							>
-								<Lock class="h-4 w-4" />
-								Lock Account
-							</button>
+							{#if !isSelf}
+								<button
+									type="button"
+									onclick={requestLockAccount}
+									class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-primary)]"
+								>
+									<Lock class="h-4 w-4" />
+									Lock Account
+								</button>
+							{/if}
 						{:else}
 							<button
 								type="button"

@@ -1,6 +1,5 @@
 //! Resolver errors (no secret values).
 
-use met_parser::ParseError;
 use thiserror::Error;
 
 /// Secret validation / resolution failures.
@@ -35,13 +34,4 @@ impl From<met_secrets::SecretsError> for ResolveError {
     fn from(e: met_secrets::SecretsError) -> Self {
         Self::Crypto(e.to_string())
     }
-}
-
-pub(crate) fn parse_errors(errs: Vec<ParseError>) -> ResolveError {
-    ResolveError::Parse(
-        errs.iter()
-            .map(|e| e.message.clone())
-            .collect::<Vec<_>>()
-            .join("; "),
-    )
 }

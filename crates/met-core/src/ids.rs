@@ -283,6 +283,25 @@ define_id!(
     "ogm"
 );
 
+// Meticulous Apps (integration / machine auth)
+define_id!(
+    /// Internal row id for a Meticulous App registration.
+    MeticulousAppId,
+    "mapp"
+);
+
+define_id!(
+    /// Installation of a Meticulous App in a project.
+    AppInstallationId,
+    "appi"
+);
+
+define_id!(
+    /// Signing key row for a Meticulous App (JWT `kid` + public key).
+    AppKeyId,
+    "apk"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

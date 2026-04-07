@@ -36,7 +36,8 @@ pub struct CollectedSecurityBundle {
     pub container_runtime_version: String,
     pub environment_type: EnvironmentType,
     pub x509_public_key: Vec<u8>,
-    /// Stable machine identifier where available (e.g. Linux machine-id, macOS serial).
+    /// Stable machine identifier (Linux `/etc/machine-id`, macOS serial, `MET_MACHINE_ID`, or
+    /// `k8s:` + `MET_K8S_POD_UID` when running under the operator).
     pub machine_id: String,
     pub logical_cpus: u32,
     pub memory_total_bytes: u64,
@@ -262,20 +263,35 @@ impl SecurityBundleCollector {
 }
 
 fn read_machine_id() -> String {
+    if let Ok(v) = std::env::var("MET_MACHINE_ID") {
+        let t = v.trim().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_to_string("/etc/machine-id")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default()
+        if let Ok(s) = std::fs::read_to_string("/etc/machine-id") {
+            let t = s.trim().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        machine_id_macos()
+        let id = machine_id_macos();
+        if !id.is_empty() {
+            return id;
+        }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        String::new()
+    if let Ok(uid) = std::env::var("MET_K8S_POD_UID") {
+        let t = uid.trim();
+        if !t.is_empty() {
+            return format!("k8s:{t}");
+        }
     }
+    String::new()
 }
 
 #[cfg(target_os = "macos")]
@@ -415,19 +431,15 @@ impl JobPki {
     /// Decrypt a secret value using X25519 + AES-256-GCM hybrid decryption.
     ///
     /// Expects `encrypted` to be a serialized `EncryptedEnvelope` (ephemeral public
-    /// key || nonce || HMAC || ciphertext length || ciphertext). The `hmac_key` is
-    /// the shared HMAC key used for plaintext integrity verification.
-    pub fn decrypt(
-        &self,
-        encrypted: &[u8],
-        hmac_key: &[u8],
-    ) -> Result<Zeroizing<Vec<u8>>, String> {
+    /// key || nonce || HMAC || ciphertext length || ciphertext). Plaintext HMAC is
+    /// verified using a key derived from ECDH (same as controller-side encrypt).
+    pub fn decrypt(&self, encrypted: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
         let envelope = EncryptedEnvelope::from_bytes(encrypted)
             .map_err(|e| format!("failed to parse encrypted envelope: {e}"))?;
 
         let private_key_bytes = self.x25519_secret.to_bytes();
 
-        HybridDecryption::decrypt(&private_key_bytes, &envelope, hmac_key)
+        HybridDecryption::decrypt(&private_key_bytes, &envelope)
             .map_err(|e| format!("hybrid decryption failed: {e}"))
     }
 }

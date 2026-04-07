@@ -4,10 +4,12 @@
 //! including resolved secrets, variables, and artifact references.
 
 use indexmap::IndexMap;
-use met_core::ids::{JobId, OrganizationId, PipelineId, ProjectId, RunId};
+use met_core::ids::{JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId};
+use met_core::output_ipc::{OUTPUT_AGGREGATE_MAX_BYTES, OUTPUT_FRAME_MAX_BYTES, OUTPUT_VALUE_MAX_BYTES};
 use met_parser::{EnvValue, PipelineIR, SecretRef};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 /// Resolved secret value (decrypted).
 #[derive(Clone)]
@@ -49,13 +51,21 @@ struct ExecutionContextInner {
     triggered_by: String,
     commit_sha: Option<String>,
     branch: Option<String>,
-    trace_id: Option<String>,
+    trace_id: String,
 
     variables: RwLock<IndexMap<String, String>>,
     secrets: RwLock<IndexMap<String, ResolvedSecret>>,
     artifacts: RwLock<IndexMap<String, ArtifactRef>>,
     cache_hits: RwLock<IndexMap<String, CacheHit>>,
     job_outputs: RwLock<IndexMap<JobId, IndexMap<String, String>>>,
+    /// Merged **public** outputs keyed by pipeline `workflows[].id`.
+    workflow_invocation_outputs: RwLock<IndexMap<String, IndexMap<String, String>>>,
+    /// Sealed secret outputs keyed by invocation id → output name → packed envelope (32+12+ct).
+    workflow_secret_envelopes: RwLock<IndexMap<String, IndexMap<String, Vec<u8>>>>,
+    /// Last job_run that produced outputs for a workflow invocation id (needed to locate `output_wrap` secret).
+    workflow_output_producer_job_run: RwLock<IndexMap<String, JobRunId>>,
+    /// Per-`job_run` X25519 secret for decrypting `met-output secret` envelopes (32 bytes).
+    output_wrap_secret_by_job_run: RwLock<IndexMap<JobRunId, [u8; 32]>>,
 }
 
 impl std::fmt::Debug for ExecutionContextInner {
@@ -76,9 +86,23 @@ impl ExecutionContext {
         pipeline_ir: PipelineIR,
         triggered_by: impl Into<String>,
     ) -> Self {
+        Self::new_traced(run_id, org_id, pipeline_ir, triggered_by, None)
+    }
+
+    /// Create a context with an optional OpenTelemetry-style trace id string (for events).
+    pub fn new_traced(
+        run_id: RunId,
+        org_id: OrganizationId,
+        pipeline_ir: PipelineIR,
+        triggered_by: impl Into<String>,
+        trace_id: Option<String>,
+    ) -> Self {
         let pipeline_id = pipeline_ir.id;
         let project_id = pipeline_ir.project_id;
         let variables = pipeline_ir.variables.clone();
+        let trace_id = trace_id
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         Self {
             inner: Arc::new(ExecutionContextInner {
@@ -90,12 +114,16 @@ impl ExecutionContext {
                 triggered_by: triggered_by.into(),
                 commit_sha: None,
                 branch: None,
-                trace_id: None,
+                trace_id,
                 variables: RwLock::new(variables),
                 secrets: RwLock::new(IndexMap::new()),
                 artifacts: RwLock::new(IndexMap::new()),
                 cache_hits: RwLock::new(IndexMap::new()),
                 job_outputs: RwLock::new(IndexMap::new()),
+                workflow_invocation_outputs: RwLock::new(IndexMap::new()),
+                workflow_secret_envelopes: RwLock::new(IndexMap::new()),
+                workflow_output_producer_job_run: RwLock::new(IndexMap::new()),
+                output_wrap_secret_by_job_run: RwLock::new(IndexMap::new()),
             }),
         }
     }
@@ -132,8 +160,13 @@ impl ExecutionContext {
         self.inner.branch.as_deref()
     }
 
-    pub fn trace_id(&self) -> Option<&str> {
-        self.inner.trace_id.as_deref()
+    pub fn trace_id(&self) -> &str {
+        &self.inner.trace_id
+    }
+
+    /// Trace id as UUID for database columns (`runs.trace_id`).
+    pub fn trace_uuid(&self) -> Uuid {
+        Uuid::parse_str(&self.inner.trace_id).unwrap_or_else(|_| Uuid::new_v4())
     }
 
     /// Get a variable value.
@@ -224,6 +257,108 @@ impl ExecutionContext {
         self.inner.job_outputs.read().await.get(job_id).cloned()
     }
 
+    /// Register X25519 secret for workflow output wrapping (see `design/workflow-invocation-outputs.md`).
+    pub async fn register_output_wrap_x25519_secret(
+        &self,
+        job_run_id: JobRunId,
+        secret: [u8; 32],
+    ) {
+        self.inner
+            .output_wrap_secret_by_job_run
+            .write()
+            .await
+            .insert(job_run_id, secret);
+    }
+
+    /// Public key bytes for [`JobDispatch`], or `None` if not registered.
+    pub async fn output_wrap_public_key_for_job_run(
+        &self,
+        job_run_id: JobRunId,
+    ) -> Option<Vec<u8>> {
+        let secret = self
+            .inner
+            .output_wrap_secret_by_job_run
+            .read()
+            .await
+            .get(&job_run_id)
+            .copied()?;
+        use x25519_dalek::{PublicKey, StaticSecret};
+        let pk = PublicKey::from(&StaticSecret::from(secret));
+        Some(pk.as_bytes().to_vec())
+    }
+
+    /// Merge public workflow invocation outputs (last-wins per key).
+    pub async fn merge_workflow_invocation_outputs(
+        &self,
+        invocation_id: impl Into<String>,
+        outputs: IndexMap<String, String>,
+    ) {
+        let id = invocation_id.into();
+        if id.is_empty() {
+            return;
+        }
+        let mut w = self.inner.workflow_invocation_outputs.write().await;
+        let e = w.entry(id).or_default();
+        for (k, v) in outputs {
+            e.insert(k, v);
+        }
+    }
+
+    /// Validate and merge one [`WorkflowInvocationOutputs`] protobuf from a completing job.
+    pub async fn ingest_workflow_outputs_from_completed_job(
+        &self,
+        producer_job_run_id: JobRunId,
+        wo: &met_proto::controller::v1::WorkflowInvocationOutputs,
+    ) -> Result<(), String> {
+        let inv = wo.workflow_invocation_id.trim();
+        if inv.is_empty() {
+            return Ok(());
+        }
+        let mut fp = 0usize;
+        for (k, v) in &wo.public {
+            if v.len() > OUTPUT_VALUE_MAX_BYTES {
+                return Err(format!("workflow output '{k}': single value exceeds cap"));
+            }
+            fp = fp.saturating_add(v.len());
+        }
+        for s in &wo.secrets {
+            let el = s.ephemeral_x25519_public.len() + s.nonce.len() + s.ciphertext.len();
+            if el > OUTPUT_FRAME_MAX_BYTES {
+                return Err(format!(
+                    "workflow secret '{}': envelope exceeds max frame",
+                    s.name
+                ));
+            }
+            fp = fp.saturating_add(el);
+        }
+        if fp > OUTPUT_AGGREGATE_MAX_BYTES {
+            return Err("workflow outputs exceed per-invocation aggregate cap".into());
+        }
+
+        let public: IndexMap<String, String> =
+            wo.public.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        self.merge_workflow_invocation_outputs(inv.to_string(), public)
+            .await;
+
+        self.inner
+            .workflow_output_producer_job_run
+            .write()
+            .await
+            .insert(inv.to_string(), producer_job_run_id);
+
+        let mut envs = self.inner.workflow_secret_envelopes.write().await;
+        let e = envs.entry(inv.to_string()).or_default();
+        for s in &wo.secrets {
+            let mut p = Vec::new();
+            p.extend_from_slice(&s.ephemeral_x25519_public);
+            p.extend_from_slice(&s.nonce);
+            p.extend_from_slice(&s.ciphertext);
+            e.insert(s.name.clone(), p);
+        }
+
+        Ok(())
+    }
+
     /// Resolve an environment value to its final string.
     pub async fn resolve_env_value(&self, value: &EnvValue) -> Option<String> {
         match value {
@@ -258,6 +393,44 @@ impl ExecutionContext {
                         return outputs.get(output_name).cloned();
                     }
                 }
+            }
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("workflows.") {
+            if let Some((inv_id, output_name)) = rest.split_once(".outputs.") {
+                let g = self.inner.workflow_invocation_outputs.read().await;
+                if let Some(m) = g.get(inv_id) {
+                    if let Some(v) = m.get(output_name) {
+                        return Some(v.clone());
+                    }
+                }
+                drop(g);
+
+                if !self.inner.pipeline_ir.expose_workflow_secret_outputs {
+                    return None;
+                }
+
+                let envs = self.inner.workflow_secret_envelopes.read().await;
+                let Some(packed) = envs.get(inv_id).and_then(|m| m.get(output_name)) else {
+                    return None;
+                };
+                let packed = packed.clone();
+                drop(envs);
+
+                let producer = *self
+                    .inner
+                    .workflow_output_producer_job_run
+                    .read()
+                    .await
+                    .get(inv_id)?;
+                let wrap = *self
+                    .inner
+                    .output_wrap_secret_by_job_run
+                    .read()
+                    .await
+                    .get(&producer)?;
+                let pt = crate::output_crypto::open_secret_envelope(&wrap, &packed).ok()?;
+                return String::from_utf8(pt).ok();
             }
         }
 

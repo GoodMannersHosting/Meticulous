@@ -4,14 +4,10 @@
 //! - `GET /health` - Basic liveness check
 //! - `GET /ready` - Readiness check including database connectivity
 
+use crate::VERSION;
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::VERSION;
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -112,10 +108,7 @@ async fn ready_handler(State(state): State<AppState>) -> Result<Json<ReadyRespon
 
 /// Check database connectivity.
 async fn check_database(state: &AppState) -> CheckStatus {
-    match sqlx::query("SELECT 1")
-        .fetch_one(state.db())
-        .await
-    {
+    match sqlx::query("SELECT 1").fetch_one(state.db()).await {
         Ok(_) => CheckStatus {
             healthy: true,
             message: None,

@@ -141,7 +141,10 @@
 		machine_id: 'Machine Identifier',
 		logical_cpus: 'CPU Cores',
 		memory_total_bytes: 'Memory (GB)',
-		egress_public_ip: 'Egress public IP'
+		egress_public_ip: 'Egress public IP',
+		kubernetes_pod_uid: 'Kubernetes pod UID',
+		kubernetes_namespace: 'Kubernetes namespace',
+		kubernetes_node_name: 'Kubernetes node'
 	};
 
 	const ENVIRONMENT_TYPE_LABELS: Record<string, string> = {

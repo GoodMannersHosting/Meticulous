@@ -99,6 +99,7 @@
 
 pub mod audit;
 pub mod error;
+pub mod github_app;
 pub mod masking;
 pub mod oidc;
 pub mod pki;
@@ -120,6 +121,10 @@ pub use providers::{
     VaultProvider,
 };
 pub use stored_crypto::BuiltinStoredCrypto;
+pub use github_app::{
+    create_app_jwt, installation_access_token, parse_github_app_credentials, GithubAppCredentials,
+    GithubAppError,
+};
 
 // Re-export RBAC types
 pub use rbac::{Actor, ActorId, Permission, RbacPolicy, Resource, ResourceType, Role};

@@ -1,0 +1,6869 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Meticulous API",
+    "description": "REST API for the Meticulous CI/CD platform",
+    "contact": {
+      "name": "Meticulous Team"
+    },
+    "license": {
+      "name": "UNLICENSED"
+    },
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "paths": {
+    "/admin/users/{id}/reset-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Admin endpoint to reset a user's password.",
+        "operationId": "admin_reset_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminResetPasswordResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Admin access required"
+          }
+        }
+      }
+    },
+    "/admin/workflows/{workflow_id}/approve": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "approve_catalog_workflow",
+        "responses": {}
+      }
+    },
+    "/admin/workflows/{workflow_id}/delete": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "soft_delete_catalog_workflow",
+        "responses": {}
+      }
+    },
+    "/admin/workflows/{workflow_id}/reject": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "reject_catalog_workflow",
+        "responses": {}
+      }
+    },
+    "/admin/workflows/{workflow_id}/trust": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "trust_catalog_workflow",
+        "responses": {}
+      }
+    },
+    "/admin/workflows/{workflow_id}/untrust": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "untrust_catalog_workflow",
+        "responses": {}
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "list_agents",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by agent status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pool",
+            "in": "query",
+            "description": "Filter by pool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "description": "Filter by tags (comma-separated)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of agents",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "get_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Agent not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "delete_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent removed from organization"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Agent not found"
+          },
+          "409": {
+            "description": "Agent still has running jobs"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/drain": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "drain_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent draining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Agent not found"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/resume": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "resume_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent resumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Agent not in draining state"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/revoke": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "operationId": "revoke_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Agent not found"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{id}": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "get_artifact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Artifact ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Artifact not found"
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard/recent-runs": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "operationId": "dashboard_recent_runs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows (default 10)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "description": "Only runs created in this window (1h … 7d); default 1d",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecentRunResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard/stats": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "operationId": "dashboard_stats",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "description": "1h | 4h | 12h | 1d | 3d | 7d (default 1d)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dashboard counters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardStatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid window"
+          }
+        }
+      }
+    },
+    "/api/v1/debug/sessions": {
+      "post": {
+        "tags": [
+          "debug"
+        ],
+        "operationId": "create_debug_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDebugSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Debug session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DebugSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/debug/sessions/{session_id}/secrets/{name}": {
+      "get": {
+        "tags": [
+          "debug"
+        ],
+        "operationId": "get_debug_secret",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Debug session ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Debug secret (single-use)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DebugSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session expired"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "409": {
+            "description": "Secret already consumed"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "operationId": "list_orgs",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of organizations",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "operationId": "create_org",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrgRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Organization created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "operationId": "get_org",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Organization not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "operationId": "delete_org",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization deleted"
+          },
+          "400": {
+            "description": "Cannot delete own organization"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "operationId": "update_org",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrgRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Organization updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines": {
+      "get": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "list_pipelines",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Filter by project ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of pipelines",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "create_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}": {
+      "get": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "get_pipeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "update_pipeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "delete_pipeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline deleted"
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/sync-from-git": {
+      "post": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "sync_pipeline_from_git",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPipelineGitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline definition refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/trigger": {
+      "post": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "trigger_pipeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerPipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline triggered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerPipelineResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/validate": {
+      "post": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "validate_pipeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidatePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatePipelineResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/workflow-diagnostics": {
+      "get": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "pipeline_workflow_diagnostics",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commit_sha",
+            "in": "query",
+            "description": "Commit SHA override",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "description": "Branch override",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-invocation workflow resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowDiagnosticItem"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found"
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{pipeline_id}/triggers": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "list_triggers",
+        "parameters": [
+          {
+            "name": "pipeline_id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Triggers for pipeline",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TriggerPublicResponse"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "create_trigger",
+        "parameters": [
+          {
+            "name": "pipeline_id",
+            "in": "path",
+            "description": "Pipeline ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Trigger created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerPublicResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of projects",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "create_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Project created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project deleted"
+          },
+          "404": {
+            "description": "Project not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "update_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Project updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "404": {
+            "description": "Project not found"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/pipelines/import-git": {
+      "post": {
+        "tags": [
+          "pipelines"
+        ],
+        "operationId": "import_pipeline_git",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPipelineGitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline created from Git",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/scm/setup": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "setup_scm_webhook",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupScmWebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SCM webhook configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupScmWebhookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/secrets": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "operationId": "list_secrets",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of secrets",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "secrets"
+        ],
+        "operationId": "create_secret",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Secret created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/stored-secret-versions": {
+      "get": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "list_stored_secret_versions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Secret logical name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipeline_id",
+            "in": "query",
+            "description": "Omit for project-wide secret scope; set for pipeline-scoped secrets",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All versions (metadata only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoredSecretResponse"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/stored-secrets": {
+      "get": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "list_stored_secrets",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipeline_id",
+            "in": "query",
+            "description": "When set, list secrets scoped to this pipeline only",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata only (no secret values)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoredSecretResponse"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "create_stored_secret",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoredSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "503": {
+            "description": "Stored secrets not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/variables": {
+      "get": {
+        "tags": [
+          "variables"
+        ],
+        "operationId": "list_variables",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of variables",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "variables"
+        ],
+        "operationId": "create_variable",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Variable created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/workflows": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_project_workflows",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of project workflows",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "create_project_workflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Workflow created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/workflows/available": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_project_workflows_available",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Global + project reusable workflows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectWorkflowsAvailableResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/workflows/catalog/import-git": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "import_catalog_workflow_git",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCatalogWorkflowGitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Catalog workflow version created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "pipeline_id",
+            "in": "query",
+            "description": "Filter by pipeline ID (mutually exclusive with `project_id`)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by run status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor; for runs this is the row offset as a decimal string (e.g. next page after 20 rows is `cursor=20`)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (alias: `per_page`; default and max come from API `http.pagination_*` config)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "run_number",
+            "in": "query",
+            "description": "When set with `pipeline_id`, return the single run with this run number (for compare-to-previous)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of runs",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          },
+          "409": {
+            "description": "Run already in terminal state"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/dag": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_run_dag",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run DAG",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDagResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/footprint": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_run_footprint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Execution footprint (binaries, network, directories)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFootprintResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/jobs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_run_jobs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job runs for this run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobRunResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/jobs/{job_run_id}/assignments": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_job_assignments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job_run_id",
+            "in": "path",
+            "description": "Job run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent dispatch attempts for this job run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobAssignmentResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/jobs/{job_run_id}/logs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_job_logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job_run_id",
+            "in": "path",
+            "description": "Job run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Log offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Log line limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "stream",
+            "in": "query",
+            "description": "Log stream filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/jobs/{job_run_id}/snapshots": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_job_run_snapshots",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job_run_id",
+            "in": "path",
+            "description": "Job run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolved snapshot bodies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRunSnapshotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run or job run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/jobs/{job_run_id}/steps": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "get_job_steps",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job_run_id",
+            "in": "path",
+            "description": "Job run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Step runs for this job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StepRunResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/retry": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "retry_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          },
+          "409": {
+            "description": "Run still in progress"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/artifacts": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "list_run_artifacts",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of artifacts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/attestation": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "get_run_attestation",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attestation for run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/sbom": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "get_run_sbom",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SBOM for run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SbomResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{id}": {
+      "delete": {
+        "tags": [
+          "secrets"
+        ],
+        "operationId": "delete_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Secret ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret deleted"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "secrets"
+        ],
+        "operationId": "update_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Secret ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Secret updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        }
+      }
+    },
+    "/api/v1/stored-secrets/{id}": {
+      "delete": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "delete_stored_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stored secret row ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Soft-deleted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/stored-secrets/{id}/activate": {
+      "post": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "activate_stored_secret_version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Row id of the version to make current",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newer versions soft-deleted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/stored-secrets/{id}/permanent": {
+      "delete": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "purge_stored_secret_version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Row id of the version to purge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Row deleted from database",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/stored-secrets/{id}/rotate": {
+      "post": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "rotate_stored_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stored secret row ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateStoredSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "503": {
+            "description": "Stored secrets not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens": {
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "List tokens for the current user.",
+        "operationId": "list_tokens",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tokens",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Create a new API token.",
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTokenResponseBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Revoke an API token.",
+        "operationId": "revoke_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Token ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token revoked"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Token not found"
+          }
+        }
+      }
+    },
+    "/api/v1/triggers/{trigger_id}": {
+      "delete": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "delete_trigger",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trigger deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "update_trigger",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Trigger updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerPublicResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/variables/{id}": {
+      "delete": {
+        "tags": [
+          "variables"
+        ],
+        "operationId": "delete_variable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Variable ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Variable deleted"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Variable not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "variables"
+        ],
+        "operationId": "update_variable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Variable ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVariableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Variable updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Variable not found"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/bitbucket/{org_id}/{trigger_id}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "handle_bitbucket_webhook",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bitbucket webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/github/{org_id}/{trigger_id}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "handle_github_webhook",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GitHub webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Invalid signature"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/gitlab/{org_id}/{trigger_id}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "handle_gitlab_webhook",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GitLab webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/{org_id}/{trigger_id}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "handle_webhook",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Invalid or missing HMAC signature"
+          },
+          "404": {
+            "description": "Unknown trigger or organization mismatch"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/catalog": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_catalog_workflows",
+        "responses": {}
+      }
+    },
+    "/api/v1/workflows/catalog/import-git": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "import_catalog_workflow_git_organization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCatalogWorkflowGitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Catalog workflow version created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/global": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_global_workflows",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of global workflows",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{workflow_id}": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "get_workflow",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/catalog-versions": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_catalog_versions",
+        "responses": {}
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/versions": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_versions",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersionsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        }
+      }
+    },
+    "/api/v1/workspace/stored-secrets": {
+      "get": {
+        "tags": [
+          "stored_secrets"
+        ],
+        "operationId": "list_workspace_stored_secrets",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipeline_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated stored-secret metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_WorkspaceStoredSecretListItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/workspace/variables": {
+      "get": {
+        "tags": [
+          "variables"
+        ],
+        "operationId": "list_workspace_variables",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipeline_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_level",
+            "in": "query",
+            "description": "all | organization | project | pipeline",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated variables across org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_WorkspaceVariableListItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/auth/change-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the current user's password.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePasswordResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Current password incorrect"
+          },
+          "403": {
+            "description": "Password authentication disabled"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login with username and password.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          },
+          "403": {
+            "description": "Password authentication disabled"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout (client-side token invalidation).",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get current user information.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "Current user info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/auth/providers": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List enabled auth providers (public endpoint for login page).",
+        "operationId": "list_auth_providers",
+        "responses": {
+          "200": {
+            "description": "Auth providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthProvidersResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/setup": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Check if initial setup is required.",
+        "operationId": "setup_status",
+        "responses": {
+          "200": {
+            "description": "Setup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Perform initial system setup.",
+        "operationId": "setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setup completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "409": {
+            "description": "Setup already completed"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Basic liveness check.",
+        "description": "Returns 200 OK if the service is running.\nThis endpoint is suitable for Kubernetes liveness probes.",
+        "operationId": "health_handler",
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness check with database connectivity.",
+        "description": "Returns 200 OK if all dependencies are healthy.\nReturns 503 Service Unavailable if any dependency is unhealthy.\nThis endpoint is suitable for Kubernetes readiness probes.",
+        "operationId": "ready_handler",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not ready"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminResetPasswordRequest": {
+        "type": "object",
+        "description": "Admin reset password request.",
+        "required": [
+          "new_password"
+        ],
+        "properties": {
+          "new_password": {
+            "type": "string",
+            "description": "New password for the user."
+          }
+        }
+      },
+      "AdminResetPasswordResponse": {
+        "type": "object",
+        "description": "Admin reset password response.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminWorkflowDeleteResponse": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AdminWorkflowOpResponse": {
+        "type": "object",
+        "required": [
+          "workflow"
+        ],
+        "properties": {
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowResponse"
+          }
+        }
+      },
+      "AgentActionResponse": {
+        "type": "object",
+        "required": [
+          "agent_id",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "status",
+          "tags",
+          "os",
+          "arch",
+          "version",
+          "max_jobs",
+          "running_jobs",
+          "available_capacity",
+          "created_at"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "available_capacity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_security_bundle": {
+            "type": "object",
+            "description": "Snapshot of registration-time host / security fields (JSON object)."
+          },
+          "max_jobs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pool_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "running_jobs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ArtifactResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "name",
+          "path",
+          "size_bytes",
+          "storage_backend",
+          "download_url",
+          "created_at"
+        ],
+        "properties": {
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "download_url": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "job_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "storage_backend": {
+            "type": "string"
+          }
+        }
+      },
+      "AttestationResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "format",
+          "status"
+        ],
+        "properties": {
+          "attestation": {},
+          "format": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthProvidersResponse": {
+        "type": "object",
+        "description": "Auth providers response.",
+        "required": [
+          "password_enabled",
+          "show_bootstrap_credentials_hint",
+          "providers"
+        ],
+        "properties": {
+          "password_enabled": {
+            "type": "boolean",
+            "description": "Whether password authentication is enabled."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicAuthProvider"
+            },
+            "description": "List of enabled SSO providers."
+          },
+          "show_bootstrap_credentials_hint": {
+            "type": "boolean",
+            "description": "When true, the login UI may show that default bootstrap credentials apply (until changed)."
+          }
+        }
+      },
+      "CancelRunResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "CatalogVersionsPage": {
+        "type": "object",
+        "required": [
+          "workflow_name",
+          "versions"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowResponse"
+            }
+          },
+          "workflow_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "description": "Change password request.",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "Current password for verification."
+          },
+          "new_password": {
+            "type": "string",
+            "description": "New password."
+          }
+        }
+      },
+      "ChangePasswordResponse": {
+        "type": "object",
+        "description": "Change password response.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckStatus": {
+        "type": "object",
+        "description": "Status of an individual check.",
+        "required": [
+          "healthy"
+        ],
+        "properties": {
+          "healthy": {
+            "type": "boolean",
+            "description": "Whether the check passed."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional message (usually for errors)."
+          }
+        }
+      },
+      "CreateDebugSessionRequest": {
+        "type": "object",
+        "properties": {
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ttl_minutes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CreateOrgRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "CreatePipelineRequest": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "name",
+          "slug",
+          "definition"
+        ],
+        "properties": {
+          "definition": {},
+          "definition_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_type": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSecretRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "provider_ref"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provider_ref": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateStoredSecretRequest": {
+        "type": "object",
+        "required": [
+          "path",
+          "kind",
+          "value"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Logical name (`builtin_secrets.path`); becomes YAML `stored.name`."
+          },
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "propagate_to_projects": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When `scope` is organization: if `false`, secret is **not** visible to pipelines, jobs, or project secret lists\n(use for platform SCM such as global workflow catalog import). Default `true`."
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set to `\"organization\"` for org-wide secrets (`project_id` NULL). Requires `org:admin` or `*`."
+          },
+          "value": {
+            "type": "string",
+            "description": "One-time plaintext (never stored or returned after this call)."
+          }
+        }
+      },
+      "CreateTokenRequest": {
+        "type": "object",
+        "description": "Create token request body.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional description of the token's purpose."
+          },
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Expiration in days (None = never expires)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name for the token."
+          },
+          "project_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Project IDs this token can access (None = all projects)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Permission scopes for this token."
+          }
+        }
+      },
+      "CreateTokenResponseBody": {
+        "type": "object",
+        "description": "Create token response (includes the plain token).",
+        "required": [
+          "token",
+          "plain_token"
+        ],
+        "properties": {
+          "plain_token": {
+            "type": "string",
+            "description": "The plain token value (only shown once)."
+          },
+          "token": {
+            "$ref": "#/components/schemas/TokenResponse",
+            "description": "The created token metadata."
+          }
+        }
+      },
+      "CreateTriggerRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "type": "object"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generate_webhook_secret": {
+            "type": "boolean",
+            "description": "When true and kind is `webhook`, a random secret is generated and returned once in the response."
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateVariableRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "is_sensitive": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateWorkflowRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "version",
+          "definition"
+        ],
+        "properties": {
+          "definition": {},
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "DagNodeResponse": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "job_name",
+          "status",
+          "depends_on"
+        ],
+        "properties": {
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "executed_binaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutedBinarySummary"
+            }
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "DashboardStatsResponse": {
+        "type": "object",
+        "required": [
+          "active_runs",
+          "completed_runs",
+          "failed_runs",
+          "cancelled_runs",
+          "total_runs",
+          "avg_duration_ms",
+          "agents_online",
+          "agents_total",
+          "pipelines_count",
+          "projects_count",
+          "window"
+        ],
+        "properties": {
+          "active_runs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "agents_online": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "agents_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "avg_duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cancelled_runs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completed_runs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed_runs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pipelines_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "projects_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_runs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "window": {
+            "type": "string",
+            "description": "Echo of the requested window key (e.g. `1d`)."
+          }
+        }
+      },
+      "DebugSecretResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "consumed"
+        ],
+        "properties": {
+          "consumed": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "DebugSessionResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "proxy_url",
+          "token",
+          "expires_at",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "proxy_url": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Inner error body.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "JSON error response body.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "ExecutedBinarySummary": {
+        "type": "object",
+        "required": [
+          "binary_path",
+          "sha256",
+          "execution_count"
+        ],
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "execution_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "FootprintBinaryRow": {
+        "type": "object",
+        "required": [
+          "job_name",
+          "binary_path",
+          "sha256",
+          "execution_count"
+        ],
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "execution_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "step_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FootprintDirectoryEntry": {
+        "type": "object",
+        "required": [
+          "binary_path",
+          "sha256",
+          "execution_count",
+          "job_names"
+        ],
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "execution_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "job_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "FootprintDirectoryGroup": {
+        "type": "object",
+        "required": [
+          "directory",
+          "entries",
+          "entries_truncated"
+        ],
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FootprintDirectoryEntry"
+            }
+          },
+          "entries_truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FootprintNetworkRow": {
+        "type": "object",
+        "required": [
+          "dst_ip",
+          "dst_port",
+          "protocol",
+          "direction",
+          "connected_at"
+        ],
+        "properties": {
+          "binary_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binary_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connected_at": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "dst_ip": {
+            "type": "string"
+          },
+          "dst_port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "job_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "Health check response.",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Service status."
+          },
+          "version": {
+            "type": "string",
+            "description": "Service version."
+          }
+        }
+      },
+      "ImportCatalogWorkflowGitRequest": {
+        "type": "object",
+        "required": [
+          "repository",
+          "git_ref",
+          "workflow_path",
+          "credentials_path"
+        ],
+        "properties": {
+          "credentials_path": {
+            "type": "string"
+          },
+          "git_ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "GitHub repository as `owner/name` or URL."
+          },
+          "workflow_path": {
+            "type": "string",
+            "description": "Path to workflow YAML in the repo."
+          }
+        }
+      },
+      "ImportPipelineGitRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug",
+          "repository",
+          "git_ref",
+          "scm_path",
+          "credentials_path"
+        ],
+        "properties": {
+          "credentials_path": {
+            "type": "string",
+            "description": "`builtin_secrets.path` for a project-scoped `github_app` secret."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "git_ref": {
+            "type": "string",
+            "description": "Branch, tag, or commit SHA."
+          },
+          "name": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "GitHub repository as `owner/name` or `https://github.com/owner/repo`."
+          },
+          "scm_path": {
+            "type": "string",
+            "description": "Path to the pipeline YAML in the repo (e.g. `.stable/demo.yaml`)."
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "JobAssignmentResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "job_run_id",
+          "agent_id",
+          "status",
+          "attempt",
+          "accepted_at"
+        ],
+        "properties": {
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "job_run_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "JobLogLine": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "job_run_id",
+          "line",
+          "level",
+          "timestamp"
+        ],
+        "properties": {
+          "job_run_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        }
+      },
+      "JobRunResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "job_id",
+          "job_name",
+          "status",
+          "attempt",
+          "cache_hit"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_snapshot": {
+            "type": "object",
+            "description": "Agent/host audit JSON captured when the job entered `running` (investigation / compromise lineage)."
+          },
+          "agent_snapshot_captured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cache_hit": {
+            "type": "boolean"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "pipeline_definition_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 (hex) of the pipeline definition JSON snapshot used for this run (see `definition_snapshots`)."
+          },
+          "scheduling_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Best-effort explanation when a job is pending or queued (omitted when not applicable)."
+          },
+          "source_workflow": {
+            "description": "Resolved reusable workflow reference: `scope`, `name`, `version`."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workflow_definition_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 (hex) of the reusable workflow definition when this job came from one."
+          }
+        }
+      },
+      "JobRunSnapshotsResponse": {
+        "type": "object",
+        "properties": {
+          "pipeline_definition": {
+            "description": "Pipeline definition JSON for this job run (from `definition_snapshots`), if recorded."
+          },
+          "workflow_definition": {
+            "description": "Reusable workflow definition JSON for this job run, if recorded."
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "Login request body.",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "Password."
+          },
+          "username": {
+            "type": "string",
+            "description": "Username or email."
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "description": "Login response body.",
+        "required": [
+          "token",
+          "token_type",
+          "expires_in",
+          "user",
+          "password_must_change"
+        ],
+        "properties": {
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Token expiration in seconds.",
+            "minimum": 0
+          },
+          "password_must_change": {
+            "type": "boolean",
+            "description": "When true, the client must complete a password change before using the rest of the API."
+          },
+          "token": {
+            "type": "string",
+            "description": "JWT access token."
+          },
+          "token_type": {
+            "type": "string",
+            "description": "Token type (always \"Bearer\")."
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse",
+            "description": "User information."
+          }
+        }
+      },
+      "LogoutResponse": {
+        "type": "object",
+        "description": "Logout response.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "LogsQuery": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "stream": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LogsResponse": {
+        "type": "object",
+        "required": [
+          "content",
+          "lines",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobLogLine"
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "description": "Current user response.",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "org_id",
+          "role",
+          "created_at",
+          "password_must_change"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "password_must_change": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "OrgResponse": {
+        "allOf": [
+          {
+            "type": "object"
+          }
+        ]
+      },
+      "PaginatedResponse_WorkspaceStoredSecretListItem": {
+        "type": "object",
+        "description": "Response wrapper for paginated results.",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/StoredSecretResponse"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "pipeline_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "project_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "project_slug": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "description": "The items in this page."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta",
+            "description": "Pagination metadata."
+          }
+        }
+      },
+      "PaginatedResponse_WorkspaceVariableListItem": {
+        "type": "object",
+        "description": "Response wrapper for paginated results.",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "name",
+                "scope",
+                "is_sensitive",
+                "created_at",
+                "updated_at",
+                "project_name",
+                "project_slug"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "is_sensitive": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pipeline_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pipeline_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "project_name": {
+                  "type": "string"
+                },
+                "project_slug": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "The items in this page."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta",
+            "description": "Pagination metadata."
+          }
+        }
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "description": "Pagination metadata included in responses.",
+        "required": [
+          "has_more",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Number of items in this response.",
+            "minimum": 0
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether there are more items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page (null if no more pages)."
+          }
+        }
+      },
+      "PipelineResponse": {
+        "allOf": [
+          {
+            "type": "object"
+          }
+        ]
+      },
+      "ProjectResponse": {
+        "allOf": [
+          {
+            "type": "object"
+          }
+        ]
+      },
+      "ProjectWorkflowsAvailableResponse": {
+        "type": "object",
+        "description": "Workflows visible when authoring pipelines in a project: org **global** (execution-gated) plus **project**-scoped rows.",
+        "required": [
+          "global_workflows",
+          "project_workflows"
+        ],
+        "properties": {
+          "global_workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowResponse"
+            }
+          },
+          "project_workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowResponse"
+            }
+          }
+        }
+      },
+      "PublicAuthProvider": {
+        "type": "object",
+        "description": "Public auth provider info (for login page).",
+        "required": [
+          "id",
+          "name",
+          "provider_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider_type": {
+            "type": "string"
+          }
+        }
+      },
+      "ReadyChecks": {
+        "type": "object",
+        "description": "Component readiness checks.",
+        "required": [
+          "database"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "description": "Database connectivity status."
+          }
+        }
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "description": "Readiness check response.",
+        "required": [
+          "status",
+          "version",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadyChecks",
+            "description": "Individual component checks."
+          },
+          "status": {
+            "type": "string",
+            "description": "Overall readiness status."
+          },
+          "version": {
+            "type": "string",
+            "description": "Service version."
+          }
+        }
+      },
+      "RecentRunResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "pipeline_name",
+          "run_number",
+          "status",
+          "triggered_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pipeline_name": {
+            "type": "string"
+          },
+          "run_number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "triggered_by": {
+            "type": "string"
+          },
+          "webhook_remote_addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RetryRunResponse": {
+        "type": "object",
+        "required": [
+          "original_run_id",
+          "new_run_id",
+          "run_number"
+        ],
+        "properties": {
+          "new_run_id": {
+            "type": "string"
+          },
+          "original_run_id": {
+            "type": "string"
+          },
+          "run_number": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RotateStoredSecretRequest": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "RunDagResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "nodes"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DagNodeResponse"
+            }
+          },
+          "run_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RunFootprintResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "executed_binaries",
+          "network_connections",
+          "filesystem_by_directory",
+          "filesystem_directories_truncated"
+        ],
+        "properties": {
+          "executed_binaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FootprintBinaryRow"
+            }
+          },
+          "filesystem_by_directory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FootprintDirectoryGroup"
+            }
+          },
+          "filesystem_directories_truncated": {
+            "type": "boolean"
+          },
+          "filesystem_more_directory_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "network_connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FootprintNetworkRow"
+            }
+          },
+          "run_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RunResponse": {
+        "allOf": [
+          {
+            "type": "object"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "duration_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "parent_run_number": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Run number of `parent_run_id` when set (for display without a second fetch)."
+              },
+              "pipeline_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Present when listing runs by `project_id` (all pipelines in a project)."
+              },
+              "status_display": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "When set, UIs should prefer this over `run.status` for the primary badge (e.g. run is `running` but no job has reached agent execution yet)."
+              }
+            }
+          }
+        ]
+      },
+      "SbomResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "format",
+          "status"
+        ],
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "job_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job that produced the SBOM artifact (from `artifacts.job_run_id`)."
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sbom": {},
+          "status": {
+            "type": "string"
+          },
+          "step_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Best-effort step hint from artifact `metadata` (`step_name` or `step`)."
+          }
+        }
+      },
+      "SecretResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "scope",
+          "provider",
+          "provider_ref",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provider_ref": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "description": "Initial setup request.",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Admin email."
+          },
+          "org_name": {
+            "type": "string",
+            "description": "Organization name."
+          },
+          "password": {
+            "type": "string",
+            "description": "Admin password."
+          },
+          "username": {
+            "type": "string",
+            "description": "Admin username."
+          }
+        }
+      },
+      "SetupResponse": {
+        "type": "object",
+        "description": "Initial setup response.",
+        "required": [
+          "message",
+          "token",
+          "token_type",
+          "expires_in",
+          "user"
+        ],
+        "properties": {
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        }
+      },
+      "SetupScmWebhookRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "repository_url"
+        ],
+        "properties": {
+          "events": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "provider": {
+            "type": "string"
+          },
+          "repository_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupScmWebhookResponse": {
+        "type": "object",
+        "required": [
+          "webhook_id",
+          "webhook_url",
+          "provider",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provider": {
+            "type": "string"
+          },
+          "webhook_id": {
+            "type": "string"
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupStatusResponse": {
+        "type": "object",
+        "description": "Setup status response.",
+        "required": [
+          "setup_required"
+        ],
+        "properties": {
+          "setup_required": {
+            "type": "boolean",
+            "description": "Whether initial setup is required."
+          }
+        }
+      },
+      "StepRunResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "step_id",
+          "step_name",
+          "status"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "log_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "step_name": {
+            "type": "string"
+          }
+        }
+      },
+      "StoredSecretResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "kind",
+          "version",
+          "metadata",
+          "created_at",
+          "updated_at",
+          "propagate_to_projects"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "metadata": {},
+          "path": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "propagate_to_projects": {
+            "type": "boolean",
+            "description": "Org-wide only: when `false`, not exposed to pipelines or project secret UIs (catalog SCM may still use)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SyncPipelineGitRequest": {
+        "type": "object",
+        "properties": {
+          "git_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When set, sync from this ref instead of the pipeline's stored `scm_ref`."
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "description": "Token response (public, without hash).",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "scopes",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "project_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TriggerPipelineRequest": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TriggerPipelineResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "run_number",
+          "status"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "run_number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "TriggerPublicResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "pipeline_id",
+          "kind",
+          "config",
+          "secret_configured",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Webhook configuration without `secret`; use `secret_configured` to see if HMAC is required."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "generated_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only on create when `generate_webhook_secret` was true."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": "string"
+          },
+          "secret_configured": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateOrgRequest": {
+        "type": "object",
+        "properties": {
+          "allow_untrusted_workflows": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When false, untrusted global catalog workflows cannot be executed."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdatePipelineRequest": {
+        "type": "object",
+        "properties": {
+          "definition": {},
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_credentials_secret_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_repository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateSecretRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateTriggerRequest": {
+        "type": "object",
+        "required": [
+          "config_patch"
+        ],
+        "properties": {
+          "config_patch": {
+            "type": "object",
+            "description": "Merged into existing JSON config (objects merge recursively)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateVariableRequest": {
+        "type": "object",
+        "properties": {
+          "is_sensitive": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UserResponse": {
+        "type": "object",
+        "description": "User response body (sanitized, no password hash).",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "is_admin",
+          "password_must_change"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "password_must_change": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "ValidatePipelineRequest": {
+        "type": "object",
+        "required": [
+          "definition"
+        ],
+        "properties": {
+          "definition": {}
+        }
+      },
+      "ValidatePipelineResponse": {
+        "type": "object",
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VariableResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "scope",
+          "is_sensitive",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_sensitive": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WebhookResponse": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "message"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WorkflowDiagnosticItem": {
+        "type": "object",
+        "description": "One workflow reference from the pipeline and how it resolves against the org catalog / DB.",
+        "required": [
+          "invocation_id",
+          "reference",
+          "scope",
+          "name",
+          "version_requested",
+          "status",
+          "blocking"
+        ],
+        "properties": {
+          "blocking": {
+            "type": "boolean",
+            "description": "When true, pipeline execution should be blocked until resolved."
+          },
+          "declared_outputs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Declared workflow output names from the resolved catalog/project definition (`outputs:` + step `outputs:`), when parseable."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invocation_id": {
+            "type": "string",
+            "description": "Invocation id from the pipeline YAML (`workflows[].id`)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string",
+            "description": "Original reference e.g. `global/build`."
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`ok` | `missing` | `version_not_found` | `pending_approval` | `rejected` | `deleted` |\n`untrusted_blocked` | `project_not_found`"
+          },
+          "version_requested": {
+            "type": "string"
+          },
+          "version_resolved": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WorkflowResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "version",
+          "definition",
+          "deprecated",
+          "tags",
+          "created_at",
+          "updated_at",
+          "source",
+          "submission_status",
+          "trust_state",
+          "catalog_metadata"
+        ],
+        "properties": {
+          "catalog_metadata": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "definition": {},
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_repository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scm_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "submission_status": {
+            "type": "string"
+          },
+          "submitted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trust_state": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowVersionsResponse": {
+        "type": "object",
+        "required": [
+          "workflow_name",
+          "versions"
+        ],
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workflow_name": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceStoredSecretListItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/StoredSecretResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "pipeline_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project_slug": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "WorkspaceVariableListItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "scope",
+          "is_sensitive",
+          "created_at",
+          "updated_at",
+          "project_name",
+          "project_slug"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_sensitive": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pipeline_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "project_slug": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Health and readiness checks"
+    },
+    {
+      "name": "auth",
+      "description": "Authentication and session management"
+    },
+    {
+      "name": "organizations",
+      "description": "Organization management"
+    },
+    {
+      "name": "projects",
+      "description": "Project management"
+    },
+    {
+      "name": "pipelines",
+      "description": "Pipeline management"
+    },
+    {
+      "name": "runs",
+      "description": "Pipeline run management"
+    },
+    {
+      "name": "dashboard",
+      "description": "Org dashboard overview"
+    },
+    {
+      "name": "agents",
+      "description": "Agent management"
+    },
+    {
+      "name": "tokens",
+      "description": "API token management"
+    },
+    {
+      "name": "secrets",
+      "description": "Secret management"
+    },
+    {
+      "name": "stored_secrets",
+      "description": "Platform-stored encrypted secrets (metadata only on read)"
+    },
+    {
+      "name": "variables",
+      "description": "Variable management"
+    },
+    {
+      "name": "workflows",
+      "description": "Reusable workflow management"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook management"
+    },
+    {
+      "name": "triggers",
+      "description": "Pipeline trigger configuration"
+    },
+    {
+      "name": "artifacts",
+      "description": "Build artifact management"
+    },
+    {
+      "name": "debug",
+      "description": "Debug session management"
+    }
+  ]
+}

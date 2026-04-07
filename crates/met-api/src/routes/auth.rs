@@ -34,7 +34,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/change-password", post(change_password))
         .route("/auth/setup", get(setup_status))
         .route("/auth/setup", post(setup))
-        .route("/admin/users/{id}/reset-password", post(admin_reset_password))
+        .route(
+            "/admin/users/{id}/reset-password",
+            post(admin_reset_password),
+        )
 }
 
 /// Public auth provider info (for login page).
@@ -170,7 +173,9 @@ async fn login(
 ) -> ApiResult<Json<LoginResponse>> {
     // Check if password authentication is enabled
     if !state.config.auth.password_enabled {
-        return Err(ApiError::forbidden("password authentication is disabled - use SSO to login"));
+        return Err(ApiError::forbidden(
+            "password authentication is disabled - use SSO to login",
+        ));
     }
 
     let user_repo = UserRepo::new(state.db());
@@ -179,9 +184,9 @@ async fn login(
     // For now, we use a default organization. In a multi-tenant setup,
     // you'd determine the org from the request (subdomain, header, etc.)
     let orgs = org_repo.list(1, 0).await?;
-    let org = orgs.first().ok_or_else(|| {
-        ApiError::unauthorized("no organization configured - run setup first")
-    })?;
+    let org = orgs
+        .first()
+        .ok_or_else(|| ApiError::unauthorized("no organization configured - run setup first"))?;
 
     // Try to find user by username or email
     let user = user_repo
@@ -213,6 +218,11 @@ async fn login(
 
     verify_password(&req.password, password_hash)
         .map_err(|_| ApiError::unauthorized("invalid credentials"))?;
+
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Generate JWT
     let permissions = if user.is_admin {
@@ -266,7 +276,11 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
 
     // Use display name, or derive from email if not set
     let name = user.name.clone().unwrap_or_else(|| {
-        user.email.split('@').next().unwrap_or(&user.email).to_string()
+        user.email
+            .split('@')
+            .next()
+            .unwrap_or(&user.email)
+            .to_string()
     });
 
     Ok(Json(MeResponse {
@@ -395,7 +409,10 @@ async fn setup(
     // Validate password using configured minimum length
     let min_length = state.config.auth.min_password_length;
     if req.password.len() < min_length {
-        return Err(ApiError::bad_request(format!("password must be at least {} characters", min_length)));
+        return Err(ApiError::bad_request(format!(
+            "password must be at least {} characters",
+            min_length
+        )));
     }
 
     // Create slug from org name
@@ -431,6 +448,11 @@ async fn setup(
             false,
         )
         .await?;
+
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Generate JWT
     let token = create_jwt(
@@ -503,7 +525,10 @@ async fn change_password(
     // Validate new password using configured minimum length
     let min_length = state.config.auth.min_password_length;
     if req.new_password.len() < min_length {
-        return Err(ApiError::bad_request(format!("new password must be at least {} characters", min_length)));
+        return Err(ApiError::bad_request(format!(
+            "new password must be at least {} characters",
+            min_length
+        )));
     }
 
     // Get the user to verify current password
@@ -522,7 +547,9 @@ async fn change_password(
     let new_hash = hash_password(&req.new_password)
         .map_err(|e| ApiError::internal(format!("failed to hash password: {e}")))?;
 
-    user_repo.update_password(current_user.user_id, &new_hash).await?;
+    user_repo
+        .update_password(current_user.user_id, &new_hash)
+        .await?;
 
     tracing::info!(user_id = %current_user.user_id, "user changed password");
 
@@ -578,7 +605,10 @@ async fn admin_reset_password(
     // Validate new password using configured minimum length
     let min_length = state.config.auth.min_password_length;
     if req.new_password.len() < min_length {
-        return Err(ApiError::bad_request(format!("password must be at least {} characters", min_length)));
+        return Err(ApiError::bad_request(format!(
+            "password must be at least {} characters",
+            min_length
+        )));
     }
 
     // Verify the target user exists
@@ -586,7 +616,9 @@ async fn admin_reset_password(
 
     // Ensure admin is in the same organization as the target user
     if target_user.org_id != admin.org_id {
-        return Err(ApiError::forbidden("cannot reset password for users in other organizations"));
+        return Err(ApiError::forbidden(
+            "cannot reset password for users in other organizations",
+        ));
     }
 
     // Hash and update password

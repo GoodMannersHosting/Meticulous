@@ -28,7 +28,7 @@ Inbound webhooks are implemented in [crates/met-api/src/routes/webhooks.rs](../.
 
 7. **Production policy** — Every active production trigger for GitHub/GitLab MUST have a verifier configured. Deployment config MUST add `METICULOUS_WEBHOOK_REQUIRE_SECRET=true` enforcement; handlers without a configured verifier must return `403` in production mode, not silently accept.
 
-8. **Mapping to runs** — After verification, normalize `(event_type, branch, commit_sha, fork_pr)` and resolve to pipeline triggers (engine). Idempotency for `run` creation uses `(provider, delivery_id)` per `webhook_deliveries` ([ADR-001](001-run-and-job-lifecycle.md)).
+8. **Mapping to runs** — After verification, normalize `(event_type, branch, commit_sha, fork_pr)` and resolve to pipeline runs. **Routing** from a `webhook_registrations` row to one or more pipelines is defined in [ADR-013](013-project-webhook-multi-pipeline-routing.md). Idempotency for `run` creation uses `(provider, delivery_id)` per `webhook_deliveries` ([ADR-001](001-run-and-job-lifecycle.md)).
 
 ## webhook_deliveries table (required before production)
 
@@ -66,5 +66,6 @@ GitHub, GitLab.com, and Atlassian publish their egress IP ranges (GitHub: `api.g
 
 ## References
 
+- [ADR-013: Project-level SCM webhooks → one or many pipelines](013-project-webhook-multi-pipeline-routing.md)
 - GitHub: [Webhooks – validating payloads](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliverings)
 - GitLab: [Webhooks – secret token](https://docs.gitlab.com/ee/user/project/integrations/webhooks.html#secret-token)

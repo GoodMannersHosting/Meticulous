@@ -4,9 +4,37 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::{AgentError, Result};
+
+/// How the agent runs pipeline steps (shell commands).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionRuntime {
+    /// Run steps as local processes on the agent host (default).
+    #[default]
+    Native,
+    /// Linux: run inside Docker/Podman (requires a compatible `image` on each step).
+    Container,
+    /// Linux: use a container runtime if available, otherwise [`Native`](Self::Native).
+    Auto,
+}
+
+impl std::str::FromStr for ExecutionRuntime {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "native" | "local" => Ok(Self::Native),
+            "container" | "docker" | "podman" => Ok(Self::Container),
+            "auto" => Ok(Self::Auto),
+            _ => Err(format!(
+                "expected 'native', 'container', or 'auto', got '{s}'"
+            )),
+        }
+    }
+}
 
 /// Where the effective join token came from (used to decide whether to write `~/.met/agentconfig.toml`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,10 +81,18 @@ pub struct AgentConfig {
     pub labels: Vec<String>,
     /// Maximum concurrent jobs.
     pub concurrency: i32,
+    /// Upper bound on jobs this agent will accept over its lifetime (optional; ephemeral runners).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_jobs: Option<i32>,
+    /// After this many **successful** jobs, the process requests graceful shutdown (exit 0). Kubernetes operators may set `MET_AGENT_EXIT_AFTER_JOBS=1` for one-shot runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_after_jobs: Option<u32>,
     /// Workspace directory for job execution.
     pub workspace_dir: PathBuf,
     /// Log level.
     pub log_level: String,
+    /// Whether steps run on the host (`native`) or in a Linux container runtime (`container` / `auto`).
+    pub execution_runtime: ExecutionRuntime,
     /// TLS configuration.
     pub tls: TlsConfig,
 }
@@ -80,8 +116,11 @@ impl Default for AgentConfig {
             pool_tags: vec!["_default".to_string()],
             labels: Vec::new(),
             concurrency: 1,
+            max_jobs: None,
+            exit_after_jobs: None,
             workspace_dir,
             log_level: "info".to_string(),
+            execution_runtime: ExecutionRuntime::Native,
             tls: TlsConfig::default(),
         }
     }
@@ -251,6 +290,7 @@ impl AgentConfig {
             concurrency: i32,
             workspace_dir: PathBuf,
             log_level: String,
+            execution_runtime: ExecutionRuntime,
             tls: TlsConfig,
         }
 
@@ -264,6 +304,7 @@ impl AgentConfig {
             concurrency: self.concurrency,
             workspace_dir: self.workspace_dir.clone(),
             log_level: self.log_level.clone(),
+            execution_runtime: self.execution_runtime,
             tls: self.tls.clone(),
         };
 
@@ -338,11 +379,29 @@ impl AgentConfig {
                 self.concurrency = c;
             }
         }
+        if let Ok(m) = std::env::var("MET_AGENT_MAX_JOBS") {
+            if let Ok(v) = m.parse::<i32>() {
+                self.max_jobs = Some(v.max(1));
+            }
+        }
+        if let Ok(m) = std::env::var("MET_AGENT_EXIT_AFTER_JOBS") {
+            if let Ok(v) = m.parse::<u32>() {
+                if v >= 1 {
+                    self.exit_after_jobs = Some(v);
+                }
+            }
+        }
         if let Ok(workspace) = std::env::var("MET_WORKSPACE_DIR") {
             self.workspace_dir = PathBuf::from(workspace);
         }
         if let Ok(level) = std::env::var("MET_LOG_LEVEL") {
             self.log_level = level;
+        }
+        if let Ok(v) = std::env::var("MET_EXECUTION_RUNTIME") {
+            match v.parse::<ExecutionRuntime>() {
+                Ok(rt) => self.execution_runtime = rt,
+                Err(e) => warn!(value = %v, error = %e, "ignoring invalid MET_EXECUTION_RUNTIME"),
+            }
         }
     }
 

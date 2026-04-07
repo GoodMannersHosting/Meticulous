@@ -242,6 +242,7 @@ mod tests {
             retry_policy: None,
             trace_id: String::new(),
             attempt: 1,
+            ..Default::default()
         };
 
         let agent_id = AgentId::new().to_string();
@@ -619,6 +620,7 @@ mod tests {
             retry_policy: None,
             trace_id: String::new(),
             attempt: 1,
+            ..Default::default()
         };
 
         dispatcher
@@ -675,6 +677,7 @@ mod tests {
             retry_policy: None,
             trace_id: String::new(),
             attempt: 1,
+            ..Default::default()
         };
 
         dispatcher

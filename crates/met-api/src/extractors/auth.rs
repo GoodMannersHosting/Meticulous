@@ -9,7 +9,7 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{header::AUTHORIZATION, request::Parts, Method, StatusCode},
+    http::{Method, StatusCode, header::AUTHORIZATION, request::Parts},
 };
 use met_core::ids::ProjectId;
 use met_core::{OrganizationId, UserId};
@@ -55,7 +55,7 @@ impl CurrentUser {
     }
 
     /// Check if the user can access a specific project.
-    /// 
+    ///
     /// Returns true if:
     /// - `project_ids` is None (user has access to all projects)
     /// - `project_ids` contains the specified project

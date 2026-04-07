@@ -1,20 +1,46 @@
 <script lang="ts">
-	import { Button, Card, Input, Select, Badge, StatusBadge } from '$components/ui';
-	import { Skeleton, EmptyState } from '$components/data';
+	import { Button, Card, Select } from '$components/ui';
+	import { DataTable, Skeleton, EmptyState } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type { Run, Pipeline, Project } from '$api/types';
-	import { formatRelativeTime, formatDurationMs } from '$utils/format';
-	import { Search, RefreshCw, Play, Filter } from 'lucide-svelte';
+	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
+	import { sortRunList } from '$utils/sortRuns';
+	import {
+		runNumberHtml,
+		runPipelineLinkHtml,
+		runStatusBadgeHtml,
+		effectiveRunStatusForBadge,
+		runBranchColumnHtml,
+		runTriggeredByHtml,
+		runDurationHtml,
+		runStartedAtHtml
+	} from '$utils/runTableCells';
+	import { RefreshCw, Play, ChevronLeft, ChevronRight, FolderOpen } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
+
+	/** Sentinel value for “all pipelines in the current project” (must match nothing that is a UUID). */
+	const ALL_PIPELINES_IN_PROJECT = '__all_pipelines__';
 
 	let runs = $state<Run[]>([]);
 	let pipelines = $state<Pipeline[]>([]);
 	let projects = $state<Project[]>([]);
-	let loading = $state(true);
+	let initialLoading = $state(true);
+	let runsLoading = $state(false);
 	let error = $state<string | null>(null);
 	let selectedProjectId = $state<string>('');
 	let selectedPipelineId = $state<string>('');
 	let statusFilter = $state<string>('');
+	let runSortKey = $state<string | null>(null);
+	let runSortDirection = $state<SortDirection>(null);
+	let runsPerPage = $state('20');
+	let runsListOffset = $state(0);
+	let runsHasMore = $state(false);
+
+	const runsPageSizeOptions = [
+		{ value: '20', label: '20 per page' },
+		{ value: '50', label: '50 per page' },
+		{ value: '100', label: '100 per page' }
+	];
 
 	const statusOptions = [
 		{ value: '', label: 'All Statuses' },
@@ -30,64 +56,37 @@
 	});
 
 	async function loadInitialData() {
-		loading = true;
+		initialLoading = true;
+		error = null;
 		try {
 			const projectsResponse = await apiMethods.projects.list();
 			projects = projectsResponse.data;
-			
+
 			if (projects.length > 0) {
 				selectedProjectId = projects[0].id;
 				const pipelinesResponse = await apiMethods.pipelines.list({ project_id: selectedProjectId });
 				pipelines = pipelinesResponse.data;
-				
-				if (pipelines.length > 0) {
-					selectedPipelineId = pipelines[0].id;
-					await loadRuns();
-				}
+				selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load data';
 		} finally {
-			loading = false;
+			initialLoading = false;
 		}
 	}
 
 	async function loadPipelines() {
 		if (!selectedProjectId) {
 			pipelines = [];
+			selectedPipelineId = '';
 			return;
 		}
+		selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
 		try {
 			const response = await apiMethods.pipelines.list({ project_id: selectedProjectId });
 			pipelines = response.data;
-			if (pipelines.length > 0) {
-				selectedPipelineId = pipelines[0].id;
-				await loadRuns();
-			} else {
-				selectedPipelineId = '';
-				runs = [];
-			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load pipelines';
-		}
-	}
-
-	async function loadRuns() {
-		if (!selectedPipelineId) {
-			runs = [];
-			return;
-		}
-		loading = true;
-		try {
-			const response = await apiMethods.runs.list({
-				pipeline_id: selectedPipelineId,
-				status: statusFilter || undefined
-			});
-			runs = response.data;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load runs';
-		} finally {
-			loading = false;
 		}
 	}
 
@@ -98,10 +97,78 @@
 	});
 
 	$effect(() => {
-		if (selectedPipelineId) {
-			loadRuns();
+		const pipelineSelection = selectedPipelineId;
+		void statusFilter;
+		void selectedProjectId;
+		if (!selectedProjectId || !pipelineSelection) {
+			runs = [];
+			runsHasMore = false;
+			return;
+		}
+		runsListOffset = 0;
+		void fetchRuns({ offset: 0 });
+	});
+
+	$effect(() => {
+		if (selectedPipelineId !== ALL_PIPELINES_IN_PROJECT && runSortKey === 'pipeline_name') {
+			runSortKey = null;
+			runSortDirection = null;
 		}
 	});
+
+	function viewingAllPipelinesInProject(): boolean {
+		return selectedPipelineId === ALL_PIPELINES_IN_PROJECT;
+	}
+
+	async function fetchRuns(opts?: { offset?: number }) {
+		if (!selectedProjectId || !selectedPipelineId) {
+			runs = [];
+			return;
+		}
+		const offset = opts?.offset ?? runsListOffset;
+		runsLoading = true;
+		error = null;
+		try {
+			const listParams =
+				viewingAllPipelinesInProject()
+					? {
+							project_id: selectedProjectId,
+							status: statusFilter || undefined,
+							per_page: Number(runsPerPage),
+							cursor: offset > 0 ? String(offset) : undefined
+						}
+					: {
+							pipeline_id: selectedPipelineId,
+							status: statusFilter || undefined,
+							per_page: Number(runsPerPage),
+							cursor: offset > 0 ? String(offset) : undefined
+						};
+			const response = await apiMethods.runs.list(listParams);
+			runs = response.data;
+			runsHasMore = response.pagination.has_more;
+			runsListOffset = offset;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load runs';
+		} finally {
+			runsLoading = false;
+		}
+	}
+
+	function handleRunsPerPageChange() {
+		runsListOffset = 0;
+		void fetchRuns({ offset: 0 });
+	}
+
+	function runsPrevPage() {
+		const step = Number(runsPerPage);
+		if (runsListOffset <= 0) return;
+		void fetchRuns({ offset: Math.max(0, runsListOffset - step) });
+	}
+
+	function runsNextPage() {
+		if (!runsHasMore) return;
+		void fetchRuns({ offset: runsListOffset + runs.length });
+	}
 
 	function handleRunClick(run: Run) {
 		goto(`/runs/${run.id}`);
@@ -111,9 +178,81 @@
 		projects.map((p) => ({ value: p.id, label: p.name }))
 	);
 
-	const pipelineOptions = $derived(
-		pipelines.map((p) => ({ value: p.id, label: p.name }))
-	);
+	const pipelineOptions = $derived([
+		{ value: ALL_PIPELINES_IN_PROJECT, label: 'All pipelines in project' },
+		...pipelines.map((p) => ({ value: p.id, label: p.name }))
+	]);
+
+	const sortedRuns = $derived(sortRunList(runs, runSortKey, runSortDirection));
+
+	const runsPageLabel = $derived.by(() => {
+		if (runs.length === 0) return null;
+		const from = runsListOffset + 1;
+		const to = runsListOffset + runs.length;
+		return `${from}–${to}`;
+	});
+
+	const runColumns = $derived.by((): Column<Run>[] => {
+		const pipelineCol: Column<Run> = {
+			key: 'pipeline_name',
+			label: 'Pipeline',
+			width: '200px',
+			sortable: true,
+			render: (v, row) => runPipelineLinkHtml(v, row)
+		};
+		const cols: Column<Run>[] = [
+			{
+				key: 'run_number',
+				label: 'Run',
+				width: '100px',
+				sortable: true,
+				render: (value, row) => runNumberHtml(value, row)
+			},
+			...(viewingAllPipelinesInProject() ? [pipelineCol] : []),
+			{
+				key: 'status',
+				label: 'Status',
+				width: '140px',
+				sortable: true,
+				render: (_v, row) => runStatusBadgeHtml(effectiveRunStatusForBadge(row))
+			},
+			{
+				key: 'branch',
+				label: 'Branch',
+				sortable: true,
+				render: (value, row) => runBranchColumnHtml(value, row)
+			},
+			{
+				key: 'triggered_by',
+				label: 'Triggered By',
+				sortable: true,
+				render: (value, row) => runTriggeredByHtml(value, row)
+			},
+			{
+				key: 'duration_ms',
+				label: 'Duration',
+				sortable: true,
+				render: (value) => runDurationHtml(value)
+			},
+			{
+				key: 'created_at',
+				label: 'Started',
+				sortable: true,
+				render: (_value, row) => runStartedAtHtml(_value, row)
+			}
+		];
+		return cols;
+	});
+
+	function handleRunSort(key: string, direction: SortDirection) {
+		if (direction === null) {
+			runSortKey = null;
+			runSortDirection = null;
+		} else {
+			runSortKey = key;
+			runSortDirection = direction;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -129,7 +268,12 @@
 			</p>
 		</div>
 
-		<Button variant="ghost" size="sm" onclick={loadRuns}>
+		<Button
+			variant="ghost"
+			size="sm"
+			onclick={() => fetchRuns({ offset: runsListOffset })}
+			disabled={!selectedProjectId || !selectedPipelineId || runsLoading}
+		>
 			<RefreshCw class="h-4 w-4" />
 			Refresh
 		</Button>
@@ -151,10 +295,14 @@
 			/>
 		</div>
 		<div class="w-40">
+			<Select options={statusOptions} bind:value={statusFilter} placeholder="Status" />
+		</div>
+		<div class="w-36">
 			<Select
-				options={statusOptions}
-				bind:value={statusFilter}
-				placeholder="Status"
+				options={runsPageSizeOptions}
+				bind:value={runsPerPage}
+				size="sm"
+				onchange={handleRunsPerPageChange}
 			/>
 		</div>
 	</div>
@@ -165,7 +313,7 @@
 		</div>
 	{/if}
 
-	{#if loading}
+	{#if initialLoading}
 		<Card>
 			<div class="space-y-4">
 				{#each Array(8) as _, i (i)}
@@ -180,71 +328,82 @@
 				{/each}
 			</div>
 		</Card>
-	{:else if !selectedPipelineId}
+	{:else if !selectedProjectId || !selectedPipelineId}
 		<Card>
 			<EmptyState
-				title="Select a pipeline"
-				description="Choose a project and pipeline to view runs."
+				title="Select a project"
+				description="Choose a project to view runs. You can narrow by pipeline or show all pipelines in the project."
 			/>
 		</Card>
-	{:else if runs.length === 0}
+	{:else if runs.length === 0 && runsListOffset === 0 && !runsLoading}
 		<Card>
 			<EmptyState
 				title="No runs yet"
-				description="This pipeline hasn't been triggered yet."
+				description={viewingAllPipelinesInProject()
+					? 'This project has no recorded runs yet.'
+					: "This pipeline hasn't been triggered yet."}
 			>
-				<Button variant="primary" href="/pipelines/{selectedPipelineId}">
-					<Play class="h-4 w-4" />
-					Go to Pipeline
-				</Button>
+				{#if viewingAllPipelinesInProject()}
+					<Button variant="primary" href="/projects/{selectedProjectId}">
+						<FolderOpen class="h-4 w-4" />
+						Go to project
+					</Button>
+				{:else}
+					<Button variant="primary" href="/pipelines/{selectedPipelineId}">
+						<Play class="h-4 w-4" />
+						Go to Pipeline
+					</Button>
+				{/if}
 			</EmptyState>
 		</Card>
 	{:else}
-		<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
-			<table class="w-full text-sm">
-				<thead class="bg-[var(--bg-tertiary)]">
-					<tr>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Run</th>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Status</th>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Branch</th>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Triggered By</th>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Duration</th>
-						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Started</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-[var(--border-secondary)]">
-					{#each runs as run (run.id)}
-						<tr
-							class="cursor-pointer bg-[var(--bg-secondary)] transition-colors hover:bg-[var(--bg-hover)]"
-							onclick={() => handleRunClick(run)}
-						>
-							<td class="px-4 py-3">
-								<span class="font-mono text-sm">#{run.run_number}</span>
-							</td>
-							<td class="px-4 py-3">
-								<StatusBadge status={run.status} size="sm" />
-							</td>
-							<td class="px-4 py-3">
-								{#if run.branch || run.commit_sha}
-									<span class="text-sm">{run.branch ?? ''}</span>
-									{#if run.commit_sha}
-										<span class="ml-2 font-mono text-xs text-[var(--text-tertiary)]">
-											{run.commit_sha.slice(0, 7)}
-										</span>
-									{/if}
-								{:else}
-									<span class="text-[var(--text-tertiary)]">—</span>
-								{/if}
-							</td>
-							<td class="px-4 py-3 text-sm">{run.triggered_by}</td>
-							<td class="px-4 py-3 text-sm">{formatDurationMs(run.duration_ms)}</td>
-							<td class="px-4 py-3 text-sm text-[var(--text-secondary)]">
-								{formatRelativeTime(run.created_at)}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+		<div class="space-y-3">
+			<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+				<p class="text-sm text-[var(--text-secondary)]">
+					{#if runs.length === 0 && runsListOffset > 0 && !runsLoading}
+						No runs on this page — try previous page
+					{:else if runsPageLabel}
+						Showing runs {runsPageLabel}
+						{#if runsHasMore}
+							<span class="text-[var(--text-tertiary)]"> (more available)</span>
+						{/if}
+					{:else if runsLoading}
+						Loading…
+					{:else}
+						—
+					{/if}
+				</p>
+				<div class="flex items-center gap-1">
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={runsListOffset <= 0 || runsLoading}
+						onclick={runsPrevPage}
+						title="Previous page"
+					>
+						<ChevronLeft class="h-4 w-4" />
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={!runsHasMore || runsLoading}
+						onclick={runsNextPage}
+						title="Next page"
+					>
+						<ChevronRight class="h-4 w-4" />
+					</Button>
+				</div>
+			</div>
+			<DataTable
+				columns={runColumns}
+				data={sortedRuns}
+				rowKey="id"
+				sortKey={runSortKey}
+				sortDirection={runSortDirection}
+				onSort={handleRunSort}
+				onRowClick={handleRunClick}
+				loading={runsLoading && runs.length === 0}
+			/>
 		</div>
 	{/if}
 </div>
