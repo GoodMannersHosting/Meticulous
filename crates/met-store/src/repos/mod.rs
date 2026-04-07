@@ -31,6 +31,7 @@ mod run_network_connections;
 mod log_cache;
 mod meticulous_apps;
 mod triggers;
+mod webhooks;
 
 pub use agent_heartbeats::{AgentHeartbeatRepo, HeartbeatStats};
 pub use agent_join_registration::{
@@ -53,6 +54,10 @@ pub use join_tokens::JoinTokenRepo;
 pub use meticulous_apps::MeticulousAppRepo;
 pub use organizations::OrganizationRepo;
 pub use triggers::{get_trigger_for_webhook_dispatch, TriggerRepo};
+pub use webhooks::{
+    CreateWebhookTarget, UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext,
+    WebhookRegistrationTarget, WebhookRepo,
+};
 pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipelines::PipelineRepo;
 pub use projects::ProjectRepo;

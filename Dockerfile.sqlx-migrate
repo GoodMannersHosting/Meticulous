@@ -1,0 +1,24 @@
+# Optional one-shot sqlx migrate image (break-glass / CI). Main path: MET_API__RUN_MIGRATIONS on met-api.
+# Build: docker build -f Dockerfile.sqlx-migrate -t meticulous/met-sqlx-migrate:latest .
+# Run: docker run --rm -e DATABASE_URL=postgres://... meticulous/met-sqlx-migrate:latest
+FROM docker.io/rust:1.85-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
+
+FROM docker.io/debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/cargo/bin/sqlx /usr/local/bin/sqlx
+COPY crates/met-store/migrations /migrations
+
+ENV SQLX_OFFLINE=false
+ENTRYPOINT ["sqlx", "migrate", "run", "--source", "/migrations"]

@@ -5,23 +5,29 @@ use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
     http::HeaderMap,
-    routing::post,
+    routing::{delete, get, patch, post},
 };
-use std::net::SocketAddr;
-use met_core::ids::{OrganizationId, ProjectId, TriggerId};
+use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId};
 use met_core::models::{TriggerKind, WebhookConfig, WEBHOOK_MAX_BODY_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use tracing::{debug, info, instrument};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::Auth,
+    extractors::{Auth, CurrentUser},
     pipeline_execution,
     state::AppState,
 };
-use met_store::repos::{get_trigger_for_webhook_dispatch, PipelineRepo};
+use met_store::repos::{
+    get_trigger_for_webhook_dispatch, CreateWebhookTarget, PipelineRepo, ProjectRepo,
+    UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext, WebhookRegistrationTarget,
+    WebhookRepo,
+};
 
 /// Prefer proxy headers (when present); otherwise use the direct TCP peer address.
 fn webhook_client_ip(headers: &HeaderMap, connect: &SocketAddr) -> String {
@@ -57,13 +63,313 @@ pub fn router() -> Router<AppState> {
             post(handle_bitbucket_webhook),
         )
         .route("/projects/{project_id}/scm/setup", post(setup_scm_webhook))
+        .route(
+            "/projects/{project_id}/webhooks/{registration_id}/targets",
+            get(list_webhook_targets).post(create_webhook_target),
+        )
+        .route(
+            "/projects/{project_id}/webhooks/{registration_id}/targets/{target_id}",
+            patch(update_webhook_target).delete(delete_webhook_target),
+        )
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WebhookResponse {
     pub accepted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(default)]
+    pub run_ids: Vec<String>,
+    #[serde(default)]
+    pub duplicate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub targets_matched: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_errors: Vec<String>,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WebhookTargetResponse {
+    #[schema(value_type = String)]
+    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub pipeline_id: PipelineId,
+    pub enabled: bool,
+    pub filter_config: serde_json::Value,
+}
+
+impl From<WebhookRegistrationTarget> for WebhookTargetResponse {
+    fn from(t: WebhookRegistrationTarget) -> Self {
+        Self {
+            id: t.id,
+            pipeline_id: t.pipeline_id,
+            enabled: t.enabled,
+            filter_config: t.filter_config,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateWebhookTargetRequest {
+    #[schema(value_type = String)]
+    pub pipeline_id: PipelineId,
+    #[serde(default = "default_target_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub filter_config: serde_json::Value,
+}
+
+fn default_target_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateWebhookTargetRequest {
+    pub enabled: Option<bool>,
+    pub filter_config: Option<serde_json::Value>,
+}
+
+async fn require_project_in_user_org(
+    pool: &sqlx::PgPool,
+    user: &CurrentUser,
+    project_id: ProjectId,
+) -> ApiResult<()> {
+    let project = ProjectRepo::new(pool).get(project_id).await?;
+    if project.org_id != user.org_id {
+        return Err(ApiError::not_found("Project not found"));
+    }
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden(
+            "You do not have access to this project",
+        ));
+    }
+    Ok(())
+}
+
+async fn load_inbound_registration(
+    state: &AppState,
+    path_org_id: OrganizationId,
+    registration_id: TriggerId,
+    expected_provider: &str,
+) -> ApiResult<WebhookRegistrationContext> {
+    let repo = WebhookRepo::new(state.db());
+    let Some(ctx) = repo.get_registration_context(registration_id).await? else {
+        return Err(ApiError::not_found("Webhook not found"));
+    };
+    if ctx.org_id != path_org_id {
+        return Err(ApiError::not_found("Webhook not found"));
+    }
+    if ctx.provider.to_lowercase() != expected_provider {
+        return Err(ApiError::not_found("Webhook not found"));
+    }
+    Ok(ctx)
+}
+
+fn scm_webhook_response_duplicate(run_ids: Vec<Uuid>) -> WebhookResponse {
+    WebhookResponse {
+        accepted: true,
+        run_id: run_ids.first().map(|u| u.to_string()),
+        run_ids: run_ids.iter().map(Uuid::to_string).collect(),
+        duplicate: true,
+        targets_matched: Some(0),
+        target_errors: vec![],
+        message: "Duplicate delivery; returning existing run ids".to_string(),
+    }
+}
+
+fn scm_webhook_response_dispatched(
+    run_ids: Vec<Uuid>,
+    targets_matched: usize,
+    target_errors: Vec<String>,
+    fallback_message: &str,
+) -> WebhookResponse {
+    let msg = if run_ids.is_empty() && !target_errors.is_empty() {
+        target_errors.join("; ")
+    } else if run_ids.is_empty() {
+        fallback_message.to_string()
+    } else {
+        format!("Enqueued {} run(s)", run_ids.len())
+    };
+    WebhookResponse {
+        accepted: true,
+        run_id: run_ids.first().map(|u| u.to_string()),
+        run_ids: run_ids.iter().map(Uuid::to_string).collect(),
+        duplicate: false,
+        targets_matched: Some(targets_matched),
+        target_errors,
+        message: msg,
+    }
+}
+
+/// ADR-013: after signature verify — dedupe, fan out to target pipelines via [`pipeline_execution`].
+async fn dispatch_scm_registration_webhook(
+    state: &AppState,
+    ctx: &WebhookRegistrationContext,
+    provider: &str,
+    delivery_id: &str,
+    event_type: &str,
+    branch: Option<&str>,
+    commit_sha: Option<&str>,
+    trigger_data: serde_json::Value,
+    log_label: &str,
+    webhook_remote_addr: Option<String>,
+) -> ApiResult<WebhookResponse> {
+    let registration_tid = TriggerId::from_uuid(ctx.registration_id);
+    let hook_repo = WebhookRepo::new(state.db());
+    let claim = hook_repo
+        .claim_webhook_delivery(provider, delivery_id, registration_tid)
+        .await?;
+
+    if let WebhookDeliveryClaim::Duplicate { run_ids } = claim {
+        return Ok(scm_webhook_response_duplicate(run_ids));
+    }
+
+    let event_ok = ctx.events.iter().any(|e| e == event_type);
+    let mut target_errors: Vec<String> = Vec::new();
+    let mut run_ids: Vec<Uuid> = Vec::new();
+    let mut matched: usize = 0;
+
+    let triggered_by = format!("{provider}:webhook:{delivery_id}");
+
+    let mut vars_base: HashMap<String, String> = HashMap::new();
+    if let Some(b) = branch {
+        if !b.is_empty() {
+            vars_base.insert("webhook_branch".into(), b.to_string());
+        }
+    }
+    if let Some(c) = commit_sha {
+        if !c.is_empty() {
+            vars_base.insert("webhook_commit".into(), c.to_string());
+        }
+    }
+    vars_base.insert("webhook_event".into(), event_type.to_string());
+
+    if !event_ok {
+        target_errors.push("event type ignored by registration filters".to_string());
+        hook_repo.set_delivery_run_ids(provider, delivery_id, &[]).await?;
+        return Ok(scm_webhook_response_dispatched(
+            run_ids,
+            matched,
+            target_errors,
+            log_label,
+        ));
+    }
+
+    let targets = hook_repo.list_targets(registration_tid).await?;
+    let had_targets = !targets.is_empty();
+    if targets.is_empty() {
+        target_errors.push("no pipeline targets configured for this webhook".to_string());
+        hook_repo.set_delivery_run_ids(provider, delivery_id, &[]).await?;
+        return Ok(scm_webhook_response_dispatched(
+            run_ids,
+            matched,
+            target_errors,
+            &format!("{} event accepted", log_label),
+        ));
+    }
+
+    let pipeline_repo = PipelineRepo::new(state.db());
+    for t in targets {
+        if !t.enabled {
+            continue;
+        }
+        if !WebhookRepo::target_event_allows(&t.filter_config, event_type) {
+            continue;
+        }
+        if let Some(b) = branch {
+            if !WebhookRepo::target_branch_allows(&t.filter_config, b) {
+                continue;
+            }
+        } else if WebhookRepo::target_requires_branch(&t.filter_config) {
+            continue;
+        }
+
+        let pipeline = match pipeline_repo.get(t.pipeline_id).await {
+            Ok(p) => p,
+            Err(_) => {
+                target_errors.push(format!("pipeline {} not found", t.pipeline_id));
+                continue;
+            }
+        };
+        if pipeline.project_id != ctx.project_id {
+            target_errors.push(format!(
+                "pipeline {} is not in the webhook project",
+                t.pipeline_id
+            ));
+            continue;
+        }
+        if !pipeline.enabled {
+            target_errors.push(format!("pipeline {} is disabled", t.pipeline_id));
+            continue;
+        }
+
+        matched += 1;
+        match pipeline_execution::dispatch_pipeline_run(
+            state,
+            &pipeline,
+            ctx.org_id,
+            commit_sha,
+            branch,
+            None,
+            &triggered_by,
+            "Webhook",
+            Some(vars_base.clone()),
+            webhook_remote_addr.clone(),
+        )
+        .await
+        {
+            Ok(run) => run_ids.push(run.id.as_uuid()),
+            Err(e) => {
+                target_errors.push(format!("pipeline {}: {e}", t.pipeline_id));
+            }
+        }
+    }
+
+    if event_ok && had_targets && run_ids.is_empty() && target_errors.is_empty() {
+        target_errors.push("no targets matched branch or event filters".to_string());
+    }
+
+    hook_repo
+        .set_delivery_run_ids(provider, delivery_id, &run_ids)
+        .await?;
+
+    info!(
+        registration_id = %ctx.registration_id,
+        provider = %provider,
+        event = %event_type,
+        ?branch,
+        "webhook dispatch completed for {}",
+        log_label
+    );
+
+    Ok(scm_webhook_response_dispatched(
+        run_ids,
+        matched,
+        target_errors,
+        &format!("{} event accepted", log_label),
+    ))
+}
+
+fn github_delivery_id(headers: &HeaderMap, body: &[u8]) -> String {
+    if let Some(v) = headers
+        .get(GITHUB_DELIVERY_HEADER)
+        .and_then(|v| v.to_str().ok())
+    {
+        return v.to_string();
+    }
+    format!("github-synthetic:{:x}", Sha256::digest(body))
+}
+
+fn gitlab_synthetic_delivery_id(secret: &str, body: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(secret.as_bytes());
+    h.update(body);
+    format!("gitlab:{:x}", h.finalize())
+}
+
+fn bitbucket_delivery_id(body: &[u8]) -> String {
+    format!("bitbucket:{:x}", Sha256::digest(body))
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +483,10 @@ async fn handle_webhook(
     Ok(Json(WebhookResponse {
         accepted: true,
         run_id: Some(run.id.to_string()),
+        run_ids: vec![run.id.to_string()],
+        duplicate: false,
+        targets_matched: Some(1),
+        target_errors: vec![],
         message: "Webhook accepted; pipeline run created".to_string(),
     }))
 }
@@ -251,6 +561,7 @@ const GITHUB_DELIVERY_HEADER: &str = "x-github-delivery";
         (status = 200, description = "GitHub webhook accepted", body = WebhookResponse),
         (status = 400, description = "Bad request"),
         (status = 403, description = "Invalid signature"),
+        (status = 404, description = "Not found"),
     ),
     tag = "webhooks",
 )]
@@ -258,34 +569,42 @@ const GITHUB_DELIVERY_HEADER: &str = "x-github-delivery";
 async fn handle_github_webhook(
     State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<WebhookResponse>> {
+    if body.len() > WEBHOOK_MAX_BODY_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "webhook body exceeds maximum size ({} bytes)",
+            WEBHOOK_MAX_BODY_BYTES
+        )));
+    }
+
+    let ctx = load_inbound_registration(&state, org_id, trigger_id, "github").await?;
+
     let event = headers
         .get(GITHUB_EVENT_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
 
-    let delivery_id = headers
-        .get(GITHUB_DELIVERY_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
+    let delivery_id = github_delivery_id(&headers, &body);
 
     debug!(
         org_id = %org_id,
         trigger_id = %trigger_id,
         event = %event,
-        delivery_id = ?delivery_id,
+        delivery_id = %delivery_id,
         "received GitHub webhook"
     );
 
-    if let Some(secret) = lookup_webhook_secret(state.db(), trigger_id).await? {
+    let secret = ctx.secret_verifier.as_bytes();
+    if !secret.is_empty() {
         let signature = headers
             .get(GITHUB_SIGNATURE_HEADER)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
 
-        if !verify_github_signature(secret.as_bytes(), &body, signature) {
+        if !verify_github_signature(secret, &body, signature) {
             return Err(ApiError::forbidden("Invalid webhook signature"));
         }
     }
@@ -312,18 +631,29 @@ async fn handle_github_webhook(
         _ => (None, None),
     };
 
-    info!(
-        event = %event,
-        branch = ?branch,
-        commit = ?commit_sha,
-        "GitHub webhook processed"
-    );
+    let trigger_data = serde_json::json!({
+        "provider": "github",
+        "event": event,
+        "repository": payload.repository.as_ref().map(|r| &r.full_name),
+        "delivery_id": delivery_id,
+    });
 
-    Ok(Json(WebhookResponse {
-        accepted: true,
-        run_id: None,
-        message: format!("GitHub {} event received", event),
-    }))
+    let client_ip = webhook_client_ip(&headers, &addr);
+    let resp = dispatch_scm_registration_webhook(
+        &state,
+        &ctx,
+        "github",
+        &delivery_id,
+        event,
+        branch.as_deref(),
+        commit_sha.as_deref(),
+        trigger_data,
+        event,
+        Some(client_ip),
+    )
+    .await?;
+
+    Ok(Json(resp))
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,17 +707,29 @@ const GITLAB_TOKEN_HEADER: &str = "x-gitlab-token";
     responses(
         (status = 200, description = "GitLab webhook accepted", body = WebhookResponse),
         (status = 400, description = "Bad request"),
+        (status = 403, description = "Invalid token"),
+        (status = 404, description = "Not found"),
     ),
     tag = "webhooks",
 )]
-#[instrument(skip(headers, body))]
+#[instrument(skip(state, headers, body))]
 async fn handle_gitlab_webhook(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<WebhookResponse>> {
-    let event = headers
+    if body.len() > WEBHOOK_MAX_BODY_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "webhook body exceeds maximum size ({} bytes)",
+            WEBHOOK_MAX_BODY_BYTES
+        )));
+    }
+
+    let ctx = load_inbound_registration(&state, org_id, trigger_id, "gitlab").await?;
+
+    let _event_header = headers
         .get(GITLAB_EVENT_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
@@ -395,9 +737,21 @@ async fn handle_gitlab_webhook(
     debug!(
         org_id = %org_id,
         trigger_id = %trigger_id,
-        event = %event,
         "received GitLab webhook"
     );
+
+    let secret = ctx.secret_verifier.clone();
+    if !secret.is_empty() {
+        let token = headers
+            .get(GITLAB_TOKEN_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| ApiError::bad_request("Missing X-Gitlab-Token header"))?;
+        if !constant_time_eq(token.as_bytes(), secret.as_bytes()) {
+            return Err(ApiError::forbidden("Invalid GitLab webhook token"));
+        }
+    }
+
+    let delivery_id = gitlab_synthetic_delivery_id(&secret, &body);
 
     let payload: GitLabWebhookPayload = serde_json::from_slice(&body)
         .map_err(|e| ApiError::bad_request(format!("Invalid GitLab payload: {e}")))?;
@@ -423,18 +777,34 @@ async fn handle_gitlab_webhook(
         _ => (None, None),
     };
 
-    info!(
-        object_kind = %object_kind,
-        branch = ?branch,
-        commit = ?commit_sha,
-        "GitLab webhook processed"
-    );
+    let event_for_filters = match object_kind {
+        "merge_request" => "pull_request",
+        other => other,
+    };
 
-    Ok(Json(WebhookResponse {
-        accepted: true,
-        run_id: None,
-        message: format!("GitLab {} event received", object_kind),
-    }))
+    let trigger_data = serde_json::json!({
+        "provider": "gitlab",
+        "object_kind": object_kind,
+        "project": payload.project.as_ref().map(|p| &p.path_with_namespace),
+        "delivery_id": delivery_id,
+    });
+
+    let client_ip = webhook_client_ip(&headers, &addr);
+    let resp = dispatch_scm_registration_webhook(
+        &state,
+        &ctx,
+        "gitlab",
+        &delivery_id,
+        event_for_filters,
+        branch.as_deref(),
+        commit_sha.as_deref(),
+        trigger_data,
+        object_kind,
+        Some(client_ip),
+    )
+    .await?;
+
+    Ok(Json(resp))
 }
 
 pub fn verify_github_signature(secret: &[u8], body: &[u8], signature: &str) -> bool {
@@ -465,21 +835,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b.iter()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-async fn lookup_webhook_secret(
-    pool: &sqlx::PgPool,
-    trigger_id: TriggerId,
-) -> ApiResult<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT secret_hash FROM webhook_registrations WHERE id = $1 AND active = true",
-    )
-    .bind(trigger_id.as_uuid())
-    .fetch_optional(pool)
-    .await
-    .map_err(met_store::StoreError::from)?;
-
-    Ok(row.map(|(s,)| s))
 }
 
 #[derive(Debug, Deserialize)]
@@ -553,6 +908,7 @@ const BITBUCKET_EVENT_HEADER: &str = "x-event-key";
     responses(
         (status = 200, description = "Bitbucket webhook accepted", body = WebhookResponse),
         (status = 400, description = "Bad request"),
+        (status = 404, description = "Not found"),
     ),
     tag = "webhooks",
 )]
@@ -560,9 +916,19 @@ const BITBUCKET_EVENT_HEADER: &str = "x-event-key";
 async fn handle_bitbucket_webhook(
     State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<WebhookResponse>> {
+    if body.len() > WEBHOOK_MAX_BODY_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "webhook body exceeds maximum size ({} bytes)",
+            WEBHOOK_MAX_BODY_BYTES
+        )));
+    }
+
+    let ctx = load_inbound_registration(&state, org_id, trigger_id, "bitbucket").await?;
+
     let event = headers
         .get(BITBUCKET_EVENT_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -575,37 +941,61 @@ async fn handle_bitbucket_webhook(
         "received Bitbucket webhook"
     );
 
-    let _secret = lookup_webhook_secret(state.db(), trigger_id).await?;
+    let _secret = ctx.secret_verifier.clone();
+    let delivery_id = bitbucket_delivery_id(&body);
 
     let payload: BitbucketWebhookPayload = serde_json::from_slice(&body)
         .map_err(|e| ApiError::bad_request(format!("Invalid Bitbucket payload: {e}")))?;
 
-    let (branch, commit_sha) = if let Some(ref push) = payload.push {
+    let (branch, commit_sha, event_for_filters) = if let Some(ref push) = payload.push {
         let change = push.changes.first();
         let branch = change.and_then(|c| c.new.as_ref()).map(|r| r.name.clone());
         let commit_sha = change
             .and_then(|c| c.new.as_ref())
             .and_then(|r| r.target.as_ref())
             .map(|t| t.hash.clone());
-        (branch, commit_sha)
+        (branch, commit_sha, "push")
     } else if let Some(ref pr) = payload.pullrequest {
-        (Some(pr.source.branch.name.clone()), None)
+        (
+            Some(pr.source.branch.name.clone()),
+            None,
+            "pull_request",
+        )
     } else {
-        (None, None)
+        (None, None, event)
     };
 
-    info!(
-        event = %event,
-        branch = ?branch,
-        commit = ?commit_sha,
-        "Bitbucket webhook processed"
-    );
+    let trigger_data = serde_json::json!({
+        "provider": "bitbucket",
+        "event": event,
+        "repository": payload.repository.as_ref().map(|r| &r.full_name),
+        "delivery_id": delivery_id,
+    });
 
-    Ok(Json(WebhookResponse {
-        accepted: true,
-        run_id: None,
-        message: format!("Bitbucket {} event received", event),
-    }))
+    let client_ip = webhook_client_ip(&headers, &addr);
+    let resp = dispatch_scm_registration_webhook(
+        &state,
+        &ctx,
+        "bitbucket",
+        &delivery_id,
+        event_for_filters,
+        branch.as_deref(),
+        commit_sha.as_deref(),
+        trigger_data,
+        event,
+        Some(client_ip),
+    )
+    .await?;
+
+    Ok(Json(resp))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetupScmWebhookTargetInput {
+    #[schema(value_type = String)]
+    pub pipeline_id: PipelineId,
+    #[serde(default)]
+    pub filter_config: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -613,6 +1003,8 @@ pub struct SetupScmWebhookRequest {
     pub provider: String,
     pub repository_url: String,
     pub events: Option<Vec<String>>,
+    #[serde(default)]
+    pub targets: Vec<SetupScmWebhookTargetInput>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -637,10 +1029,12 @@ pub struct SetupScmWebhookResponse {
 #[instrument(skip(state))]
 async fn setup_scm_webhook(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     Path(project_id): Path<ProjectId>,
     Json(req): Json<SetupScmWebhookRequest>,
 ) -> ApiResult<Json<SetupScmWebhookResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+
     let provider = req.provider.to_lowercase();
     if !matches!(provider.as_str(), "github" | "gitlab" | "bitbucket") {
         return Err(ApiError::bad_request(format!(
@@ -671,20 +1065,183 @@ async fn setup_scm_webhook(
     .await
     .map_err(met_store::StoreError::from)?;
 
-    let trigger_id = webhook_id.0;
+    let registration_id = TriggerId::from_uuid(webhook_id.0);
+    let pipeline_repo = PipelineRepo::new(state.db());
+    let hook_repo = WebhookRepo::new(state.db());
+
+    for t in &req.targets {
+        let pipeline = pipeline_repo.get(t.pipeline_id).await?;
+        if pipeline.project_id != project_id {
+            return Err(ApiError::unprocessable(format!(
+                "pipeline {} does not belong to this project",
+                t.pipeline_id
+            )));
+        }
+        hook_repo
+            .insert_target(
+                registration_id,
+                &CreateWebhookTarget {
+                    pipeline_id: t.pipeline_id,
+                    enabled: true,
+                    filter_config: t.filter_config.clone(),
+                },
+            )
+            .await?;
+    }
+
     let webhook_url = format!(
         "/api/v1/webhooks/{provider}/{org}/{trigger}",
         provider = provider,
-        org = _user.org_id,
-        trigger = trigger_id,
+        org = user.org_id,
+        trigger = registration_id.as_uuid(),
     );
 
     Ok(Json(SetupScmWebhookResponse {
-        webhook_id: trigger_id.to_string(),
+        webhook_id: registration_id.as_uuid().to_string(),
         webhook_url,
         provider,
         events,
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    responses(
+        (status = 200, description = "Targets", body = Vec<WebhookTargetResponse>),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn list_webhook_targets(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+) -> ApiResult<Json<Vec<WebhookTargetResponse>>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+    let rows = repo.list_targets(registration_id).await?;
+    Ok(Json(rows.into_iter().map(Into::into).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    request_body = CreateWebhookTargetRequest,
+    responses(
+        (status = 200, description = "Created", body = WebhookTargetResponse),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state, req))]
+async fn create_webhook_target(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+    Json(req): Json<CreateWebhookTargetRequest>,
+) -> ApiResult<Json<WebhookTargetResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+
+    let pipeline = PipelineRepo::new(state.db())
+        .get(req.pipeline_id)
+        .await?;
+    if pipeline.project_id != project_id {
+        return Err(ApiError::unprocessable(
+            "pipeline does not belong to this project",
+        ));
+    }
+
+    let row = repo
+        .insert_target(
+            registration_id,
+            &CreateWebhookTarget {
+                pipeline_id: req.pipeline_id,
+                enabled: req.enabled,
+                filter_config: req.filter_config,
+            },
+        )
+        .await?;
+    Ok(Json(row.into()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets/{target_id}",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+        ("target_id" = String, Path, description = "Target ID"),
+    ),
+    request_body = UpdateWebhookTargetRequest,
+    responses(
+        (status = 200, description = "Updated", body = WebhookTargetResponse),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state, req))]
+async fn update_webhook_target(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id, target_id)): Path<(ProjectId, TriggerId, Uuid)>,
+    Json(req): Json<UpdateWebhookTargetRequest>,
+) -> ApiResult<Json<WebhookTargetResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+
+    let row = repo
+        .update_target(
+            target_id,
+            registration_id,
+            &UpdateWebhookTarget {
+                enabled: req.enabled,
+                filter_config: req.filter_config,
+            },
+        )
+        .await?;
+    Ok(Json(row.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets/{target_id}",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+        ("target_id" = String, Path, description = "Target ID"),
+    ),
+    responses((status = 200, description = "Deleted")),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn delete_webhook_target(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id, target_id)): Path<(ProjectId, TriggerId, Uuid)>,
+) -> ApiResult<()> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+    repo.delete_target(target_id, registration_id).await?;
+    Ok(())
 }
 
 #[cfg(test)]

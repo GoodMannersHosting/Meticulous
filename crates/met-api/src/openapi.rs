@@ -40,7 +40,11 @@ use crate::routes::{
     },
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
     workspace_config::{WorkspaceStoredSecretListItem, WorkspaceVariableListItem},
-    webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
+    webhooks::{
+        CreateWebhookTargetRequest, SetupScmWebhookRequest, SetupScmWebhookResponse,
+        SetupScmWebhookTargetInput, UpdateWebhookTargetRequest, WebhookResponse,
+        WebhookTargetResponse,
+    },
     workflows::{
         CreateWorkflowRequest, ProjectWorkflowsAvailableResponse, WorkflowResponse,
         WorkflowVersionsResponse,
@@ -193,6 +197,10 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::webhooks::handle_gitlab_webhook,
         crate::routes::webhooks::handle_bitbucket_webhook,
         crate::routes::webhooks::setup_scm_webhook,
+        crate::routes::webhooks::list_webhook_targets,
+        crate::routes::webhooks::create_webhook_target,
+        crate::routes::webhooks::update_webhook_target,
+        crate::routes::webhooks::delete_webhook_target,
         // Artifacts
         crate::routes::artifacts::list_run_artifacts,
         crate::routes::artifacts::get_artifact,
@@ -248,7 +256,9 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             VariableResponse, CreateVariableRequest, UpdateVariableRequest,
             WorkspaceVariableListItem, WorkspaceStoredSecretListItem,
             // Webhooks
-            WebhookResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
+            WebhookResponse, WebhookTargetResponse,
+            SetupScmWebhookRequest, SetupScmWebhookTargetInput, SetupScmWebhookResponse,
+            CreateWebhookTargetRequest, UpdateWebhookTargetRequest,
             // Workflows
             WorkflowResponse, ProjectWorkflowsAvailableResponse, CreateWorkflowRequest,
             WorkflowVersionsResponse,

@@ -73,6 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("CORS allowed from any origin - DO NOT use in production");
     }
 
+    if let Ok(secret) = std::env::var("MET_JWT__SECRET") {
+        if !secret.is_empty() {
+            api_config.jwt.secret = secret;
+        }
+    }
+
     // Create database pool
     let mut pool_config = PoolConfig::from(&met_config.database);
     if let Some(url) = args.database_url {
@@ -81,6 +87,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(url = %pool_config.url, "connecting to database");
     let db = create_pool(&pool_config).await?;
+
+    if std::env::var("MET_API__RUN_MIGRATIONS")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        met_store::run_migrations(&db).await?;
+    }
 
     let stale_after = api_config.agent_stale_after_secs;
     let sweep_secs = api_config.agent_stale_sweep_interval_secs.max(5);
