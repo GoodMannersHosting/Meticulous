@@ -33,6 +33,9 @@ pub struct Run {
     pub branch: Option<String>,
     /// Who or what triggered the run.
     pub triggered_by: String,
+    /// Observed HTTP client IP (or leftmost `X-Forwarded-For` hop) when triggered via webhook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_remote_addr: Option<String>,
     /// When the run was created.
     pub created_at: DateTime<Utc>,
     /// When execution started.
@@ -57,6 +60,7 @@ impl Run {
             commit_sha: None,
             branch: None,
             triggered_by: triggered_by.into(),
+            webhook_remote_addr: None,
             created_at: Utc::now(),
             started_at: None,
             finished_at: None,

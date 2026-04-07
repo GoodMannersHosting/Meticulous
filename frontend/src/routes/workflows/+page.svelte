@@ -184,7 +184,7 @@
 		<div>
 			<h1 class="text-2xl font-bold text-[var(--text-primary)]">Workflow catalog</h1>
 			<p class="mt-1 text-[var(--text-secondary)]">
-				Reusable workflows for your organization. Import from Git; admins approve and set trust.
+				Reusable workflows for your organization. Import from source code; admins approve and set trust.
 			</p>
 		</div>
 
@@ -232,7 +232,7 @@
 			<EmptyState
 				icon={Layers}
 				title="No catalog workflows yet"
-				description="Import a reusable workflow YAML from GitHub to submit it for review."
+				description="Import a reusable workflow YAML from source code to submit it for review."
 			>
 				<Button variant="primary" href="/workflows/new">
 					<Plus class="h-4 w-4" />

@@ -20,9 +20,14 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
-    extractors::Auth,
+    extractors::{Auth, CurrentUser},
     state::AppState,
 };
+
+#[must_use]
+fn user_may_manage_org_stored_secrets(user: &CurrentUser) -> bool {
+    user.has_any_permission(&["*", "org:admin"])
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -52,6 +57,9 @@ struct ListStoredQuery {
 struct ListStoredSecretVersionsQuery {
     path: String,
     pipeline_id: Option<PipelineId>,
+    /// When true, list versions for org-wide secrets (`project_id` NULL) at this path.
+    #[serde(default)]
+    organization_wide: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -69,6 +77,8 @@ pub struct StoredSecretResponse {
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Org-wide only: when `false`, not exposed to pipelines or project secret UIs (catalog SCM may still use).
+    pub propagate_to_projects: bool,
 }
 
 impl From<BuiltinSecretMetaRow> for StoredSecretResponse {
@@ -84,6 +94,7 @@ impl From<BuiltinSecretMetaRow> for StoredSecretResponse {
             description: r.description,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            propagate_to_projects: r.propagate_to_projects,
         }
     }
 }
@@ -195,7 +206,13 @@ async fn list_stored_secret_versions(
         .map_err(met_store::StoreError::from)?
         .org_id;
 
-    if let Some(pid) = q.pipeline_id {
+    if q.organization_wide {
+        if q.pipeline_id.is_some() {
+            return Err(ApiError::bad_request(
+                "organization_wide conflicts with pipeline_id",
+            ));
+        }
+    } else if let Some(pid) = q.pipeline_id {
         let pl = PipelineRepo::new(state.db())
             .get(pid)
             .await
@@ -206,8 +223,13 @@ async fn list_stored_secret_versions(
     }
 
     let repo = BuiltinSecretsRepo::new(state.db());
+    let (scope_project, scope_pipeline) = if q.organization_wide {
+        (None, None)
+    } else {
+        (Some(project_id), q.pipeline_id)
+    };
     let rows = repo
-        .list_versions_for_scope(org_id, project_id, q.pipeline_id, path)
+        .list_versions_for_scope(org_id, scope_project, scope_pipeline, path)
         .await
         .map_err(met_store::StoreError::from)?;
     Ok(Json(rows.into_iter().map(StoredSecretResponse::from).collect()))
@@ -225,6 +247,13 @@ pub struct CreateStoredSecretRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>)]
     pub pipeline_id: Option<PipelineId>,
+    /// Set to `"organization"` for org-wide secrets (`project_id` NULL). Requires `org:admin` or `*`.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// When `scope` is organization: if `false`, secret is **not** visible to pipelines, jobs, or project secret lists
+    /// (use for platform SCM such as global workflow catalog import). Default `true`.
+    #[serde(default)]
+    pub propagate_to_projects: Option<bool>,
 }
 
 #[utoipa::path(
@@ -281,6 +310,29 @@ async fn create_stored_secret(
         .map_err(met_store::StoreError::from)?;
     let org_id = project.org_id;
 
+    let org_wide = req
+        .scope
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("organization"));
+
+    if org_wide {
+        if !user_may_manage_org_stored_secrets(&user) {
+            return Err(ApiError::forbidden(
+                "org-wide stored secrets require org:admin (or *) permission",
+            ));
+        }
+        if req.pipeline_id.is_some() {
+            return Err(ApiError::bad_request(
+                "organization-scoped secrets cannot be pipeline-scoped",
+            ));
+        }
+    } else {
+        if req.propagate_to_projects == Some(false) {
+            return Err(ApiError::bad_request(
+                "propagate_to_projects may only be set when scope is organization",
+            ));
+        }
+    }
     if let Some(pid) = req.pipeline_id {
         let pl = PipelineRepo::new(state.db())
             .get(pid)
@@ -292,8 +344,13 @@ async fn create_stored_secret(
     }
 
     let repo = BuiltinSecretsRepo::new(state.db());
+    let (store_project, store_pipeline) = if org_wide {
+        (None, None)
+    } else {
+        (Some(project_id), req.pipeline_id)
+    };
     let version = repo
-        .next_version(org_id, Some(project_id), req.pipeline_id, &req.path)
+        .next_version(org_id, store_project, store_pipeline, &req.path)
         .await
         .map_err(met_store::StoreError::from)?;
 
@@ -302,11 +359,16 @@ async fn create_stored_secret(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let meta = serde_json::json!({});
+    let propagate_to_projects = if org_wide {
+        req.propagate_to_projects.unwrap_or(true)
+    } else {
+        true
+    };
     let row = repo
         .insert_encrypted(
             org_id,
-            Some(project_id),
-            req.pipeline_id,
+            store_project,
+            store_pipeline,
             &req.path,
             kind,
             &meta,
@@ -316,6 +378,7 @@ async fn create_stored_secret(
             &key_id,
             version,
             Some(user.user_id.as_uuid()),
+            propagate_to_projects,
         )
         .await
         .map_err(met_store::StoreError::from)?;
@@ -367,13 +430,20 @@ async fn rotate_stored_secret(
         .map_err(met_store::StoreError::from)?
         .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
 
-    let project_id = existing
-        .project_id
-        .map(ProjectId::from_uuid)
-        .ok_or_else(|| ApiError::bad_request("cannot rotate org-wide secrets via this API"))?;
-
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let project_id = existing.project_id.map(ProjectId::from_uuid);
+    match project_id {
+        Some(pid) => {
+            if !user.can_access_project(pid) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+        }
+        None => {
+            if !user_may_manage_org_stored_secrets(&user) {
+                return Err(ApiError::forbidden(
+                    "rotating org-wide secrets requires org:admin (or *) permission",
+                ));
+            }
+        }
     }
 
     if existing.org_id != user.org_id.as_uuid() {
@@ -420,6 +490,7 @@ async fn rotate_stored_secret(
             &key_id,
             version,
             Some(user.user_id.as_uuid()),
+            existing.propagate_to_projects,
         )
         .await
         .map_err(met_store::StoreError::from)?;
@@ -454,14 +525,20 @@ async fn delete_stored_secret(
         .map_err(met_store::StoreError::from)?
         .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
 
-    let Some(project_id) = existing.project_id.map(ProjectId::from_uuid) else {
-        return Err(ApiError::bad_request(
-            "cannot delete org-wide secrets via this API",
-        ));
-    };
-
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let project_id = existing.project_id.map(ProjectId::from_uuid);
+    match project_id {
+        Some(pid) => {
+            if !user.can_access_project(pid) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+        }
+        None => {
+            if !user_may_manage_org_stored_secrets(&user) {
+                return Err(ApiError::forbidden(
+                    "deleting org-wide secrets requires org:admin (or *) permission",
+                ));
+            }
+        }
     }
     if existing.org_id != user.org_id.as_uuid() {
         return Err(ApiError::forbidden("wrong organization"));
@@ -501,14 +578,20 @@ async fn activate_stored_secret_version(
         .map_err(met_store::StoreError::from)?
         .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
 
-    let Some(project_id) = anchor.project_id.map(ProjectId::from_uuid) else {
-        return Err(ApiError::bad_request(
-            "cannot activate org-wide secrets via this API",
-        ));
-    };
-
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let project_id = anchor.project_id.map(ProjectId::from_uuid);
+    match project_id {
+        Some(pid) => {
+            if !user.can_access_project(pid) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+        }
+        None => {
+            if !user_may_manage_org_stored_secrets(&user) {
+                return Err(ApiError::forbidden(
+                    "org-wide secret rollback requires org:admin (or *) permission",
+                ));
+            }
+        }
     }
     if anchor.org_id != user.org_id.as_uuid() {
         return Err(ApiError::forbidden("wrong organization"));
@@ -560,14 +643,20 @@ async fn purge_stored_secret_version(
         .map_err(met_store::StoreError::from)?
         .ok_or_else(|| ApiError::not_found("stored secret not found"))?;
 
-    let Some(project_id) = existing.project_id.map(ProjectId::from_uuid) else {
-        return Err(ApiError::bad_request(
-            "cannot purge org-wide secrets via this API",
-        ));
-    };
-
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let project_id = existing.project_id.map(ProjectId::from_uuid);
+    match project_id {
+        Some(pid) => {
+            if !user.can_access_project(pid) {
+                return Err(ApiError::forbidden("no access to this project"));
+            }
+        }
+        None => {
+            if !user_may_manage_org_stored_secrets(&user) {
+                return Err(ApiError::forbidden(
+                    "purging org-wide secrets requires org:admin (or *) permission",
+                ));
+            }
+        }
     }
     if existing.org_id != user.org_id.as_uuid() {
         return Err(ApiError::forbidden("wrong organization"));

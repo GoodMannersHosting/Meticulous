@@ -74,6 +74,8 @@ pub struct WebhookTrigger {
     pub paths: Vec<String>,
     /// Path patterns to exclude.
     pub paths_ignore: Vec<String>,
+    /// When set (non-empty in YAML), repo sync manages a `triggers` row with this key.
+    pub sync_key: Option<String>,
 }
 
 /// Webhook event types.

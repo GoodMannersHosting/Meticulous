@@ -26,7 +26,7 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 pub struct DashboardWindowQuery {
-    /// Time window for completed/failed counts and average duration: `1h`, `4h`, `12h`, `1d`, `3d`, `7d`.
+    /// Time window for completed/failed/cancelled/total-run counts and average duration: `1h`, `4h`, `12h`, `1d`, `3d`, `7d`.
     #[serde(default = "default_window")]
     pub window: String,
 }
@@ -54,6 +54,8 @@ pub struct DashboardStatsResponse {
     pub active_runs: i64,
     pub completed_runs: i64,
     pub failed_runs: i64,
+    pub cancelled_runs: i64,
+    pub total_runs: i64,
     pub avg_duration_ms: i64,
     pub agents_online: i64,
     pub agents_total: i64,
@@ -89,6 +91,8 @@ async fn dashboard_stats(
         active_runs: s.active_runs,
         completed_runs: s.completed_runs,
         failed_runs: s.failed_runs,
+        cancelled_runs: s.cancelled_runs,
+        total_runs: s.total_runs,
         avg_duration_ms: s.avg_duration_ms,
         agents_online: s.agents_online,
         agents_total: s.agents_total,
@@ -118,6 +122,8 @@ pub struct RecentRunResponse {
     pub run_number: i64,
     pub status: String,
     pub triggered_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_remote_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -158,6 +164,7 @@ async fn dashboard_recent_runs(
                 run_number: r.run_number,
                 status: r.status,
                 triggered_by: r.triggered_by,
+                webhook_remote_addr: r.webhook_remote_addr,
                 duration_ms,
                 created_at: r.created_at,
             }

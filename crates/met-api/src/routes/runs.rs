@@ -452,6 +452,7 @@ async fn retry_run(
             original_run.branch.as_deref(),
             None,
             Some(id),
+            None,
         )
         .await?;
 

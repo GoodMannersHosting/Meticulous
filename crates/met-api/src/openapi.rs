@@ -3,7 +3,7 @@
 use utoipa::OpenApi;
 
 use crate::error::{ErrorBody, ErrorResponse};
-use crate::extractors::pagination::{PaginatedResponse, PaginationMeta};
+use crate::extractors::pagination::PaginationMeta;
 use crate::routes::{
     admin_workflows::{
         AdminWorkflowDeleteResponse, AdminWorkflowOpResponse,
@@ -35,9 +35,16 @@ use crate::routes::{
     secrets::{CreateSecretRequest, SecretResponse, UpdateSecretRequest},
     stored_secrets::{CreateStoredSecretRequest, RotateStoredSecretRequest, StoredSecretResponse},
     tokens::{CreateTokenRequest, CreateTokenResponseBody, TokenResponse},
+    triggers::{
+        CreateTriggerRequest, TriggerPublicResponse, UpdateTriggerRequest,
+    },
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
+    workspace_config::{WorkspaceStoredSecretListItem, WorkspaceVariableListItem},
     webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
-    workflows::{CreateWorkflowRequest, WorkflowResponse, WorkflowVersionsResponse},
+    workflows::{
+        CreateWorkflowRequest, ProjectWorkflowsAvailableResponse, WorkflowResponse,
+        WorkflowVersionsResponse,
+    },
     workflows_catalog::{CatalogVersionsPage, ImportCatalogWorkflowGitRequest},
 };
 use crate::workflow_diagnostics::WorkflowDiagnosticItem;
@@ -69,6 +76,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         (name = "variables", description = "Variable management"),
         (name = "workflows", description = "Reusable workflow management"),
         (name = "webhooks", description = "Webhook management"),
+        (name = "triggers", description = "Pipeline trigger configuration"),
         (name = "artifacts", description = "Build artifact management"),
         (name = "debug", description = "Debug session management"),
     ),
@@ -108,6 +116,10 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::pipelines::pipeline_workflow_diagnostics,
         crate::routes::pipelines::import_pipeline_git,
         crate::routes::pipelines::sync_pipeline_from_git,
+        crate::routes::triggers::list_triggers,
+        crate::routes::triggers::create_trigger,
+        crate::routes::triggers::update_trigger,
+        crate::routes::triggers::delete_trigger,
         // Dashboard
         crate::routes::dashboard::dashboard_stats,
         crate::routes::dashboard::dashboard_recent_runs,
@@ -152,13 +164,17 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::variables::create_variable,
         crate::routes::variables::update_variable,
         crate::routes::variables::delete_variable,
+        crate::routes::workspace_config::list_workspace_variables,
+        crate::routes::workspace_config::list_workspace_stored_secrets,
         // Workflows
         crate::routes::workflows::list_global_workflows,
+        crate::routes::workflows::list_project_workflows_available,
         crate::routes::workflows::list_project_workflows,
         crate::routes::workflows::create_project_workflow,
         crate::routes::workflows::get_workflow,
         crate::routes::workflows::list_versions,
         crate::routes::workflows_catalog::list_catalog_workflows,
+        crate::routes::workflows_catalog::import_catalog_workflow_git_organization,
         crate::routes::workflows_catalog::import_catalog_workflow_git,
         crate::routes::workflows_catalog::list_catalog_versions,
         crate::routes::admin_workflows::approve_catalog_workflow,
@@ -208,6 +224,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             ImportPipelineGitRequest, SyncPipelineGitRequest,
             TriggerPipelineRequest, TriggerPipelineResponse,
             ValidatePipelineRequest, ValidatePipelineResponse,
+            TriggerPublicResponse, CreateTriggerRequest, UpdateTriggerRequest,
             // Runs
             RunResponse, CancelRunResponse, RetryRunResponse,
             JobRunResponse, JobRunSnapshotsResponse, JobAssignmentResponse, StepRunResponse,
@@ -224,10 +241,12 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             StoredSecretResponse, CreateStoredSecretRequest, RotateStoredSecretRequest,
             // Variables
             VariableResponse, CreateVariableRequest, UpdateVariableRequest,
+            WorkspaceVariableListItem, WorkspaceStoredSecretListItem,
             // Webhooks
             WebhookResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
             // Workflows
-            WorkflowResponse, CreateWorkflowRequest, WorkflowVersionsResponse,
+            WorkflowResponse, ProjectWorkflowsAvailableResponse, CreateWorkflowRequest,
+            WorkflowVersionsResponse,
             ImportCatalogWorkflowGitRequest, CatalogVersionsPage,
             WorkflowDiagnosticItem,
             AdminWorkflowOpResponse, AdminWorkflowDeleteResponse,

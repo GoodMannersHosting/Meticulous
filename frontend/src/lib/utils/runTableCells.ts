@@ -1,5 +1,10 @@
 import type { Run, RunStatus } from '$api/types';
-import { formatDateTimeForTitle, formatDurationMs, formatRelativeTime } from './format';
+import {
+	formatDateTimeForTitle,
+	formatDurationMs,
+	formatRelativeTime,
+	formatRunTriggeredBy
+} from './format';
 import { escapeHtml } from './html';
 
 export function runNumberHtml(value: unknown, row?: Run): string {
@@ -62,8 +67,9 @@ export function runBranchColumnHtml(_value: unknown, row: Run): string {
 	return html;
 }
 
-export function runTriggeredByHtml(value: unknown): string {
-	return `<span class="text-sm">${escapeHtml(String(value ?? '—'))}</span>`;
+export function runTriggeredByHtml(value: unknown, row?: Partial<Run>): string {
+	const display = formatRunTriggeredBy(String(value ?? '—'), row?.webhook_remote_addr);
+	return `<span class="text-sm">${escapeHtml(display)}</span>`;
 }
 
 export function runDurationHtml(value: unknown): string {

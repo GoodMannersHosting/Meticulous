@@ -80,6 +80,8 @@ fn api_base_from_env_inline_json(creds_json: &str) -> String {
         .unwrap_or_else(|_| "https://api.github.com".to_string())
 }
 
+/// When `catalog_scm` is true, org-wide secrets that do not propagate to projects can be resolved
+/// (global workflow catalog Git import).
 #[instrument(skip(pool, crypto), fields(org_id = %org_id, project_id = %project_id))]
 pub async fn github_app_installation_token_for_project_secret(
     pool: &PgPool,
@@ -87,13 +89,20 @@ pub async fn github_app_installation_token_for_project_secret(
     org_id: OrganizationId,
     project_id: ProjectId,
     credentials_path: &str,
+    catalog_scm: bool,
 ) -> ApiResult<String> {
     let repo = BuiltinSecretsRepo::new(pool);
     let nil_pipe = PipelineId::from_uuid(uuid::Uuid::nil());
-    let row = repo
-        .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
-        .await
-        .map_err(met_store::StoreError::from)?
+    let row = if catalog_scm {
+        repo
+            .get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
+            .await
+    } else {
+        repo
+            .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
+            .await
+    }
+    .map_err(met_store::StoreError::from)?
         .ok_or_else(|| {
             ApiError::bad_request(format!(
                 "stored secret '{credentials_path}' not found for this project"
@@ -341,13 +350,20 @@ pub async fn github_api_base_for_credentials_path(
     org_id: OrganizationId,
     project_id: ProjectId,
     credentials_path: &str,
+    catalog_scm: bool,
 ) -> ApiResult<String> {
     let repo = BuiltinSecretsRepo::new(pool);
     let nil_pipe = PipelineId::from_uuid(uuid::Uuid::nil());
-    let row = repo
-        .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
-        .await
-        .map_err(met_store::StoreError::from)?
+    let row = if catalog_scm {
+        repo
+            .get_current_cipher_row_for_catalog_scm(org_id, project_id, nil_pipe, credentials_path)
+            .await
+    } else {
+        repo
+            .get_current_cipher_row(org_id, project_id, nil_pipe, credentials_path)
+            .await
+    }
+    .map_err(met_store::StoreError::from)?
         .ok_or_else(|| {
             ApiError::bad_request(format!(
                 "stored secret '{credentials_path}' not found for this project"
@@ -463,7 +479,7 @@ pub async fn fetch_pipeline_yaml_from_github_checkout(
 ) -> ApiResult<String> {
     let slug = parse_github_repository(repository)?;
     let api_base =
-        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path)
+        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path, false)
             .await?;
     let token = github_app_installation_token_for_project_secret(
         pool,
@@ -471,6 +487,7 @@ pub async fn fetch_pipeline_yaml_from_github_checkout(
         org_id,
         project_id,
         credentials_path,
+        false,
     )
     .await?;
 
@@ -502,7 +519,7 @@ pub async fn parse_pipeline_from_github_checkout(
 ) -> ApiResult<(PipelineIR, String, serde_json::Value)> {
     let slug = parse_github_repository(repository)?;
     let api_base =
-        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path)
+        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path, false)
             .await?;
     let token = github_app_installation_token_for_project_secret(
         pool,
@@ -510,6 +527,7 @@ pub async fn parse_pipeline_from_github_checkout(
         org_id,
         project_id,
         credentials_path,
+        false,
     )
     .await?;
     let commit_sha =

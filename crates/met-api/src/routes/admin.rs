@@ -246,6 +246,8 @@ pub struct UserResponse {
     pub is_active: bool,
     pub is_admin: bool,
     pub password_must_change: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_login_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -260,6 +262,7 @@ impl From<&User> for UserResponse {
             is_active: u.is_active,
             is_admin: u.is_admin,
             password_must_change: u.password_must_change,
+            last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
             created_at: u.created_at.to_rfc3339(),
             updated_at: u.updated_at.to_rfc3339(),
         }
@@ -382,7 +385,9 @@ async fn lock_user(
     }
 
     if user_id == admin.user_id {
-        return Err(ApiError::bad_request("cannot lock your own account"));
+        return Err(ApiError::forbidden(
+            "cannot lock your own account; use another admin if you need this account disabled",
+        ));
     }
 
     sqlx::query(

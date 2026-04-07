@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use met_core::ids::ProjectId;
+use met_core::{OrganizationId, UserId};
 use met_store::repos::{
     CreateGlobalCatalogGit, WorkflowRepo, WorkflowSubmissionStatus,
 };
@@ -27,6 +28,10 @@ use crate::routes::workflows::WorkflowResponse;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workflows/catalog", get(list_catalog_workflows))
+        .route(
+            "/workflows/catalog/import-git",
+            post(import_catalog_workflow_git_organization),
+        )
         .route(
             "/projects/{project_id}/workflows/catalog/import-git",
             post(import_catalog_workflow_git),
@@ -124,83 +129,35 @@ pub struct ImportCatalogWorkflowGitRequest {
     pub credentials_path: String,
 }
 
-fn catalog_metadata_json(
-    def: &serde_json::Value,
-    upstream_url: impl Into<String>,
-) -> serde_json::Value {
-    let summary = def
-        .get("description")
-        .and_then(|v| v.as_str())
-        .or_else(|| def.get("name").and_then(|v| v.as_str()))
-        .unwrap_or("workflow");
-
-    let mut tools = Vec::new();
-    if let Some(jobs) = def.get("jobs").and_then(|j| j.as_array()) {
-        for job in jobs {
-            if let Some(steps) = job.get("steps").and_then(|s| s.as_array()) {
-                for step in steps {
-                    if let Some(u) = step.get("uses").and_then(|u| u.as_str()) {
-                        tools.push(u.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    serde_json::json!({
-        "summary": summary,
-        "tools": tools,
-        "target_arch": serde_json::Value::Null,
-        "target_os": serde_json::Value::Null,
-        "upstream_url": upstream_url.into(),
-    })
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/projects/{project_id}/workflows/catalog/import-git",
-    request_body = ImportCatalogWorkflowGitRequest,
-    responses(
-        (status = 200, description = "Catalog workflow version created", body = WorkflowResponse),
-        (status = 400, description = "Bad request"),
-    ),
-    tag = "workflows",
-)]
-#[instrument(skip(state, req))]
-async fn import_catalog_workflow_git(
-    State(state): State<AppState>,
-    Auth(user): Auth,
-    Path(project_id): Path<ProjectId>,
-    Json(req): Json<ImportCatalogWorkflowGitRequest>,
-) -> ApiResult<Json<WorkflowResponse>> {
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
-    }
-
+/// Shared Git fetch + global catalog row insert.
+async fn import_catalog_workflow_git_execute(
+    state: &AppState,
+    submitted_by: UserId,
+    org_id: OrganizationId,
+    project_id_for_secrets: ProjectId,
+    req: ImportCatalogWorkflowGitRequest,
+) -> ApiResult<met_store::repos::ReusableWorkflow> {
     let Some(crypto) = state.stored_secret_crypto.as_ref() else {
         return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
     };
-
-    let project = met_store::repos::ProjectRepo::new(state.db())
-        .get(project_id)
-        .await?;
-    let org_id = project.org_id;
 
     let slug = github_scm::parse_github_repository(&req.repository)?;
     let api_base = github_scm::github_api_base_for_credentials_path(
         state.db(),
         crypto.as_ref(),
         org_id,
-        project_id,
+        project_id_for_secrets,
         &req.credentials_path,
+        true,
     )
     .await?;
     let token = github_scm::github_app_installation_token_for_project_secret(
         state.db(),
         crypto.as_ref(),
         org_id,
-        project_id,
+        project_id_for_secrets,
         &req.credentials_path,
+        true,
     )
     .await?;
     let commit_sha = github_scm::resolve_github_commit_sha(
@@ -252,7 +209,7 @@ async fn import_catalog_workflow_git(
     );
     let catalog_metadata = catalog_metadata_json(&def, upstream_url);
 
-    let row = WorkflowRepo::new(state.db())
+    WorkflowRepo::new(state.db())
         .create_global_catalog_git(
             org_id,
             &CreateGlobalCatalogGit {
@@ -266,10 +223,111 @@ async fn import_catalog_workflow_git(
                 scm_path: req.workflow_path,
                 scm_revision: commit_sha,
                 catalog_metadata,
-                submitted_by: user.user_id,
+                submitted_by,
             },
         )
+        .await
+        .map_err(ApiError::from)
+}
+
+fn catalog_metadata_json(
+    def: &serde_json::Value,
+    upstream_url: impl Into<String>,
+) -> serde_json::Value {
+    let summary = def
+        .get("description")
+        .and_then(|v| v.as_str())
+        .or_else(|| def.get("name").and_then(|v| v.as_str()))
+        .unwrap_or("workflow");
+
+    let mut tools = Vec::new();
+    if let Some(jobs) = def.get("jobs").and_then(|j| j.as_array()) {
+        for job in jobs {
+            if let Some(steps) = job.get("steps").and_then(|s| s.as_array()) {
+                for step in steps {
+                    if let Some(u) = step.get("uses").and_then(|u| u.as_str()) {
+                        tools.push(u.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    serde_json::json!({
+        "summary": summary,
+        "tools": tools,
+        "target_arch": serde_json::Value::Null,
+        "target_os": serde_json::Value::Null,
+        "upstream_url": upstream_url.into(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/catalog/import-git",
+    request_body = ImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Catalog workflow version created", body = WorkflowResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn import_catalog_workflow_git_organization(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Json(req): Json<ImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<WorkflowResponse>> {
+    if !user.has_any_permission(&["*", "org:admin"]) {
+        return Err(ApiError::forbidden(
+            "organization catalog Git import requires org:admin (or *) permission",
+        ));
+    }
+
+    let org_id = user.org_id;
+    let project_id_for_secrets = ProjectId::from_uuid(Uuid::nil());
+
+    let row = import_catalog_workflow_git_execute(
+        &state,
+        user.user_id,
+        org_id,
+        project_id_for_secrets,
+        req,
+    )
+    .await?;
+
+    Ok(Json(WorkflowResponse::from(row)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/workflows/catalog/import-git",
+    request_body = ImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Catalog workflow version created", body = WorkflowResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn import_catalog_workflow_git(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<ImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<WorkflowResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = met_store::repos::ProjectRepo::new(state.db())
+        .get(project_id)
         .await?;
+    let org_id = project.org_id;
+
+    let row =
+        import_catalog_workflow_git_execute(&state, user.user_id, org_id, project_id, req).await?;
 
     Ok(Json(WorkflowResponse::from(row)))
 }

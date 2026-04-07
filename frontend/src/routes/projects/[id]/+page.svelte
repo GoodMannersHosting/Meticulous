@@ -4,7 +4,13 @@
 	import { Button, Card, Badge, Tabs, Dialog, Input, Alert, Select } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
-	import type { Project, Pipeline, ProjectVariable, StoredSecret } from '$api/types';
+	import type {
+		Project,
+		Pipeline,
+		ProjectVariable,
+		StoredSecret,
+		CatalogWorkflow
+	} from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -17,7 +23,9 @@
 		KeyRound,
 		RefreshCw,
 		Braces,
-		History
+		History,
+		Layers,
+		ExternalLink
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -72,6 +80,21 @@
 	let showDeleteVariableDialog = $state(false);
 	let ghExtraJson = $state('');
 
+	let wfGlobal = $state<CatalogWorkflow[]>([]);
+	let wfProject = $state<CatalogWorkflow[]>([]);
+	let wfLoading = $state(false);
+	let wfError = $state<string | null>(null);
+
+	let createOrgWideSecret = $state(false);
+	/** When creating an org-wide secret: if true, appears in project/pipeline secret lists and `stored:` resolution. */
+	let orgWidePropagateToProjects = $state(true);
+
+	let settingsName = $state('');
+	let settingsSlug = $state('');
+	let settingsDescription = $state('');
+	let settingsSaving = $state(false);
+	let settingsError = $state<string | null>(null);
+
 	const kindOptions = [
 		{ value: 'kv', label: 'Key / value (kv)' },
 		{ value: 'api_key', label: 'API key' },
@@ -82,14 +105,23 @@
 
 	const tabs = [
 		{ id: 'pipelines', label: 'Pipelines', icon: GitBranch },
+		{ id: 'workflows', label: 'Workflows', icon: Layers },
+		{ id: 'runs', label: 'Recent Runs', icon: Play },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
-		{ id: 'runs', label: 'Recent Runs', icon: Play },
 		{ id: 'settings', label: 'Settings', icon: Settings }
 	];
 
 	$effect(() => {
 		loadProject();
+	});
+
+	$effect(() => {
+		if (activeTab !== 'settings' || !project || loading) return;
+		settingsName = project.name;
+		settingsSlug = project.slug;
+		settingsDescription = project.description ?? '';
+		settingsError = null;
 	});
 
 	async function loadProject() {
@@ -145,6 +177,47 @@
 		return p ? p.name : id.slice(0, 8);
 	}
 
+	async function loadWorkflowsAvailable() {
+		if (!project) return;
+		wfLoading = true;
+		wfError = null;
+		try {
+			const res = await apiMethods.wfCatalog.listAvailableForProject(project.id);
+			wfGlobal = res.global_workflows;
+			wfProject = res.project_workflows;
+		} catch (e) {
+			wfError = e instanceof Error ? e.message : 'Failed to load workflows';
+			wfGlobal = [];
+			wfProject = [];
+		} finally {
+			wfLoading = false;
+		}
+	}
+
+	$effect(() => {
+		const pid = project?.id;
+		if (activeTab !== 'workflows' || !pid || loading) return;
+		void loadWorkflowsAvailable();
+	});
+
+	async function saveProjectSettings() {
+		if (!project) return;
+		settingsSaving = true;
+		settingsError = null;
+		try {
+			const updated = await apiMethods.projects.update(project.id, {
+				name: settingsName.trim(),
+				slug: settingsSlug.trim(),
+				description: settingsDescription.trim() || null
+			});
+			project = updated;
+		} catch (e) {
+			settingsError = e instanceof Error ? e.message : 'Failed to save project';
+		} finally {
+			settingsSaving = false;
+		}
+	}
+
 	async function loadSecrets() {
 		if (!project) return;
 		secretsLoading = true;
@@ -186,12 +259,18 @@
 		void loadVariables();
 	});
 
+	$effect(() => {
+		if (createOrgWideSecret) createPipelineId = '';
+	});
+
 	function openCreateSecret() {
 		createPath = '';
 		createKind = 'kv';
 		createValue = '';
 		createDescription = '';
 		createPipelineId = '';
+		createOrgWideSecret = false;
+		orgWidePropagateToProjects = true;
 		ghAppId = '';
 		ghInstallationId = '';
 		ghPrivateKey = '';
@@ -251,7 +330,10 @@
 				kind: createKind,
 				value,
 				description: createDescription.trim() || undefined,
-				pipeline_id: createPipelineId || undefined
+				pipeline_id: createOrgWideSecret ? undefined : createPipelineId || undefined,
+				...(createOrgWideSecret
+					? { scope: 'organization', propagate_to_projects: orgWidePropagateToProjects }
+					: {})
 			});
 			showCreateSecret = false;
 			await loadSecrets();
@@ -320,7 +402,8 @@
 		try {
 			secretVersionRows = await apiMethods.storedSecrets.listVersions(proj.id, {
 				path: ctx.path,
-				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {})
+				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {}),
+				...(!ctx.project_id ? { organization_wide: true } : {})
 			});
 		} catch (e) {
 			versionsError = e instanceof Error ? e.message : 'Failed to load versions';
@@ -444,6 +527,23 @@
 		if (!v.pipeline_id) return 'Project';
 		return pipelineLabel(v.pipeline_id);
 	}
+
+	function storedSecretScopeLabel(s: StoredSecret): string {
+		if (s.project_id == null || s.project_id === '') return 'Organization';
+		if (s.pipeline_id) return pipelineLabel(s.pipeline_id);
+		return 'Project';
+	}
+
+	const settingsDirty = $derived(
+		!!project &&
+			(settingsName.trim() !== project.name ||
+				settingsSlug.trim() !== project.slug ||
+				settingsDescription.trim() !== (project.description ?? '').trim())
+	);
+
+	const settingsSaveDisabled = $derived(
+		!settingsDirty || !settingsName.trim() || !settingsSlug.trim() || settingsSaving
+	);
 </script>
 
 <svelte:head>
@@ -472,7 +572,7 @@
 			</div>
 
 			<div class="flex items-center gap-2">
-				<Button variant="outline" size="sm">
+				<Button variant="outline" size="sm" onclick={() => (activeTab = 'settings')}>
 					<Edit class="h-4 w-4" />
 					Edit
 				</Button>
@@ -604,10 +704,154 @@
 					</table>
 				</div>
 			{/if}
+		{:else if activeTab === 'workflows'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<p class="text-sm text-[var(--text-secondary)]">
+					<strong>Organization</strong> entries are global catalog workflows you can invoke from any project you can
+					access. <strong>This project</strong> lists workflows submitted or mapped to this project only.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<Button variant="outline" size="sm" href="/workflows">
+						<ExternalLink class="h-4 w-4" />
+						Browse catalog
+					</Button>
+					<Button variant="outline" size="sm" onclick={loadWorkflowsAvailable} loading={wfLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+				</div>
+			</div>
+			{#if wfError}
+				<Alert variant="error" title="Workflows" dismissible ondismiss={() => (wfError = null)}>
+					{wfError}
+				</Alert>
+			{/if}
+			{#if wfLoading && wfGlobal.length === 0 && wfProject.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(4) as _, i (i)}
+							<Skeleton class="h-10 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else}
+				<div class="space-y-8">
+					<Card>
+						<div class="space-y-4 p-4">
+							<div>
+								<h3 class="text-lg font-medium text-[var(--text-primary)]">Organization catalog</h3>
+								<p class="mt-1 text-sm text-[var(--text-secondary)]">
+									Global reusable workflows for this organization.
+								</p>
+							</div>
+							{#if wfGlobal.length === 0}
+								<EmptyState
+									title="No global workflows"
+									description="Import or submit workflows to the organization catalog to see them here."
+								/>
+							{:else}
+								<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+									<table class="w-full text-sm">
+										<thead class="bg-[var(--bg-tertiary)]">
+											<tr>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Trust</th>
+												<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+											</tr>
+										</thead>
+										<tbody class="divide-y divide-[var(--border-secondary)]">
+											{#each wfGlobal as w (w.id)}
+												<tr class="bg-[var(--bg-secondary)]">
+													<td class="px-4 py-3">
+														<div class="font-medium text-[var(--text-primary)]">{w.name}</div>
+														{#if w.description}
+															<div class="mt-0.5 text-xs text-[var(--text-secondary)]">{w.description}</div>
+														{/if}
+														{#if w.deprecated}
+															<Badge variant="warning" class="mt-1">Deprecated</Badge>
+														{/if}
+													</td>
+													<td class="px-4 py-3 font-mono text-xs">{w.version}</td>
+													<td class="px-4 py-3">
+														<Badge variant="secondary">{w.trust_state}</Badge>
+													</td>
+													<td class="px-4 py-3 text-right">
+														<Button variant="ghost" size="sm" href="/workflows/{w.id}">
+															View
+															<ExternalLink class="h-3.5 w-3.5 opacity-70" />
+														</Button>
+													</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{/if}
+						</div>
+					</Card>
+					<Card>
+						<div class="space-y-4 p-4">
+							<div>
+								<h3 class="text-lg font-medium text-[var(--text-primary)]">This project</h3>
+								<p class="mt-1 text-sm text-[var(--text-secondary)]">
+									Workflow versions scoped to this project (in addition to the global catalog).
+								</p>
+							</div>
+							{#if wfProject.length === 0}
+								<EmptyState
+									title="No project workflows"
+									description="Submit a workflow for this project or map an existing catalog entry to see rows here."
+								/>
+							{:else}
+								<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+									<table class="w-full text-sm">
+										<thead class="bg-[var(--bg-tertiary)]">
+											<tr>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
+												<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Trust</th>
+												<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+											</tr>
+										</thead>
+										<tbody class="divide-y divide-[var(--border-secondary)]">
+											{#each wfProject as w (w.id)}
+												<tr class="bg-[var(--bg-secondary)]">
+													<td class="px-4 py-3">
+														<div class="font-medium text-[var(--text-primary)]">{w.name}</div>
+														{#if w.description}
+															<div class="mt-0.5 text-xs text-[var(--text-secondary)]">{w.description}</div>
+														{/if}
+														{#if w.deprecated}
+															<Badge variant="warning" class="mt-1">Deprecated</Badge>
+														{/if}
+													</td>
+													<td class="px-4 py-3 font-mono text-xs">{w.version}</td>
+													<td class="px-4 py-3">
+														<Badge variant="secondary">{w.trust_state}</Badge>
+													</td>
+													<td class="px-4 py-3 text-right">
+														<Button variant="ghost" size="sm" href="/workflows/{w.id}">
+															View
+															<ExternalLink class="h-3.5 w-3.5 opacity-70" />
+														</Button>
+													</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{/if}
+						</div>
+					</Card>
+				</div>
+			{/if}
 		{:else if activeTab === 'secrets'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<p class="text-sm text-[var(--text-secondary)]">
-					Values are encrypted and never shown again after save. Reference them in pipeline YAML with{' '}
+					Values are encrypted and never shown again after save. Use <strong>organization-wide</strong> secrets for
+					values shared across projects (org admins only). Otherwise scope to this project or a single pipeline.
+					Reference in pipeline YAML with{' '}
 					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
 						>stored: &#123; name: MY_TOKEN &#125;</code
 					>
@@ -670,7 +914,7 @@
 									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
 									<td class="px-4 py-3">{s.kind}</td>
 									<td class="px-4 py-3">
-										{s.pipeline_id ? pipelineLabel(s.pipeline_id) : 'Project'}
+										{storedSecretScopeLabel(s)}
 									</td>
 									<td class="px-4 py-3 font-mono">
 										<button
@@ -736,8 +980,56 @@
 					<div>
 						<h3 class="text-lg font-medium text-[var(--text-primary)]">Project Settings</h3>
 						<p class="mt-1 text-sm text-[var(--text-secondary)]">
-							Manage project configuration and access.
+							Update the display name, URL slug, and description. The slug is used in URLs and API paths.
 						</p>
+					</div>
+
+					{#if settingsError}
+						<Alert variant="error" title="Settings" dismissible ondismiss={() => (settingsError = null)}>
+							{settingsError}
+						</Alert>
+					{/if}
+
+					<div class="grid max-w-xl gap-4">
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="proj-name"
+								>Name</label
+							>
+							<Input id="proj-name" bind:value={settingsName} placeholder="Project name" />
+						</div>
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="proj-slug"
+								>Slug</label
+							>
+							<Input
+								id="proj-slug"
+								bind:value={settingsSlug}
+								class="font-mono text-sm"
+								placeholder="my-project"
+							/>
+						</div>
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="proj-desc"
+								>Description</label
+							>
+							<textarea
+								id="proj-desc"
+								bind:value={settingsDescription}
+								rows="3"
+								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+								placeholder="Optional"
+							></textarea>
+						</div>
+						<div class="flex justify-end">
+							<Button
+								variant="primary"
+								onclick={saveProjectSettings}
+								loading={settingsSaving}
+								disabled={settingsSaveDisabled}
+							>
+								Save changes
+							</Button>
+						</div>
 					</div>
 
 					<div class="border-t border-[var(--border-primary)] pt-6">
@@ -840,9 +1132,52 @@
 			>
 			<Input id="sec-desc" bind:value={createDescription} />
 		</div>
+		<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+			<label class="flex cursor-pointer items-start gap-3">
+				<input
+					type="checkbox"
+					class="mt-1 h-4 w-4 rounded border-[var(--border-primary)]"
+					bind:checked={createOrgWideSecret}
+				/>
+				<span>
+					<span class="text-sm font-medium text-[var(--text-primary)]">Organization-wide secret</span>
+					<span class="mt-0.5 block text-xs text-[var(--text-secondary)]">
+						Available to every project in the organization. Creating or rotating these requires an organization
+						admin. Pipeline scope does not apply.
+					</span>
+				</span>
+			</label>
+			{#if createOrgWideSecret}
+				<label class="mt-3 flex cursor-pointer items-start gap-3 border-t border-[var(--border-secondary)] pt-3">
+					<input
+						type="checkbox"
+						class="mt-1 h-4 w-4 rounded border-[var(--border-primary)]"
+						bind:checked={orgWidePropagateToProjects}
+					/>
+					<span>
+						<span class="text-sm font-medium text-[var(--text-primary)]"
+							>Expose to all projects and pipelines</span>
+						<span class="mt-0.5 block text-xs text-[var(--text-secondary)]">
+							When off, the secret stays organization-wide but is only used for platform features that opt in
+							(such as importing the global workflow catalog from source code), not for pipeline <code
+								class="font-mono">stored:</code>
+							resolution or per-project secret lists.
+						</span>
+					</span>
+				</label>
+			{/if}
+		</div>
 		<div>
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-scope">Scope</label>
-			<Select id="sec-scope" options={pipelineScopeOptions} bind:value={createPipelineId} />
+			<Select
+				id="sec-scope"
+				options={pipelineScopeOptions}
+				bind:value={createPipelineId}
+				disabled={createOrgWideSecret}
+			/>
+			{#if createOrgWideSecret}
+				<p class="mt-1 text-xs text-[var(--text-secondary)]">Organization secrets are not limited to one pipeline.</p>
+			{/if}
 		</div>
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showCreateSecret = false)}>Cancel</Button>

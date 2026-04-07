@@ -174,6 +174,9 @@ pub struct UpdateProject {
     /// New display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// New URL slug (unique per organization).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     /// New description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

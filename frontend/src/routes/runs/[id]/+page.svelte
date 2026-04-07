@@ -13,7 +13,8 @@
 		formatDurationMs,
 		truncateId,
 		formatDateTime,
-		formatDateTimeForTitle
+		formatDateTimeForTitle,
+		formatRunTriggeredBy
 	} from '$utils/format';
 	import {
 		ArrowLeft,
@@ -577,7 +578,7 @@
 					{/if}
 					<span class="flex items-center gap-1">
 						<User class="h-4 w-4" />
-						{run.triggered_by}
+						{formatRunTriggeredBy(run.triggered_by, run.webhook_remote_addr)}
 					</span>
 					<span
 						class="flex items-center gap-1"

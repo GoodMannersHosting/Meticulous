@@ -13,8 +13,13 @@ pub struct DashboardStats {
     pub active_runs: i64,
     pub completed_runs: i64,
     pub failed_runs: i64,
+    pub cancelled_runs: i64,
+    /// All runs (any status) with `created_at` in the stats window.
+    pub total_runs: i64,
     pub avg_duration_ms: i64,
+    /// Agents with heartbeats in an operational state (`online` or `busy`), excluding deregistered.
     pub agents_online: i64,
+    /// Registered agents not deregistered (`deregistered_at IS NULL`), matching the agents list UI.
     pub agents_total: i64,
     pub pipelines_count: i64,
     pub projects_count: i64,
@@ -28,6 +33,7 @@ pub struct DashboardRecentRunRow {
     pub run_number: i64,
     pub status: String,
     pub triggered_by: String,
+    pub webhook_remote_addr: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -41,6 +47,8 @@ pub async fn org_dashboard_stats(
 ) -> Result<DashboardStats> {
     let org_u = org_id.as_uuid();
     let row = sqlx::query_as::<_, (
+        i64,
+        i64,
         i64,
         i64,
         i64,
@@ -81,6 +89,19 @@ pub async fn org_dashboard_stats(
                   AND COALESCE(r.finished_at, r.created_at) >= $2
             ) AS failed_runs,
             (
+                SELECT COUNT(*)::bigint
+                FROM runs r
+                INNER JOIN org_pipelines p ON p.id = r.pipeline_id
+                WHERE r.status = 'cancelled'
+                  AND COALESCE(r.finished_at, r.created_at) >= $2
+            ) AS cancelled_runs,
+            (
+                SELECT COUNT(*)::bigint
+                FROM runs r
+                INNER JOIN org_pipelines p ON p.id = r.pipeline_id
+                WHERE r.created_at >= $2
+            ) AS total_runs,
+            (
                 SELECT (
                     AVG(
                         EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) * 1000.0
@@ -96,10 +117,13 @@ pub async fn org_dashboard_stats(
             (
                 SELECT COUNT(*)::bigint FROM agents
                 WHERE org_id = $1
+                  AND deregistered_at IS NULL
                   AND status IN ('online', 'busy')
             ) AS agents_online,
             (
-                SELECT COUNT(*)::bigint FROM agents WHERE org_id = $1
+                SELECT COUNT(*)::bigint FROM agents
+                WHERE org_id = $1
+                  AND deregistered_at IS NULL
             ) AS agents_total,
             (
                 SELECT COUNT(*)::bigint FROM org_pipelines
@@ -118,11 +142,13 @@ pub async fn org_dashboard_stats(
         active_runs: row.0,
         completed_runs: row.1,
         failed_runs: row.2,
-        avg_duration_ms: row.3.map(|v| v.round() as i64).unwrap_or(0),
-        agents_online: row.4,
-        agents_total: row.5,
-        pipelines_count: row.6,
-        projects_count: row.7,
+        cancelled_runs: row.3,
+        total_runs: row.4,
+        avg_duration_ms: row.5.map(|v| v.round() as i64).unwrap_or(0),
+        agents_online: row.6,
+        agents_total: row.7,
+        pipelines_count: row.8,
+        projects_count: row.9,
     })
 }
 
@@ -143,6 +169,7 @@ pub async fn org_recent_runs(
                 r.run_number,
                 r.status::text AS status,
                 r.triggered_by,
+                r.webhook_remote_addr,
                 r.created_at,
                 r.started_at,
                 r.finished_at
@@ -170,6 +197,7 @@ pub async fn org_recent_runs(
                 r.run_number,
                 r.status::text AS status,
                 r.triggered_by,
+                r.webhook_remote_addr,
                 r.created_at,
                 r.started_at,
                 r.finished_at

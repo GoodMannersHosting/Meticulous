@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use met_core::ids::{OrganizationId, PipelineId, ProjectId, RunId};
-use met_core::models::Pipeline;
+use met_core::ids::{OrganizationId, PipelineId, ProjectId, RunId, TriggerId};
+use met_core::models::{Pipeline, Run};
 use met_parser::ir::PipelineIR;
 use met_parser::{DatabaseWorkflowProvider, PipelineParser};
 use sqlx::PgPool;
@@ -14,6 +14,7 @@ use sqlx::PgPool;
 use crate::error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE};
 use crate::github_scm;
 use crate::state::AppState;
+use crate::workflow_diagnostics;
 
 /// Project-level variables first, then pipeline-level overrides (same name wins for narrower scope).
 async fn load_platform_variables_merged(
@@ -178,4 +179,84 @@ pub async fn start_engine_for_existing_run_from_state(
     });
 
     Ok(())
+}
+
+/// Workflow diagnostics, persist a run, and enqueue engine work — shared by manual trigger and webhooks.
+pub async fn dispatch_pipeline_run(
+    state: &AppState,
+    pipeline: &Pipeline,
+    org_id: OrganizationId,
+    commit_sha: Option<&str>,
+    branch: Option<&str>,
+    trigger_id: Option<TriggerId>,
+    run_triggered_by: &str,
+    engine_triggered_by: &'static str,
+    trigger_variables: Option<HashMap<String, String>>,
+    webhook_remote_addr: Option<String>,
+) -> ApiResult<Run> {
+    use met_store::repos::{OrganizationRepo, RunRepo};
+
+    let org = OrganizationRepo::new(state.db()).get(org_id).await?;
+    let yaml = workflow_diagnostics::load_pipeline_yaml_string_for_diagnostics(
+        state,
+        pipeline,
+        org_id,
+        commit_sha,
+        branch,
+    )
+    .await?;
+    let wf_diag = workflow_diagnostics::collect_workflow_diagnostics(
+        state.db(),
+        org_id,
+        pipeline.project_id,
+        org.allow_untrusted_workflows,
+        &yaml,
+    )
+    .await?;
+    if workflow_diagnostics::diagnostics_has_blocking(&wf_diag) {
+        return Err(ApiError::bad_request(format!(
+            "workflow catalog policy: {}",
+            workflow_diagnostics::diagnostics_trigger_message(&wf_diag)
+        )));
+    }
+
+    let pipeline_ir = load_pipeline_ir_for_execution(
+        state,
+        pipeline,
+        org_id,
+        commit_sha,
+        branch,
+    )
+    .await?;
+
+    let run_repo = RunRepo::new(state.db());
+    let run = run_repo
+        .create_full(
+            pipeline.id,
+            org_id,
+            trigger_id,
+            run_triggered_by,
+            None,
+            commit_sha,
+            branch,
+            None,
+            None,
+            webhook_remote_addr.as_deref(),
+        )
+        .await?;
+    let run_id = run.id;
+
+    start_engine_for_existing_run_from_state(
+        state,
+        org_id,
+        run_id,
+        pipeline_ir,
+        pipeline.id,
+        pipeline.project_id,
+        engine_triggered_by,
+        trigger_variables,
+    )
+    .await?;
+
+    Ok(run)
 }

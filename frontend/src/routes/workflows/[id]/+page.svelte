@@ -7,7 +7,13 @@
 	import { apiMethods } from '$api/client';
 	import type { CatalogWorkflow } from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
-	import { ArrowLeft, RefreshCw, Search, Shield } from 'lucide-svelte';
+	import {
+		catalogWorkflowGitRef,
+		catalogWorkflowUpstreamBlobUrl
+	} from '$lib/utils/catalogWorkflowSource';
+	import YamlCodeBlock from '$lib/components/code/YamlCodeBlock.svelte';
+	import { stringify } from 'yaml';
+	import { ArrowLeft, ExternalLink, RefreshCw, Search, Shield } from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 
 	const workflowId = $derived($page.params.id);
@@ -27,6 +33,25 @@
 	let sortDirection = $state<SortDirection>('desc');
 
 	const isAdmin = $derived(auth.user?.role === 'admin');
+
+	const workflowYamlSource = $derived.by(() => {
+		if (!workflow?.definition) return '';
+		try {
+			return stringify(workflow.definition, { indent: 2, lineWidth: 120 });
+		} catch {
+			return JSON.stringify(workflow.definition, null, 2);
+		}
+	});
+
+	const sourceViewUrl = $derived(workflow ? catalogWorkflowUpstreamBlobUrl(workflow) : null);
+
+	const sourceRefLabel = $derived.by(() => {
+		if (!workflow) return '';
+		const sha = workflow.scm_revision?.trim();
+		if (sha) return sha.length > 12 ? `${sha.slice(0, 7)}…` : sha;
+		const r = workflow.scm_ref?.trim();
+		return r ?? '';
+	});
 
 	$effect(() => {
 		const id = workflowId;
@@ -186,11 +211,19 @@
 			key: 'scm_revision',
 			label: 'Commit',
 			sortable: true,
-			render: (v) => {
+			render: (v, row) => {
 				const s = String(v ?? '');
 				if (!s) return '<span class="text-[var(--text-tertiary)]">—</span>';
 				const short = s.length > 10 ? `${s.slice(0, 7)}…` : s;
-				return `<span class="font-mono text-xs text-[var(--text-secondary)]" title="${s}">${short}</span>`;
+				const url = catalogWorkflowUpstreamBlobUrl(row);
+				const ref = catalogWorkflowGitRef(row);
+				const titleAttr = ref ? `${s} @ ${ref}` : s;
+				if (url) {
+					const safeUrl = url.replace(/"/g, '&quot;');
+					const safeTitle = titleAttr.replace(/"/g, '&quot;');
+					return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="font-mono text-xs text-primary-600 hover:underline dark:text-primary-400" title="${safeTitle}">${short}</a>`;
+				}
+				return `<span class="font-mono text-xs text-[var(--text-secondary)]" title="${titleAttr.replace(/"/g, '&quot;')}">${short}</span>`;
 			}
 		},
 		{
@@ -210,7 +243,7 @@
 	<title>{workflow?.name ?? workflowName ?? 'Workflow'} | Meticulous</title>
 </svelte:head>
 
-<div class="mx-auto max-w-5xl space-y-6">
+<div class="mx-auto max-w-6xl space-y-6">
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 		<div class="flex items-start gap-4">
 			<Button variant="ghost" size="sm" href="/workflows">
@@ -324,6 +357,33 @@
 					</Button>
 				</div>
 			{/if}
+		</Card>
+
+		<Card class="space-y-4 p-6">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div>
+					<h2 class="text-lg font-semibold text-[var(--text-primary)]">Workflow definition</h2>
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						Pretty-printed YAML from the catalog. Open the host to see this file at the exact revision and path.
+					</p>
+				</div>
+				{#if sourceViewUrl}
+					<a
+						href={sourceViewUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-lg border border-secondary-300 bg-transparent px-3 text-sm font-medium text-secondary-700 transition-colors duration-150 hover:bg-secondary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-500 focus-visible:ring-offset-2 dark:border-secondary-600 dark:text-secondary-300 dark:hover:bg-secondary-800"
+					>
+						<ExternalLink class="h-4 w-4" aria-hidden="true" />
+						View source{#if sourceRefLabel}<span class="font-mono text-xs opacity-90"> · {sourceRefLabel}</span>{/if}
+					</a>
+				{:else if workflow.scm_repository && workflow.scm_path}
+					<p class="max-w-sm text-xs text-[var(--text-tertiary)]">
+						Source deep link is unavailable (unsupported Git host or missing ref/path).
+					</p>
+				{/if}
+			</div>
+			<YamlCodeBlock source={workflowYamlSource} />
 		</Card>
 	{/if}
 

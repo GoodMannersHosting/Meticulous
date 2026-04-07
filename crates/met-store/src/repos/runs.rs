@@ -28,6 +28,7 @@ struct RunProjectListRow {
     run_number: i64,
     commit_sha: Option<String>,
     branch: Option<String>,
+    webhook_remote_addr: Option<String>,
     triggered_by: String,
     created_at: DateTime<Utc>,
     started_at: Option<DateTime<Utc>>,
@@ -48,6 +49,7 @@ impl From<RunProjectListRow> for RunWithPipelineName {
                 run_number: row.run_number,
                 commit_sha: row.commit_sha,
                 branch: row.branch,
+                webhook_remote_addr: row.webhook_remote_addr,
                 triggered_by: row.triggered_by,
                 created_at: row.created_at,
                 started_at: row.started_at,
@@ -81,6 +83,7 @@ impl<'a> RunRepo<'a> {
         branch: Option<&str>,
         trigger_data: Option<serde_json::Value>,
         parent_run_id: Option<RunId>,
+        webhook_remote_addr: Option<&str>,
     ) -> Result<Run> {
         let id = RunId::new();
         let now = Utc::now();
@@ -89,10 +92,10 @@ impl<'a> RunRepo<'a> {
         let run = sqlx::query_as::<_, Run>(
             r#"
             INSERT INTO runs (id, pipeline_id, parent_run_id, org_id, trigger_id, status, run_number, triggered_by, 
-                              trace_id, commit_sha, branch, trigger_data, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                              trace_id, commit_sha, branch, trigger_data, webhook_remote_addr, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
-                      triggered_by, created_at, started_at, finished_at
+                      webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -107,6 +110,7 @@ impl<'a> RunRepo<'a> {
         .bind(commit_sha)
         .bind(branch)
         .bind(trigger_data)
+        .bind(webhook_remote_addr)
         .bind(now)
         .fetch_one(self.pool)
         .await?;
@@ -132,7 +136,7 @@ impl<'a> RunRepo<'a> {
             r#"
             INSERT INTO runs (id, pipeline_id, parent_run_id, trigger_id, status, run_number, triggered_by, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -153,7 +157,7 @@ impl<'a> RunRepo<'a> {
     pub async fn get(&self, id: RunId) -> Result<Run> {
         sqlx::query_as::<_, Run>(
             r#"
-            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             FROM runs
             WHERE id = $1
             "#,
@@ -172,7 +176,7 @@ impl<'a> RunRepo<'a> {
     ) -> Result<Option<Run>> {
         Ok(sqlx::query_as::<_, Run>(
             r#"
-            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             FROM runs
             WHERE pipeline_id = $1 AND run_number = $2
             "#,
@@ -194,7 +198,7 @@ impl<'a> RunRepo<'a> {
         let runs = if let Some(st) = status {
             sqlx::query_as::<_, Run>(
                 r#"
-                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
                 FROM runs
                 WHERE pipeline_id = $1 AND status = $2
                 ORDER BY created_at DESC
@@ -210,7 +214,7 @@ impl<'a> RunRepo<'a> {
         } else {
             sqlx::query_as::<_, Run>(
                 r#"
-                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+                SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
                 FROM runs
                 WHERE pipeline_id = $1
                 ORDER BY created_at DESC
@@ -239,7 +243,7 @@ impl<'a> RunRepo<'a> {
             sqlx::query_as::<_, RunProjectListRow>(
                 r#"
                 SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
-                       r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
                        p.name AS pipeline_name
                 FROM runs r
                 INNER JOIN pipelines p ON p.id = r.pipeline_id
@@ -261,7 +265,7 @@ impl<'a> RunRepo<'a> {
             sqlx::query_as::<_, RunProjectListRow>(
                 r#"
                 SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
-                       r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
                        p.name AS pipeline_name
                 FROM runs r
                 INNER JOIN pipelines p ON p.id = r.pipeline_id
@@ -296,7 +300,7 @@ impl<'a> RunRepo<'a> {
                 started_at = CASE WHEN $2 = 'running' AND started_at IS NULL THEN $3 ELSE started_at END,
                 finished_at = CASE WHEN $2 IN ('succeeded', 'failed', 'cancelled', 'timed_out') THEN $3 ELSE finished_at END
             WHERE id = $1
-            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, triggered_by, created_at, started_at, finished_at
+            RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -389,7 +393,7 @@ impl<'a> RunRepo<'a> {
             SET status = 'running', started_at = $2
             WHERE id = $1 AND status IN ('pending', 'queued')
             RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
-                      triggered_by, created_at, started_at, finished_at
+                      webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -410,7 +414,7 @@ impl<'a> RunRepo<'a> {
             SET status = $2, finished_at = $3, error_message = $4
             WHERE id = $1
             RETURNING id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
-                      triggered_by, created_at, started_at, finished_at
+                      webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             "#,
         )
         .bind(id.as_uuid())
@@ -428,7 +432,7 @@ impl<'a> RunRepo<'a> {
         let runs = sqlx::query_as::<_, Run>(
             r#"
             SELECT id, pipeline_id, parent_run_id, trigger_id, status, run_number, commit_sha, branch, 
-                   triggered_by, created_at, started_at, finished_at
+                   webhook_remote_addr, triggered_by, created_at, started_at, finished_at
             FROM runs
             WHERE org_id = $1 AND status IN ('pending', 'queued', 'running')
             ORDER BY created_at DESC

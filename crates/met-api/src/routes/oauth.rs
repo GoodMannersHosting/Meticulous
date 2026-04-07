@@ -357,6 +357,11 @@ async fn oauth_callback(
         );
     }
 
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     // Generate JWT
     let permissions = if user.is_admin {
         vec!["*".to_string()]

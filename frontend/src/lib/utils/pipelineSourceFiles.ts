@@ -9,7 +9,7 @@ export type PipelineSourceRow = {
 };
 
 /** owner/repo segments for github.com links (accepts owner/repo, full https URL, or git@ form). */
-function parseGithubRepository(repository: string | null | undefined): { owner: string; name: string } | null {
+export function parseGithubRepository(repository: string | null | undefined): { owner: string; name: string } | null {
 	if (!repository?.trim()) return null;
 	let s = repository.trim();
 	if (s.endsWith('.git')) s = s.slice(0, -4);

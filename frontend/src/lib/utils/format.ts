@@ -76,3 +76,16 @@ export function formatBytes(bytes: number): string {
 export function pluralize(count: number, singular: string, plural?: string): string {
 	return count === 1 ? singular : (plural ?? singular + 's');
 }
+
+/** Run list/detail: capitalize legacy `webhook`, append stored HTTP source IP when present. */
+export function formatRunTriggeredBy(
+	triggeredBy: string,
+	webhookRemoteAddr?: string | null
+): string {
+	const raw = triggeredBy || '—';
+	const isWebhook = raw.toLowerCase() === 'webhook';
+	const label = isWebhook ? 'Webhook' : raw;
+	const ip = webhookRemoteAddr?.trim();
+	if (isWebhook && ip) return `${label} · ${ip}`;
+	return label;
+}

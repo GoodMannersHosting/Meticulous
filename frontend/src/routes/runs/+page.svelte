@@ -226,7 +226,7 @@
 				key: 'triggered_by',
 				label: 'Triggered By',
 				sortable: true,
-				render: (value) => runTriggeredByHtml(value)
+				render: (value, row) => runTriggeredByHtml(value, row)
 			},
 			{
 				key: 'duration_ms',

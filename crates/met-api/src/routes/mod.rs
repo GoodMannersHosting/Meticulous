@@ -33,7 +33,9 @@ pub mod runs;
 pub mod secrets;
 pub mod stored_secrets;
 pub mod tokens;
+pub mod triggers;
 pub mod variables;
+pub mod workspace_config;
 pub mod webhooks;
 pub mod websocket;
 pub mod workflows;
@@ -61,6 +63,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(dashboard::router())
         .merge(projects::router())
         .merge(pipelines::router())
+        .merge(triggers::router())
         .merge(runs::router())
         .merge(agents::router())
         .merge(tokens::router())
@@ -68,6 +71,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(secrets::router())
         .merge(stored_secrets::router())
         .merge(variables::router())
+        .merge(workspace_config::router())
         .merge(workflows::router())
         .merge(workflows_catalog::router())
         .merge(debug::router())

@@ -1,19 +1,37 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
+	import { PUBLIC_API_URL } from '$env/static/public';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Button, Card, Badge, Tabs, Dialog, Alert, CopyButton, Select, Input } from '$components/ui';
+	import { auth } from '$stores';
+	import {
+		Button,
+		Card,
+		Badge,
+		Tabs,
+		Dialog,
+		Alert,
+		CopyButton,
+		Select,
+		Input,
+		type TabItem
+	} from '$components/ui';
+	import HighlightedCodeBlock from '$lib/components/code/HighlightedCodeBlock.svelte';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type {
 		Pipeline,
 		PipelineJob,
+		PipelineTrigger,
 		ProjectVariable,
 		Run,
 		StoredSecret,
 		UpdatePipelineInput,
+		UpdatePipelineTriggerInput,
 		WorkflowDiagnosticItem
 	} from '$api/types';
 	import { formatRelativeTime, truncateId } from '$utils/format';
+	import { generateRandomWebhookSecret } from '$utils/webhookSecret';
 	import {
 		ArrowLeft,
 		Play,
@@ -32,7 +50,10 @@
 		KeyRound,
 		Braces,
 		Plus,
-		History
+		History,
+		Webhook,
+		Shuffle,
+		CircleHelp
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { sortRunList } from '$utils/sortRuns';
@@ -53,6 +74,17 @@
 		pipelineGithubBlobRef,
 		upstreamLinkForRow
 	} from '$utils/pipelineSourceFiles';
+	import {
+		WEBHOOK_HELP_BASH,
+		WEBHOOK_HELP_PYTHON,
+		WEBHOOK_HELP_PWSH
+	} from '$utils/webhookHelpSnippets';
+
+	const webhookHelpSnippetTabs: TabItem[] = [
+		{ id: 'bash', label: 'Bash' },
+		{ id: 'powershell', label: 'PowerShell' },
+		{ id: 'python', label: 'Python 3' }
+	];
 
 	let pipeline = $state<Pipeline | null>(null);
 	let runs = $state<Run[]>([]);
@@ -120,6 +152,45 @@
 
 	let showEditPipelineDialog = $state(false);
 	let editPipelineLoading = $state(false);
+
+	let triggers = $state<PipelineTrigger[]>([]);
+	let triggersLoading = $state(false);
+	let triggersError = $state<string | null>(null);
+	let triggerActionLoading = $state(false);
+	/** Trigger id while PATCH(enabled) is in flight for row UI. */
+	let triggerToggleId = $state<string | null>(null);
+	let triggersSuccess = $state<string | null>(null);
+	let showCreateTriggerDialog = $state(false);
+	let ntDescription = $state('');
+	let ntGenerateSecret = $state(true);
+	let ntSecretManual = $state('');
+	let ntBranches = $state('main, master');
+	let ntEvents = $state('push');
+	let ntFlatten = $state(true);
+	let ntRawBodyVar = $state('');
+	let createdTriggerSecret = $state<string | null>(null);
+	let showEditTriggerDialog = $state(false);
+	let editTriggerTarget = $state<PipelineTrigger | null>(null);
+	let etEnabled = $state(true);
+	let etDescription = $state('');
+	let etNewSecret = $state('');
+	let showDeleteTriggerDialog = $state(false);
+	let deleteTriggerTarget = $state<PipelineTrigger | null>(null);
+	let showWebhookHelpModal = $state(false);
+	let webhookHelpCodeTab = $state('bash');
+
+	const webhookHelpActiveSnippet = $derived.by(() => {
+		switch (webhookHelpCodeTab) {
+			case 'bash':
+				return { source: WEBHOOK_HELP_BASH, language: 'bash' as const };
+			case 'powershell':
+				return { source: WEBHOOK_HELP_PWSH, language: 'powershell' as const };
+			case 'python':
+				return { source: WEBHOOK_HELP_PYTHON, language: 'python' as const };
+			default:
+				return { source: WEBHOOK_HELP_BASH, language: 'bash' as const };
+		}
+	});
 	let epName = $state('');
 	let epDescription = $state('');
 	let epEnabled = $state(true);
@@ -233,10 +304,187 @@
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
+		{ id: 'triggers', label: 'Triggers', icon: Webhook },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
 		{ id: 'definition', label: 'Definition', icon: Settings }
 	];
+
+	function apiPublicOrigin(): string {
+		const base = PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
+		if (base) return base;
+		if (browser) return window.location.origin;
+		return '';
+	}
+
+	function triggerConfigStr(t: PipelineTrigger, key: string): string | undefined {
+		const v = t.config[key];
+		return typeof v === 'string' ? v : undefined;
+	}
+
+	function triggerIsRepoManaged(t: PipelineTrigger): boolean {
+		return triggerConfigStr(t, 'managed_by') === 'repo';
+	}
+
+	function webhookPostUrl(triggerId: string): string {
+		const org = auth.user?.org_id ?? '{org_id}';
+		return `${apiPublicOrigin()}/api/v1/webhooks/${org}/${triggerId}`;
+	}
+
+	async function loadTriggers() {
+		if (!pipeline) return;
+		triggersLoading = true;
+		triggersError = null;
+		try {
+			triggers = await apiMethods.triggers.list(pipeline.id);
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Failed to load triggers';
+			triggers = [];
+		} finally {
+			triggersLoading = false;
+		}
+	}
+
+	function openCreateTrigger() {
+		triggersSuccess = null;
+		createdTriggerSecret = null;
+		ntDescription = '';
+		ntGenerateSecret = true;
+		ntSecretManual = '';
+		ntBranches = 'main, master';
+		ntEvents = 'push';
+		ntFlatten = true;
+		ntRawBodyVar = '';
+		showCreateTriggerDialog = true;
+	}
+
+	async function submitCreateTrigger() {
+		if (!pipeline) return;
+		triggerActionLoading = true;
+		triggersSuccess = null;
+		createdTriggerSecret = null;
+		try {
+			const branches = ntBranches
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const events = ntEvents
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const config: Record<string, unknown> = {
+				branches,
+				events,
+				flatten_top_level: ntFlatten
+			};
+			if (ntRawBodyVar.trim()) {
+				config.include_raw_body_variable = ntRawBodyVar.trim();
+			}
+			if (!ntGenerateSecret && ntSecretManual.trim()) {
+				config.secret = ntSecretManual.trim();
+			}
+			const created = await apiMethods.triggers.create(pipeline.id, {
+				kind: 'webhook',
+				config,
+				description: ntDescription.trim() || undefined,
+				generate_webhook_secret: ntGenerateSecret
+			});
+			if (created.generated_secret) {
+				createdTriggerSecret = created.generated_secret;
+				triggersSuccess =
+					'Webhook trigger created. Copy the generated secret below now — it will not be shown again.';
+			} else {
+				triggersSuccess = 'Webhook trigger created.';
+			}
+			showCreateTriggerDialog = false;
+			await loadTriggers();
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Failed to create trigger';
+		} finally {
+			triggerActionLoading = false;
+		}
+	}
+
+	function openEditTrigger(t: PipelineTrigger) {
+		editTriggerTarget = t;
+		etEnabled = t.enabled;
+		etDescription = t.description ?? '';
+		etNewSecret = '';
+		triggersError = null;
+		showEditTriggerDialog = true;
+	}
+
+	function applyRandomWebhookSecret(setter: (v: string) => void) {
+		triggersError = null;
+		try {
+			setter(generateRandomWebhookSecret());
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Could not generate secret';
+		}
+	}
+
+	async function submitEditTrigger() {
+		if (!editTriggerTarget) return;
+		triggerActionLoading = true;
+		triggersError = null;
+		try {
+			const body: UpdatePipelineTriggerInput = {
+				enabled: etEnabled,
+				description: etDescription.trim()
+			};
+			if (etNewSecret.trim()) {
+				body.config_patch = { secret: etNewSecret.trim() };
+			}
+			await apiMethods.triggers.update(editTriggerTarget.id, body);
+			showEditTriggerDialog = false;
+			editTriggerTarget = null;
+			triggersSuccess = 'Trigger updated.';
+			await loadTriggers();
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Failed to update trigger';
+		} finally {
+			triggerActionLoading = false;
+		}
+	}
+
+	function openDeleteTrigger(t: PipelineTrigger) {
+		deleteTriggerTarget = t;
+		triggersError = null;
+		showDeleteTriggerDialog = true;
+	}
+
+	async function submitDeleteTrigger() {
+		if (!deleteTriggerTarget) return;
+		triggerActionLoading = true;
+		triggersError = null;
+		try {
+			await apiMethods.triggers.delete(deleteTriggerTarget.id);
+			showDeleteTriggerDialog = false;
+			deleteTriggerTarget = null;
+			triggersSuccess = 'Trigger deleted.';
+			await loadTriggers();
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Failed to delete trigger';
+		} finally {
+			triggerActionLoading = false;
+		}
+	}
+
+	async function toggleTriggerEnabled(t: PipelineTrigger, enabled: boolean) {
+		if (triggerToggleId === t.id) return;
+		triggerToggleId = t.id;
+		triggersError = null;
+		try {
+			await apiMethods.triggers.update(t.id, { enabled });
+			triggersSuccess = enabled ? 'Webhook enabled.' : 'Webhook disabled.';
+			await loadTriggers();
+		} catch (e) {
+			triggersError = e instanceof Error ? e.message : 'Failed to update trigger';
+			await loadTriggers();
+		} finally {
+			triggerToggleId = null;
+		}
+	}
 
 	$effect(() => {
 		loadPipeline();
@@ -267,6 +515,7 @@
 			pipeline = await apiMethods.pipelines.get(pipelineId);
 			await loadRuns({ offset: 0 });
 			await loadWorkflowDiagnostics();
+			await loadTriggers();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load pipeline';
 		} finally {
@@ -638,8 +887,9 @@
 			const updated = await apiMethods.pipelines.syncFromGit(pipeline.id, {});
 			pipeline = updated;
 			await loadWorkflowDiagnostics();
+			await loadTriggers();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to sync from Git';
+			error = e instanceof Error ? e.message : 'Failed to sync from source code';
 		} finally {
 			syncGitLoading = false;
 		}
@@ -672,7 +922,7 @@
 			key: 'triggered_by',
 			label: 'Triggered By',
 			sortable: true,
-			render: (value) => runTriggeredByHtml(value)
+			render: (value, row) => runTriggeredByHtml(value, row)
 		},
 		{
 			key: 'duration_ms',
@@ -810,6 +1060,39 @@
 	{/if}
 
 	{#if !loading && pipeline}
+		{#if triggers.length > 0}
+			{@const webhookTriggers = triggers.filter((t) => t.kind === 'webhook')}
+			{#if webhookTriggers.length > 0}
+				<div
+					class="flex flex-col gap-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-3 text-sm sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-3"
+				>
+					<span class="font-medium text-[var(--text-primary)]">HTTP webhooks</span>
+					<span class="text-[var(--text-secondary)]">
+						{webhookTriggers.length} trigger{webhookTriggers.length === 1 ? '' : 's'}
+					</span>
+					<button
+						type="button"
+						class="text-left text-primary-600 underline hover:no-underline sm:text-left"
+						onclick={() => (activeTab = 'triggers')}
+					>
+						View URLs & settings
+					</button>
+					<p class="w-full text-[var(--text-secondary)]">
+						{#each webhookTriggers as t, i}
+							{#if i > 0}<span class="text-[var(--text-tertiary)]"> · </span>{/if}
+							{#if t.description?.trim()}
+								<span title={t.id}>{t.description}</span>
+							{:else}
+								<span class="font-mono text-xs text-[var(--text-tertiary)]" title={t.id}
+									>{truncateId(t.id)}</span
+								>
+							{/if}
+						{/each}
+					</p>
+				</div>
+			{/if}
+		{/if}
+
 		<Tabs items={tabs} bind:value={activeTab} />
 
 		{#if activeTab === 'runs'}
@@ -911,6 +1194,190 @@
 					onRowClick={handleRunClick}
 					loading={runsLoading && runs.length === 0}
 				/>
+			{/if}
+		{:else if activeTab === 'triggers'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div class="max-w-3xl text-sm text-[var(--text-secondary)]">
+					<p>
+						<strong class="text-[var(--text-primary)]">HTTP webhooks</strong> start a run when called with
+						<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">POST</code>
+						and optional
+						<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">X-Hub-Signature-256</code>
+						when a secret is set. URL path uses your org id and the trigger id.
+					</p>
+					<p class="mt-2 text-xs text-[var(--text-tertiary)]">
+						Triggers with <strong>Git</strong> are managed from pipeline YAML (<code class="font-mono">sync-key</code>);
+						remove them in the repo or run Sync from Git. Declarative filters are not editable here.
+					</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						onclick={() => {
+							webhookHelpCodeTab = 'bash';
+							showWebhookHelpModal = true;
+						}}
+						title="Sign requests with your webhook secret"
+					>
+						<CircleHelp class="h-4 w-4" aria-hidden="true" />
+						Signing help
+					</Button>
+					<Button variant="ghost" size="sm" onclick={loadTriggers} loading={triggersLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+					<Button variant="primary" size="sm" onclick={openCreateTrigger}>
+						<Plus class="h-4 w-4" />
+						Add webhook trigger
+					</Button>
+				</div>
+			</div>
+			{#if triggersSuccess}
+				<Alert
+					variant="success"
+					title="Triggers"
+					dismissible
+					ondismiss={() => {
+						triggersSuccess = null;
+						createdTriggerSecret = null;
+					}}
+				>
+					<p>{triggersSuccess}</p>
+					{#if createdTriggerSecret}
+						<p class="mt-2 font-mono text-sm text-[var(--text-primary)]">{createdTriggerSecret}</p>
+						<div class="mt-2 flex items-center gap-2">
+							<CopyButton text={createdTriggerSecret} size="sm" />
+							<span class="text-xs text-[var(--text-secondary)]">Copy secret</span>
+						</div>
+					{/if}
+				</Alert>
+			{/if}
+			{#if triggersError}
+				<Alert variant="error" title="Triggers" dismissible ondismiss={() => (triggersError = null)}>
+					{triggersError}
+				</Alert>
+			{/if}
+			{#if triggersLoading && triggers.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(3) as _, i (i)}
+							<Skeleton class="h-10 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else if triggers.length === 0}
+				<Card>
+					<EmptyState
+						title="No triggers yet"
+						description="Add a webhook or define triggers.webhook with sync-key in YAML and sync from Git."
+					>
+						<Button variant="primary" onclick={openCreateTrigger}>
+							<Plus class="h-4 w-4" />
+							Add webhook trigger
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="overflow-hidden rounded-lg border border-[var(--border-primary)]">
+					<table class="w-full text-sm">
+						<thead class="bg-[var(--bg-tertiary)]">
+							<tr>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="min-w-[8rem] max-w-md px-4 py-3 text-left font-medium text-[var(--text-secondary)]"
+									>Description</th
+								>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Source</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">HMAC</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Enabled</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Webhook URL</th>
+								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-secondary)]">
+							{#each triggers as t (t.id)}
+								<tr class="bg-[var(--bg-secondary)]">
+									<td class="px-4 py-3 capitalize">{t.kind.replace(/_/g, ' ')}</td>
+									<td class="max-w-md px-4 py-3">
+										{#if t.description?.trim()}
+											<p class="text-sm text-[var(--text-primary)]" title={t.description}>
+												{t.description}
+											</p>
+										{:else}
+											<span class="text-xs text-[var(--text-tertiary)]">—</span>
+										{/if}
+									</td>
+									<td class="px-4 py-3">
+										{#if triggerIsRepoManaged(t)}
+											<Badge variant="secondary" size="sm">Git</Badge>
+											{#if triggerConfigStr(t, 'sync_key')}
+												<span class="ml-1 font-mono text-xs text-[var(--text-tertiary)]">
+													{triggerConfigStr(t, 'sync_key')}
+												</span>
+											{/if}
+										{:else}
+											<span class="text-[var(--text-secondary)]">API</span>
+										{/if}
+									</td>
+									<td class="px-4 py-3">
+										{#if t.secret_configured}
+											<Badge variant="success" size="sm">Required</Badge>
+										{:else}
+											<Badge variant="secondary" size="sm">Optional</Badge>
+										{/if}
+									</td>
+									<td class="px-4 py-3">
+										<label class="inline-flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
+											<input
+												type="checkbox"
+												class="h-4 w-4 rounded border-[var(--border-primary)] text-primary-600 focus:ring-primary-500"
+												checked={t.enabled}
+												disabled={triggerToggleId === t.id}
+												onchange={(e) => {
+													const el = e.currentTarget as HTMLInputElement;
+													void toggleTriggerEnabled(t, el.checked);
+												}}
+											/>
+											<span>{t.enabled ? 'On' : 'Off'}</span>
+										</label>
+									</td>
+									<td class="px-4 py-3">
+										<div class="flex max-w-md flex-col gap-1">
+											<code
+												class="block truncate rounded bg-[var(--bg-tertiary)] px-2 py-1 text-xs text-[var(--text-primary)]"
+												title={webhookPostUrl(t.id)}
+											>
+												{webhookPostUrl(t.id)}
+											</code>
+											<div class="flex items-center gap-2">
+												<CopyButton text={webhookPostUrl(t.id)} size="sm" />
+												<span class="text-xs text-[var(--text-secondary)]">Copy URL</span>
+											</div>
+										</div>
+									</td>
+									<td class="px-4 py-3 text-right">
+										<div class="flex justify-end gap-2">
+											<Button variant="ghost" size="sm" onclick={() => openEditTrigger(t)}>
+												Edit
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={triggerIsRepoManaged(t)}
+												title={triggerIsRepoManaged(t)
+													? 'Delete via YAML or sync — repo-managed'
+													: 'Delete trigger'}
+												onclick={() => openDeleteTrigger(t)}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			{/if}
 		{:else if activeTab === 'variables'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
@@ -1315,7 +1782,7 @@
 						Git source ({pipeline.scm_provider})
 					</p>
 					<p class="text-xs text-[var(--text-tertiary)]">
-						Last synced revision is not edited here — use &quot;Sync from Git&quot; after changing ref or path.
+						Last synced revision is not edited here — use &quot;Sync from source code&quot; after changing ref or path.
 					</p>
 					<div>
 						<label class="mb-1 block text-xs font-medium" for="ep-scm-repo">Repository</label>
@@ -1736,4 +2203,231 @@
 			</Button>
 		</div>
 	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showCreateTriggerDialog}
+	title="Add webhook trigger"
+	description="Creates a pipeline trigger. Webhook payload fields are mapped to run variables (see API docs)."
+	onclose={() => {
+		createdTriggerSecret = null;
+	}}
+>
+	<div class="space-y-4">
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-desc"
+				>Description (optional)</label
+			>
+			<Input id="nt-desc" bind:value={ntDescription} placeholder="e.g. Deploy hook from CI" />
+		</div>
+		<div class="grid gap-4 sm:grid-cols-2">
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-branches"
+					>Branches (comma-separated)</label
+				>
+				<Input id="nt-branches" bind:value={ntBranches} />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-events"
+					>Events (comma-separated)</label
+				>
+				<Input id="nt-events" bind:value={ntEvents} />
+			</div>
+		</div>
+		<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
+			<input type="checkbox" bind:checked={ntFlatten} class="rounded border-[var(--border-primary)]" />
+			Flatten top-level JSON keys into variables
+		</label>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-raw"
+				>Raw body variable name (optional)</label
+			>
+			<Input
+				id="nt-raw"
+				bind:value={ntRawBodyVar}
+				placeholder="e.g. WEBHOOK_JSON"
+				class="font-mono text-sm"
+			/>
+		</div>
+		<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+			<label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+				<input type="checkbox" bind:checked={ntGenerateSecret} class="rounded border-[var(--border-primary)]" />
+				Generate webhook secret (shown once after save)
+			</label>
+			{#if !ntGenerateSecret}
+				<div class="mt-3">
+					<label class="mb-1 block text-xs text-[var(--text-secondary)]" for="nt-sec">Webhook secret</label>
+					<div class="flex flex-wrap items-stretch gap-2">
+						<Input
+							id="nt-sec"
+							type="password"
+							bind:value={ntSecretManual}
+							autocomplete="off"
+							class="min-w-0 flex-1"
+						/>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="shrink-0"
+							onclick={() => applyRandomWebhookSecret((v) => (ntSecretManual = v))}
+						>
+							<Shuffle class="h-4 w-4" aria-hidden="true" />
+							Random secret
+						</Button>
+					</div>
+				</div>
+			{/if}
+		</div>
+		<div class="flex justify-end gap-2 pt-2">
+			<Button variant="outline" onclick={() => (showCreateTriggerDialog = false)}>Cancel</Button>
+			<Button variant="primary" onclick={submitCreateTrigger} loading={triggerActionLoading}>
+				Create
+			</Button>
+		</div>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showEditTriggerDialog}
+	title="Edit trigger"
+	description={editTriggerTarget && triggerIsRepoManaged(editTriggerTarget)
+		? 'Repo-managed: you can change status, description, and HMAC secret. Filters live in YAML.'
+		: 'Update trigger settings or rotate the webhook secret.'}
+	onclose={() => {
+		editTriggerTarget = null;
+	}}
+>
+	{#if editTriggerTarget}
+		<div class="space-y-4">
+			<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
+				<input type="checkbox" bind:checked={etEnabled} class="rounded border-[var(--border-primary)]" />
+				Enabled
+			</label>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-desc"
+					>Description</label
+				>
+				<Input id="et-desc" bind:value={etDescription} />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-rosecret"
+					>New webhook secret (optional)</label
+				>
+				<div class="flex flex-wrap items-stretch gap-2">
+					<Input
+						id="et-rosecret"
+						type="password"
+						bind:value={etNewSecret}
+						autocomplete="off"
+						class="min-w-0 flex-1"
+					/>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						class="shrink-0"
+						onclick={() => applyRandomWebhookSecret((v) => (etNewSecret = v))}
+					>
+						<Shuffle class="h-4 w-4" aria-hidden="true" />
+						Random secret
+					</Button>
+				</div>
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					Leaving blank keeps the current secret. Use a strong random value (compatible with GitHub-style HMAC).
+				</p>
+			</div>
+			<div class="flex justify-end gap-2 pt-2">
+				<Button variant="outline" onclick={() => (showEditTriggerDialog = false)}>Cancel</Button>
+				<Button variant="primary" onclick={submitEditTrigger} loading={triggerActionLoading}>
+					Save
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showDeleteTriggerDialog}
+	title="Delete trigger?"
+	onclose={() => {
+		deleteTriggerTarget = null;
+	}}
+>
+	{#if deleteTriggerTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Delete this <span class="font-mono">{deleteTriggerTarget.kind}</span> trigger
+			<span class="font-mono text-xs">{deleteTriggerTarget.id}</span>? External callers using its URL will get 404.
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showDeleteTriggerDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitDeleteTrigger}
+				loading={triggerActionLoading}
+			>
+				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showWebhookHelpModal}
+	title="Authenticated webhook requests"
+	description="When a trigger has a secret, Meticulous expects a GitHub-style HMAC over the raw POST body."
+	class="max-h-[90vh] max-w-3xl overflow-hidden sm:max-w-3xl"
+	onclose={() => {}}
+>
+	<div
+		class="max-h-[min(70vh,640px)] space-y-5 overflow-y-auto pr-1 text-sm text-secondary-600 dark:text-secondary-400"
+	>
+		<p>
+			Send
+			<code class="rounded bg-secondary-100 px-1 font-mono text-xs dark:bg-secondary-800">POST</code>
+			to your webhook URL
+			<code class="rounded bg-secondary-100 px-1 font-mono text-[11px] dark:bg-secondary-800"
+				>/api/v1/webhooks/&lt;org_id&gt;/&lt;trigger_id&gt;</code
+			>. Use the org id and trigger id shown in this app (same values as in the URL column). The body should be
+			<strong>JSON</strong>; keys can become run variables when
+			<em>flatten top-level</em>
+			is enabled on the trigger.
+		</p>
+		<p>
+			If the trigger has a <strong>secret</strong>, add header
+			<code class="rounded bg-secondary-100 px-1 font-mono text-[11px] dark:bg-secondary-800"
+				>X-Hub-Signature-256: sha256=&lt;hex&gt;</code
+			>
+			where
+			<code class="font-mono text-xs">&lt;hex&gt;</code>
+			is the <strong>lowercase</strong> hex digest of
+			<code class="font-mono text-xs">HMAC-SHA256(secret, raw_body_bytes)</code>. If there is no secret, omit the header.
+		</p>
+		<p class="text-xs text-secondary-500 dark:text-secondary-500">
+			The signed bytes must match the request body exactly (watch for extra newlines when piping into curl).
+		</p>
+
+		<div
+			class="overflow-hidden rounded-lg border border-secondary-200 bg-secondary-50/30 dark:border-secondary-700 dark:bg-secondary-950/40"
+		>
+			<div class="px-3 pt-1">
+				<Tabs items={webhookHelpSnippetTabs} bind:value={webhookHelpCodeTab} class="!border-b-0" />
+			</div>
+			<div class="border-t border-secondary-200 p-3 dark:border-secondary-700">
+				{#key webhookHelpCodeTab}
+					<HighlightedCodeBlock
+						source={webhookHelpActiveSnippet.source}
+						language={webhookHelpActiveSnippet.language}
+						ariaLabel={`Webhook signing example (${webhookHelpCodeTab})`}
+					/>
+				{/key}
+			</div>
+		</div>
+	</div>
+	<div class="mt-4 border-t border-secondary-200 pt-4 dark:border-secondary-700">
+		<Button variant="outline" class="w-full sm:w-auto" onclick={() => (showWebhookHelpModal = false)}>
+			Close
+		</Button>
+	</div>
 </Dialog>

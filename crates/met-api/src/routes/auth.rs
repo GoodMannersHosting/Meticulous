@@ -219,6 +219,11 @@ async fn login(
     verify_password(&req.password, password_hash)
         .map_err(|_| ApiError::unauthorized("invalid credentials"))?;
 
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     // Generate JWT
     let permissions = if user.is_admin {
         vec!["*".to_string()]
@@ -443,6 +448,11 @@ async fn setup(
             false,
         )
         .await?;
+
+    user_repo
+        .record_last_login(user.id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Generate JWT
     let token = create_jwt(

@@ -4,6 +4,7 @@
 	import { apiMethods } from '$lib/api';
 	import type { AdminUser } from '$lib/api/types';
 	import { getGravatarUrl } from '$lib/utils/gravatar';
+	import { auth } from '$stores';
 
 	let searchQuery = $state('');
 	let users = $state<AdminUser[]>([]);
@@ -90,14 +91,24 @@
 		actionMenuOpen = null;
 	}
 
-	async function lockUser(userId: string) {
+	function requestLockUser(userId: string) {
 		closeActionMenu();
-		try {
-			await apiMethods.admin.users.lock(userId);
-			await loadUsers();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to lock user');
+		const u = users.find((row) => row.id === userId);
+		if (!u) return;
+		if (auth.user && userId === auth.user.id) {
+			return;
 		}
+		const display = u.display_name || u.username;
+		openConfirmModal({
+			title: 'Are you sure?',
+			message: `Lock account for ${display}? They will not be able to sign in until an admin unlocks the account.`,
+			buttonText: 'Lock account',
+			danger: true,
+			onConfirm: async () => {
+				await apiMethods.admin.users.lock(userId);
+				await loadUsers();
+			}
+		});
 	}
 
 	async function unlockUser(userId: string) {
@@ -242,6 +253,9 @@
 							Status
 						</th>
 						<th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-secondary)]">
+							Last login
+						</th>
+						<th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-secondary)]">
 							Created
 						</th>
 						<th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[var(--text-secondary)]">
@@ -299,6 +313,16 @@
 								{/if}
 							</td>
 							<td class="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+								{#if user.last_login_at}
+									{new Date(user.last_login_at).toLocaleString(undefined, {
+										dateStyle: 'medium',
+										timeStyle: 'short'
+									})}
+								{:else}
+									<span class="text-[var(--text-tertiary)]">—</span>
+								{/if}
+							</td>
+							<td class="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
 								{new Date(user.created_at).toLocaleDateString()}
 							</td>
 							<td class="whitespace-nowrap px-4 py-3 text-right">
@@ -328,10 +352,10 @@
 												<Key class="h-4 w-4" />
 												Reset Password
 											</button>
-											{#if user.is_active}
+											{#if user.is_active && auth.user?.id !== user.id}
 												<button
 													type="button"
-													onclick={(e) => { e.stopPropagation(); lockUser(user.id); }}
+													onclick={(e) => { e.stopPropagation(); requestLockUser(user.id); }}
 													class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
 												>
 													<Lock class="h-4 w-4" />

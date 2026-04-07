@@ -105,7 +105,7 @@
 
 		if (createMode === 'git') {
 			if (!gitForm.repository.trim() || !gitForm.credentials_path.trim()) {
-				error = 'Repository and credentials are required for Git import';
+				error = 'Repository and credentials are required for source code import';
 				return;
 			}
 			saving = true;
@@ -226,7 +226,7 @@
 					onclick={() => (createMode = 'git')}
 				>
 					<GitBranch class="h-4 w-4" />
-					Import from GitHub
+					Import from source code
 				</button>
 			</div>
 
@@ -276,7 +276,7 @@
 						<Input
 							id="repo"
 							bind:value={gitForm.repository}
-							placeholder="org/repo or https://github.com/org/repo"
+							placeholder="owner/repo or full repository URL"
 							class="mt-1"
 						/>
 					</div>

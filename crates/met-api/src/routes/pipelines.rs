@@ -251,6 +251,9 @@ async fn import_pipeline_git(
 
     let pipeline = repo.create(project_id, &create).await?;
 
+    crate::trigger_sync::reconcile_repo_webhook_triggers(state.db(), org_id, pipeline.id, &ir)
+        .await?;
+
     Ok(Json(PipelineResponse { pipeline }))
 }
 
@@ -354,6 +357,7 @@ async fn sync_pipeline_from_git(
     };
 
     let pipeline = pipeline_repo.update(id, &update).await?;
+    crate::trigger_sync::reconcile_repo_webhook_triggers(state.db(), org_id, id, &ir).await?;
     Ok(Json(PipelineResponse { pipeline }))
 }
 
@@ -496,8 +500,6 @@ async fn trigger_pipeline(
     Path(id): Path<PipelineId>,
     Json(req): Json<TriggerPipelineRequest>,
 ) -> ApiResult<Json<TriggerPipelineResponse>> {
-    use met_store::repos::RunRepo;
-
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
@@ -510,57 +512,22 @@ async fn trigger_pipeline(
         .await?;
     let org_id = project.org_id;
 
-    let org = OrganizationRepo::new(state.db()).get(org_id).await?;
-    let yaml = workflow_diagnostics::load_pipeline_yaml_string_for_diagnostics(
+    let run = pipeline_execution::dispatch_pipeline_run(
         &state,
         &pipeline,
         org_id,
         req.commit_sha.as_deref(),
         req.branch.as_deref(),
-    )
-    .await?;
-    let wf_diag = workflow_diagnostics::collect_workflow_diagnostics(
-        state.db(),
-        org_id,
-        pipeline.project_id,
-        org.allow_untrusted_workflows,
-        &yaml,
-    )
-    .await?;
-    if workflow_diagnostics::diagnostics_has_blocking(&wf_diag) {
-        return Err(ApiError::bad_request(format!(
-            "workflow catalog policy: {}",
-            workflow_diagnostics::diagnostics_trigger_message(&wf_diag)
-        )));
-    }
-
-    let pipeline_ir = pipeline_execution::load_pipeline_ir_for_execution(
-        &state,
-        &pipeline,
-        org_id,
-        req.commit_sha.as_deref(),
-        req.branch.as_deref(),
-    )
-    .await?;
-
-    let run_repo = RunRepo::new(state.db());
-    let run = run_repo.create(id, None, &user.email, None).await?;
-    let run_id = run.id;
-
-    pipeline_execution::start_engine_for_existing_run_from_state(
-        &state,
-        org_id,
-        run_id,
-        pipeline_ir,
-        pipeline.id,
-        pipeline.project_id,
+        None,
+        &user.email,
         "api",
         req.variables,
+        None,
     )
     .await?;
 
     Ok(Json(TriggerPipelineResponse {
-        run_id,
+        run_id: run.id,
         run_number: run.run_number,
         status: format!("{:?}", run.status).to_lowercase(),
     }))

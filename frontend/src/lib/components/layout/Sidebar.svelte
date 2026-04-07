@@ -11,7 +11,8 @@
 		ChevronLeft,
 		ChevronRight,
 		Shield,
-		Layers
+		Layers,
+		FolderKey
 	} from 'lucide-svelte';
 	import Tooltip from '../ui/tooltip.svelte';
 
@@ -38,6 +39,7 @@
 				{ label: 'Projects', href: '/projects', icon: FolderKanban },
 				{ label: 'Pipelines', href: '/pipelines', icon: GitBranch },
 				{ label: 'Workflows', href: '/workflows', icon: Layers },
+				{ label: 'Secrets & Variables', href: '/secrets-variables', icon: FolderKey },
 				{ label: 'Runs', href: '/runs', icon: Play }
 			]
 		},

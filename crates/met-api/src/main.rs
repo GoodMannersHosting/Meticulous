@@ -180,9 +180,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Start server with graceful shutdown
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     tracing::info!("server shutdown complete");
     Ok(())

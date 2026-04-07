@@ -257,6 +257,33 @@ workflows:
 }
 
 #[tokio::test]
+async fn test_parse_webhook_sync_key() {
+    let yaml = r#"
+name: Sync webhook
+triggers:
+  webhook:
+    sync-key: primary
+    events: [push]
+    branches: [main]
+workflows:
+  - name: Build
+    id: build
+    workflow: global/docker-build
+    inputs:
+      image: myapp
+"#;
+
+    let provider = create_provider();
+    let mut parser = PipelineParser::new(&provider);
+    let ir = parser.parse(yaml).await.unwrap();
+    let wh = ir.triggers.iter().find_map(|t| match t {
+        met_parser::ir::Trigger::Webhook(w) => Some(w),
+        _ => None,
+    });
+    assert_eq!(wh.and_then(|w| w.sync_key.as_deref()), Some("primary"));
+}
+
+#[tokio::test]
 async fn test_parse_pipeline_with_pool_selector() {
     let yaml = r#"
 name: Pipeline with Pool Selector

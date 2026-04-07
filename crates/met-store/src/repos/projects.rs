@@ -165,17 +165,54 @@ impl<'a> ProjectRepo<'a> {
 
         let name = input.name.as_ref().unwrap_or(&existing.name);
         let description = input.description.as_ref().or(existing.description.as_ref());
+        let slug = match input.slug.as_ref() {
+            None => existing.slug.clone(),
+            Some(s) => {
+                if s.is_empty() {
+                    return Err(StoreError::validation("slug cannot be empty"));
+                }
+                if !s
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    return Err(StoreError::validation(
+                        "slug must contain only alphanumeric characters, hyphens, and underscores",
+                    ));
+                }
+                if s != &existing.slug {
+                    let conflict: Option<(uuid::Uuid,)> = sqlx::query_as(
+                        r#"
+                        SELECT id FROM projects
+                        WHERE org_id = $1 AND slug = $2 AND id != $3 AND deleted_at IS NULL
+                        LIMIT 1
+                        "#,
+                    )
+                    .bind(existing.org_id.as_uuid())
+                    .bind(s)
+                    .bind(id.as_uuid())
+                    .fetch_optional(self.pool)
+                    .await?;
+                    if conflict.is_some() {
+                        return Err(StoreError::validation(
+                            "slug is already used by another project in this organization",
+                        ));
+                    }
+                }
+                s.clone()
+            }
+        };
 
         let project = sqlx::query_as::<_, Project>(
             r#"
             UPDATE projects
-            SET name = $2, description = $3, updated_at = NOW()
+            SET name = $2, slug = $3, description = $4, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(name)
+        .bind(&slug)
         .bind(description)
         .fetch_one(self.pool)
         .await?;

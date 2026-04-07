@@ -588,6 +588,11 @@ impl<'a> PipelineParser<'a> {
                 branches: webhook.branches.clone(),
                 paths: webhook.paths.clone(),
                 paths_ignore: webhook.paths_ignore.clone(),
+                sync_key: webhook
+                    .sync_key
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             }));
         }
 

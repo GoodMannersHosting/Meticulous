@@ -125,6 +125,19 @@ export interface CreateProjectInput {
 	owner_id: string;
 }
 
+/** PATCH /api/v1/projects/{id} */
+export interface UpdateProjectInput {
+	name?: string;
+	slug?: string;
+	description?: string | null;
+}
+
+/** GET /api/v1/projects/{id}/workflows/available */
+export interface ProjectWorkflowsAvailable {
+	global_workflows: CatalogWorkflow[];
+	project_workflows: CatalogWorkflow[];
+}
+
 /** Metadata for a platform-stored secret (no plaintext). */
 export interface StoredSecret {
 	id: string;
@@ -137,6 +150,8 @@ export interface StoredSecret {
 	description?: string | null;
 	created_at: string;
 	updated_at: string;
+	/** Org-wide only: when `false`, not listed in project/pipeline secret UIs or used for `stored:` / checkout (catalog SCM may still use). */
+	propagate_to_projects?: boolean;
 }
 
 // Pipeline Types
@@ -157,6 +172,34 @@ export interface Pipeline {
 	enabled: boolean;
 	created_at: string;
 	updated_at: string;
+}
+
+/** `GET/POST /api/v1/pipelines/{id}/triggers` — `config` never includes `secret`. */
+export interface PipelineTrigger {
+	id: string;
+	pipeline_id: string;
+	kind: string;
+	config: Record<string, unknown>;
+	secret_configured: boolean;
+	enabled: boolean;
+	description?: string | null;
+	created_at: string;
+	updated_at: string;
+	/** Only present on create when `generate_webhook_secret` was true. */
+	generated_secret?: string | null;
+}
+
+export interface CreatePipelineTriggerInput {
+	kind: string;
+	config: Record<string, unknown>;
+	description?: string;
+	generate_webhook_secret?: boolean;
+}
+
+export interface UpdatePipelineTriggerInput {
+	enabled?: boolean;
+	description?: string;
+	config_patch?: Record<string, unknown>;
 }
 
 export interface PipelineDefinition {
@@ -230,6 +273,23 @@ export interface ProjectVariable {
 	updated_at: string;
 }
 
+/** `scope_level` for GET /api/v1/workspace/* hub lists. */
+export type WorkspaceScopeLevel = 'all' | 'organization' | 'project' | 'pipeline';
+
+/** Row from GET /api/v1/workspace/variables */
+export interface WorkspaceVariableListItem extends ProjectVariable {
+	project_name: string;
+	project_slug: string;
+	pipeline_name?: string | null;
+}
+
+/** Row from GET /api/v1/workspace/stored-secrets (secret fields flattened in JSON). */
+export interface WorkspaceStoredSecretListItem extends StoredSecret {
+	project_name?: string | null;
+	project_slug?: string | null;
+	pipeline_name?: string | null;
+}
+
 // Run Types
 export type RunStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
 
@@ -248,6 +308,8 @@ export interface Run {
 	commit_sha?: string;
 	branch?: string;
 	triggered_by: string;
+	/** Observed webhook client IP when the run was created from an HTTP webhook. */
+	webhook_remote_addr?: string | null;
 	created_at: string;
 	started_at?: string;
 	finished_at?: string;
@@ -449,6 +511,10 @@ export interface DashboardStats {
 	active_runs: number;
 	completed_runs: number;
 	failed_runs: number;
+	/** Cancelled runs finished (or updated) in the metrics window. */
+	cancelled_runs: number;
+	/** Runs created in the org during the selected metrics window (any status). */
+	total_runs: number;
 	avg_duration_ms: number;
 	agents_online: number;
 	agents_total: number;
@@ -464,6 +530,7 @@ export interface RecentRun {
 	run_number: number;
 	status: RunStatus;
 	triggered_by: string;
+	webhook_remote_addr?: string | null;
 	duration_ms?: number;
 	created_at: string;
 }
@@ -505,6 +572,7 @@ export interface ListProjectsParams {
 	[key: string]: string | number | boolean | undefined;
 	page?: number;
 	per_page?: number;
+	cursor?: string;
 	search?: string;
 }
 
@@ -513,6 +581,7 @@ export interface ListPipelinesParams {
 	project_id: string;
 	page?: number;
 	per_page?: number;
+	cursor?: string;
 }
 
 export interface ListRunsParams {
@@ -549,6 +618,8 @@ export interface AdminUser {
 	is_active: boolean;
 	is_admin: boolean;
 	password_must_change: boolean;
+	/** ISO 8601; absent or null if the user has never logged in interactively. */
+	last_login_at?: string | null;
 	created_at: string;
 	updated_at: string;
 }

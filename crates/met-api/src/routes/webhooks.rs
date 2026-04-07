@@ -3,11 +3,13 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::HeaderMap,
     routing::post,
 };
+use std::net::SocketAddr;
 use met_core::ids::{OrganizationId, ProjectId, TriggerId};
+use met_core::models::{TriggerKind, WebhookConfig, WEBHOOK_MAX_BODY_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, instrument};
@@ -16,8 +18,28 @@ use utoipa::ToSchema;
 use crate::{
     error::{ApiError, ApiResult},
     extractors::Auth,
+    pipeline_execution,
     state::AppState,
 };
+use met_store::repos::{get_trigger_for_webhook_dispatch, PipelineRepo};
+
+/// Prefer proxy headers (when present); otherwise use the direct TCP peer address.
+fn webhook_client_ip(headers: &HeaderMap, connect: &SocketAddr) -> String {
+    const XFF: &str = "x-forwarded-for";
+    const XREAL: &str = "x-real-ip";
+    if let Some(raw) = headers.get(XFF).and_then(|v| v.to_str().ok()) {
+        if let Some(first) = raw.split(',').next().map(str::trim).filter(|s| !s.is_empty()) {
+            return first.to_string();
+        }
+    }
+    if let Some(raw) = headers.get(XREAL).and_then(|v| v.to_str().ok()) {
+        let ip = raw.trim();
+        if !ip.is_empty() {
+            return ip.to_string();
+        }
+    }
+    connect.ip().to_string()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -62,14 +84,17 @@ pub struct GenericWebhookPayload {
     responses(
         (status = 200, description = "Webhook accepted", body = WebhookResponse),
         (status = 400, description = "Bad request"),
+        (status = 403, description = "Invalid or missing HMAC signature"),
+        (status = 404, description = "Unknown trigger or organization mismatch"),
     ),
     tag = "webhooks",
 )]
-#[instrument(skip(body))]
+#[instrument(skip(state, headers, body))]
 async fn handle_webhook(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
-    _headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<WebhookResponse>> {
     debug!(
@@ -79,19 +104,80 @@ async fn handle_webhook(
         "received generic webhook"
     );
 
-    let payload: GenericWebhookPayload = serde_json::from_slice(&body)
-        .map_err(|e| ApiError::bad_request(format!("Invalid JSON payload: {e}")))?;
+    if body.len() > WEBHOOK_MAX_BODY_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "webhook body exceeds maximum size ({} bytes)",
+            WEBHOOK_MAX_BODY_BYTES
+        )));
+    }
 
-    info!(
-        event = ?payload.event,
-        branch = ?payload.branch,
-        "processing webhook"
-    );
+    let trigger =
+        get_trigger_for_webhook_dispatch(state.db(), org_id, trigger_id).await?;
+
+    if trigger.kind != TriggerKind::Webhook {
+        return Err(ApiError::not_found("trigger"));
+    }
+    if !trigger.enabled {
+        return Err(ApiError::bad_request("trigger is disabled"));
+    }
+
+    let cfg: WebhookConfig = serde_json::from_value(trigger.config.clone()).map_err(|_| {
+        ApiError::bad_request("trigger has invalid webhook configuration JSON")
+    })?;
+
+    if let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) {
+        let signature = headers
+            .get(GITHUB_SIGNATURE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
+
+        if !verify_github_signature(secret.as_bytes(), &body, signature) {
+            return Err(ApiError::forbidden("Invalid webhook signature"));
+        }
+    }
+
+    let mut vars = cfg
+        .map_payload_to_variables(&body)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    // Optional compatibility: generic JSON payloads may carry branch/commit hints.
+    if let Ok(payload) = serde_json::from_slice::<GenericWebhookPayload>(&body) {
+        if let Some(b) = payload.branch.filter(|s| !s.is_empty()) {
+            vars.entry("webhook_branch".into()).or_insert(b);
+        }
+        if let Some(c) = payload.commit.filter(|s| !s.is_empty()) {
+            vars.entry("webhook_commit".into()).or_insert(c);
+        }
+        if let Some(r) = payload.ref_name.filter(|s| !s.is_empty()) {
+            vars.entry("webhook_ref".into()).or_insert(r);
+        }
+    }
+
+    let pipeline_repo = PipelineRepo::new(state.db());
+    let pipeline = pipeline_repo.get(trigger.pipeline_id).await?;
+
+    let client_ip = webhook_client_ip(&headers, &addr);
+
+    let run = pipeline_execution::dispatch_pipeline_run(
+        &state,
+        &pipeline,
+        org_id,
+        None,
+        None,
+        Some(trigger_id),
+        "Webhook",
+        "Webhook",
+        Some(vars),
+        Some(client_ip),
+    )
+    .await?;
+
+    info!(run_id = %run.id, "webhook started pipeline run");
 
     Ok(Json(WebhookResponse {
         accepted: true,
-        run_id: None,
-        message: "Webhook received and queued for processing".to_string(),
+        run_id: Some(run.id.to_string()),
+        message: "Webhook accepted; pipeline run created".to_string(),
     }))
 }
 
@@ -599,4 +685,42 @@ async fn setup_scm_webhook(
         provider,
         events,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    #[test]
+    fn github_signature_accepts_valid_hex() {
+        let secret = b"test-secret";
+        let body = br#"{"action":"opened"}"#;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+        mac.update(body);
+        let sig = mac.finalize().into_bytes();
+        let hex: String = sig.iter().map(|b| format!("{:02x}", b)).collect();
+        let header = format!("sha256={hex}");
+        assert!(verify_github_signature(secret, body, &header));
+    }
+
+    #[test]
+    fn github_signature_rejects_tampered_body() {
+        let secret = b"test-secret";
+        let body = br#"{"action":"opened"}"#;
+        let tampered = br#"{"action":"closed"}"#;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+        mac.update(body);
+        let hex: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        let header = format!("sha256={hex}");
+        assert!(!verify_github_signature(secret, tampered, &header));
+    }
 }

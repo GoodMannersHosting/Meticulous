@@ -24,6 +24,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workflows/global", get(list_global_workflows))
         .route(
+            "/projects/{project_id}/workflows/available",
+            get(list_project_workflows_available),
+        )
+        .route(
             "/projects/{project_id}/workflows",
             get(list_project_workflows).post(create_project_workflow),
         )
@@ -113,6 +117,54 @@ impl From<ReusableWorkflow> for WorkflowResponse {
             catalog_metadata: w.catalog_metadata,
         }
     }
+}
+
+/// Workflows visible when authoring pipelines in a project: org **global** (execution-gated) plus **project**-scoped rows.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectWorkflowsAvailableResponse {
+    pub global_workflows: Vec<WorkflowResponse>,
+    pub project_workflows: Vec<WorkflowResponse>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/workflows/available",
+    params(("project_id" = String, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Global + project reusable workflows", body = ProjectWorkflowsAvailableResponse),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state))]
+async fn list_project_workflows_available(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+) -> ApiResult<Json<ProjectWorkflowsAvailableResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    const LIMIT: i64 = 500;
+    let repo = WorkflowRepo::new(state.db());
+    let global_workflows = repo
+        .list_global(user.org_id, LIMIT, 0)
+        .await?
+        .into_iter()
+        .map(WorkflowResponse::from)
+        .collect();
+    let project_workflows = repo
+        .list_project(project_id, LIMIT, 0)
+        .await?
+        .into_iter()
+        .map(WorkflowResponse::from)
+        .collect();
+
+    Ok(Json(ProjectWorkflowsAvailableResponse {
+        global_workflows,
+        project_workflows,
+    }))
 }
 
 #[utoipa::path(

@@ -155,11 +155,16 @@ class ApiClient {
 			throw ApiClientError.fromApiError(apiError, response.status);
 		}
 
-		if (response.status === 204) {
+		if (response.status === 204 || response.status === 205) {
 			return undefined as T;
 		}
 
-		return response.json();
+		const text = await response.text();
+		if (!text.trim()) {
+			return undefined as T;
+		}
+
+		return JSON.parse(text) as T;
 	}
 
 	async get<T>(endpoint: string, config?: RequestConfig): Promise<T> {
@@ -257,7 +262,7 @@ export const apiMethods = {
 		getBySlug: (slug: string) => api.get<import('./types').Project>(`/api/v1/projects/by-slug/${slug}`),
 		create: (data: import('./types').CreateProjectInput) =>
 			api.post<import('./types').Project>('/api/v1/projects', data),
-		update: (id: string, data: Partial<import('./types').Project>) =>
+		update: (id: string, data: import('./types').UpdateProjectInput) =>
 			api.patch<import('./types').Project>(`/api/v1/projects/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
 	},
@@ -268,11 +273,15 @@ export const apiMethods = {
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secrets`, {
 				params
 			}),
-		listVersions: (projectId: string, params: { path: string; pipeline_id?: string }) =>
+		listVersions: (
+			projectId: string,
+			params: { path: string; pipeline_id?: string; organization_wide?: boolean }
+		) =>
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secret-versions`, {
 				params: {
 					path: params.path,
-					...(params.pipeline_id ? { pipeline_id: params.pipeline_id } : {})
+					...(params.pipeline_id ? { pipeline_id: params.pipeline_id } : {}),
+					...(params.organization_wide ? { organization_wide: true } : {})
 				}
 			}),
 		create: (
@@ -283,6 +292,10 @@ export const apiMethods = {
 				value: string;
 				description?: string;
 				pipeline_id?: string;
+				/** `"organization"` for org-wide secrets (requires org admin) */
+				scope?: string;
+				/** Org-wide only; default true. When false, secret is not exposed to pipelines/projects (e.g. workflow catalog import from source code only). */
+				propagate_to_projects?: boolean;
 			}
 		) => api.post<StoredSecret>(`/api/v1/projects/${projectId}/stored-secrets`, body),
 		rotate: (id: string, value: string) =>
@@ -323,6 +336,34 @@ export const apiMethods = {
 		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/variables/${id}`)
 	},
 
+	/** Cross-project hub: variables and stored secrets with search + cursor pagination */
+	workspaceConfig: {
+		listVariables: (params?: {
+			q?: string;
+			project_id?: string;
+			pipeline_id?: string;
+			scope_level?: import('./types').WorkspaceScopeLevel;
+			cursor?: string;
+			per_page?: number;
+		}) =>
+			api.get<import('./types').PaginatedResponse<import('./types').WorkspaceVariableListItem>>(
+				'/api/v1/workspace/variables',
+				{ params }
+			),
+		listStoredSecrets: (params?: {
+			q?: string;
+			project_id?: string;
+			pipeline_id?: string;
+			scope_level?: import('./types').WorkspaceScopeLevel;
+			cursor?: string;
+			per_page?: number;
+		}) =>
+			api.get<import('./types').PaginatedResponse<import('./types').WorkspaceStoredSecretListItem>>(
+				'/api/v1/workspace/stored-secrets',
+				{ params }
+			)
+	},
+
 	// Pipelines
 	pipelines: {
 		list: (params: import('./types').ListPipelinesParams) =>
@@ -354,6 +395,16 @@ export const apiMethods = {
 			)
 	},
 
+	triggers: {
+		list: (pipelineId: string) =>
+			api.get<import('./types').PipelineTrigger[]>(`/api/v1/pipelines/${pipelineId}/triggers`),
+		create: (pipelineId: string, body: import('./types').CreatePipelineTriggerInput) =>
+			api.post<import('./types').PipelineTrigger>(`/api/v1/pipelines/${pipelineId}/triggers`, body),
+		update: (triggerId: string, body: import('./types').UpdatePipelineTriggerInput) =>
+			api.patch<import('./types').PipelineTrigger>(`/api/v1/triggers/${triggerId}`, body),
+		delete: (triggerId: string) => api.delete<void>(`/api/v1/triggers/${triggerId}`)
+	},
+
 	// Org workflow catalog (global reusable workflows)
 	wfCatalog: {
 		list: (params?: { status?: string; limit?: number; cursor?: string }) =>
@@ -361,6 +412,14 @@ export const apiMethods = {
 				'/api/v1/workflows/catalog',
 				{ params }
 			),
+		/** Import using organization-scoped GitHub App secrets only (`org:admin`). */
+		importGitOrganization: (body: {
+			repository: string;
+			git_ref: string;
+			workflow_path: string;
+			credentials_path: string;
+		}) =>
+			api.post<import('./types').CatalogWorkflow>('/api/v1/workflows/catalog/import-git', body),
 		importGit: (
 			projectId: string,
 			body: {
@@ -382,7 +441,12 @@ export const apiMethods = {
 				`/api/v1/workflows/${workflowId}/catalog-versions`,
 				{ params }
 			),
-		get: (id: string) => api.get<import('./types').CatalogWorkflow>(`/api/v1/workflows/${id}`)
+		get: (id: string) => api.get<import('./types').CatalogWorkflow>(`/api/v1/workflows/${id}`),
+		/** Global (execution-gated) + project-scoped workflows for pipeline authoring */
+		listAvailableForProject: (projectId: string) =>
+			api.get<import('./types').ProjectWorkflowsAvailable>(
+				`/api/v1/projects/${projectId}/workflows/available`
+			)
 	},
 
 	artifacts: {

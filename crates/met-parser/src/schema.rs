@@ -107,6 +107,10 @@ pub struct RawWebhookTrigger {
     /// Path patterns to ignore.
     #[serde(default)]
     pub paths_ignore: Vec<String>,
+
+    /// Stable id for syncing this webhook trigger from Git into the `triggers` table.
+    #[serde(default, rename = "sync-key")]
+    pub sync_key: Option<String>,
 }
 
 /// Tag trigger configuration.
