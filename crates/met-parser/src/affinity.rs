@@ -115,6 +115,7 @@ mod tests {
             affinity_group: group.map(String::from),
             share_workspace: share_ws,
             workflow_invocation_id: None,
+            workflow_invocation_name: None,
         }
     }
 

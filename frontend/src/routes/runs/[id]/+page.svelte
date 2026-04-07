@@ -78,6 +78,39 @@
 	let logHasUnscopedLogLines = $state(false);
 	let lastLogStepJobRunId = $state<string | null>(null);
 
+	function catalogWorkflowRef(sw: Record<string, unknown> | undefined | null): string | null {
+		if (!sw || typeof sw !== 'object') return null;
+		const scope = sw['scope'];
+		const name = sw['name'];
+		const version = sw['version'];
+		if (typeof scope === 'string' && typeof name === 'string' && typeof version === 'string') {
+			return `${scope}/${name}@${version}`;
+		}
+		return null;
+	}
+
+	/** Pipeline workflow block → catalog ref → job inside the catalog workflow; steps are listed below. */
+	function jobRunDisplay(jr: JobRun): {
+		pipelineWorkflowLine: string;
+		catalogLine: string | null;
+		jobLine: string | null;
+	} {
+		const sw = jr.source_workflow;
+		if (!sw || typeof sw !== 'object') {
+			return { pipelineWorkflowLine: jr.job_name, catalogLine: null, jobLine: null };
+		}
+		const o = sw as Record<string, unknown>;
+		const invName = typeof o.invocation_name === 'string' ? o.invocation_name : null;
+		const invId = typeof o.invocation_id === 'string' ? o.invocation_id : null;
+		const pipelineWorkflowLine = invName ?? (invId ? `Workflow · ${invId}` : jr.job_name);
+		const catalogLine = catalogWorkflowRef(o);
+		return {
+			pipelineWorkflowLine,
+			catalogLine,
+			jobLine: `Job · ${jr.job_name}`
+		};
+	}
+
 	const baselineRun = $derived(
 		compareRunCandidates.find((c) => c.id === compareBaselineRunId) ?? null
 	);
@@ -635,6 +668,7 @@
 								</div>
 							{:else}
 								{#each jobRuns as jobRun (jobRun.id)}
+									{@const jdisp = jobRunDisplay(jobRun)}
 									<button
 										type="button"
 										class="
@@ -647,9 +681,20 @@
 									>
 										<StatusBadge status={jobRun.status} size="sm" showIcon={true} />
 										<div class="flex-1 min-w-0">
+											{#if jdisp.catalogLine}
+												<p
+													class="truncate font-mono text-[0.65rem] text-[var(--text-tertiary)]"
+													title={jdisp.catalogLine}
+												>
+													{jdisp.catalogLine}
+												</p>
+											{/if}
 											<p class="truncate font-medium text-[var(--text-primary)]">
-												{jobRun.job_name}
+												{jdisp.pipelineWorkflowLine}
 											</p>
+											{#if jdisp.jobLine}
+												<p class="truncate text-sm text-[var(--text-secondary)]">{jdisp.jobLine}</p>
+											{/if}
 											{#if jobRun.scheduling_note}
 												<p class="mt-0.5 text-xs leading-snug text-[var(--text-secondary)] line-clamp-2">
 													{jobRun.scheduling_note}
@@ -672,7 +717,10 @@
 						</div>
 						{#if selectedJobRunId}
 							<div class="border-t border-[var(--border-primary)] bg-[var(--bg-secondary)]/25 px-3 py-3">
-								<p class="mb-2 text-xs font-medium text-[var(--text-secondary)]">Workflow steps</p>
+								<p class="mb-2 text-xs font-medium text-[var(--text-secondary)]">Steps</p>
+								<p class="mb-2 text-[0.65rem] leading-snug text-[var(--text-tertiary)]">
+									Steps run in order for the selected job (see “Job · …” in the list).
+								</p>
 								<div class="flex flex-col gap-1.5">
 									<button
 										type="button"
@@ -717,6 +765,9 @@
 													: 'border-[var(--border-primary)] hover:bg-[var(--bg-hover)]'}"
 												onclick={() => (logStepFilter = st.id)}
 											>
+												<p class="text-[0.65rem] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
+													Step
+												</p>
 												<div class="flex items-center gap-2">
 													<StatusBadge status={st.status} size="sm" showIcon={true} />
 													<span class="truncate text-sm font-medium text-[var(--text-primary)]">
@@ -745,10 +796,17 @@
 
 				<div class="lg:col-span-2">
 					{#if selectedJobRun}
+						{@const sjdisp = jobRunDisplay(selectedJobRun)}
 						<Card padding="none">
 							<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
 								<div>
-									<h3 class="font-medium text-[var(--text-primary)]">{selectedJobRun.job_name}</h3>
+									{#if sjdisp.catalogLine}
+										<p class="font-mono text-xs text-[var(--text-tertiary)]">{sjdisp.catalogLine}</p>
+									{/if}
+									<h3 class="font-medium text-[var(--text-primary)]">{sjdisp.pipelineWorkflowLine}</h3>
+									{#if sjdisp.jobLine}
+										<p class="mt-0.5 text-sm text-[var(--text-secondary)]">{sjdisp.jobLine}</p>
+									{/if}
 									<div class="flex items-center gap-2 mt-1">
 										<StatusBadge status={selectedJobRun.status} size="sm" />
 										{#if selectedJobRun.attempt > 1}

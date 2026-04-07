@@ -162,6 +162,10 @@ impl ExecutionBackend for NativeBackend {
         // Set environment - only pass explicitly declared variables
         command.env_clear();
 
+        // Non-interactive defaults: git/SSH must not open /dev/tty for credentials (stdin is already null).
+        command.env("GIT_TERMINAL_PROMPT", "0");
+        command.env("CI", "true");
+
         // Add minimal required environment
         #[cfg(unix)]
         {
@@ -210,6 +214,8 @@ impl ExecutionBackend for NativeBackend {
             #[allow(unsafe_code)]
             unsafe {
                 command.as_std_mut().pre_exec(move || {
+                    // New session without a controlling terminal so children cannot prompt on /dev/tty.
+                    let _ = libc::setsid();
                     if libc::dup2(w, 3) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }

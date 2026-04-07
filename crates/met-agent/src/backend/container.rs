@@ -112,6 +112,7 @@ impl ContainerBackend {
 
                 // Non-interactive git/SSH in CI (avoid credential-helper prompts blocking forever).
                 cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
+                cmd.arg("-e").arg("CI=true");
 
                 if let Some(p) = met_output_path_in_container {
                     cmd.arg("-e").arg(format!("METICULOUS_OUTPUT_PATH={p}"));
@@ -142,6 +143,10 @@ impl ContainerBackend {
                 // containerd via ctr has different syntax
                 cmd.arg("run")
                     .arg("--rm")
+                    .arg("--env")
+                    .arg("GIT_TERMINAL_PROMPT=0")
+                    .arg("--env")
+                    .arg("CI=true")
                     .arg("--mount")
                     .arg(format!(
                         "type=bind,src={},dst=/workspace,options=rbind:rw",

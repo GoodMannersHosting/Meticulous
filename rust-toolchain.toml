@@ -1,5 +1,4 @@
 [toolchain]
 # async-nats >= 0.47 requires rustc 1.88+ (see crates.io package metadata).
-# aws-sdk-s3 / aws-config 1.12x+ require rustc 1.91.1+ (crates.io package metadata).
-channel = "1.91.1"
+channel = "1.88.0"
 components = ["rustfmt", "clippy"]

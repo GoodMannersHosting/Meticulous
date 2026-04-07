@@ -61,6 +61,7 @@ fn test_job(id: JobId, name: &str, depends_on: Vec<JobId>) -> JobIR {
         affinity_group: None,
         share_workspace: false,
         workflow_invocation_id: None,
+        workflow_invocation_name: None,
     }
 }
 

@@ -817,6 +817,7 @@ impl<'a> PipelineParser<'a> {
                     affinity_group,
                     share_workspace,
                     workflow_invocation_id: Some(workflow.invocation.id.clone()),
+                    workflow_invocation_name: Some(workflow.invocation.name.clone()),
                 }
             })
             .collect()

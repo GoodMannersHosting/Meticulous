@@ -329,6 +329,8 @@ impl<C: CacheBackend> Executor<C> {
                     },
                     "name": wf.name,
                     "version": wf.version,
+                    "invocation_id": job.workflow_invocation_id,
+                    "invocation_name": job.workflow_invocation_name,
                 })
             });
 
@@ -817,6 +819,7 @@ mod tests {
             affinity_group: None,
             share_workspace: false,
             workflow_invocation_id: None,
+            workflow_invocation_name: None,
         }
     }
 

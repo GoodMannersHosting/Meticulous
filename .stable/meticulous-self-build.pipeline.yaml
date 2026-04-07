@@ -14,15 +14,22 @@ name: meticulous self-build
 agent-affinity:
   default-group: ci
   share-workspace: true
+
+secrets:
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+
 vars:
   METICULOUS_REPO: GoodMannersHosting/Meticulous
   IMAGE_TAG: latest
   REGISTRY_PREFIX: harbor.cloud.danmanners.com/meticulous
+
 workflows:
   - name: Checkout Meticulous
     id: checkout
     workflow: global/git-checkout
-    version: "1.0.0"
+    version: "1.0.1"
     inputs:
       repo: "${METICULOUS_REPO}"
       ref: main
