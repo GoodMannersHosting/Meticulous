@@ -901,16 +901,31 @@ impl<'a> PipelineParser<'a> {
         let wf_ids: HashSet<String> = pipeline.workflows.iter().map(|w| w.id.clone()).collect();
         let base_ctx =
             VariableContext::new(pipeline.vars.clone(), secrets).with_workflow_invocations(wf_ids);
-        workflow
-            .invocation
-            .inputs
-            .iter()
-            .map(|(k, v)| {
+
+        // Must include declared workflow defaults (e.g. buildx_platform) when the pipeline omits
+        // them — otherwise `${{ inputs.* }}` in the catalog body is left for bash and triggers
+        // "bad substitution" on `${{`.
+        let mut inputs = IndexMap::new();
+        for (name, def) in &workflow.definition.inputs {
+            let value = if let Some(v) = workflow.invocation.inputs.get(name) {
+                let raw = Self::invocation_yaml_to_string(v);
+                crate::variable::interpolate(&raw, &base_ctx)
+            } else if let Some(d) = &def.default {
+                let raw = Self::invocation_yaml_to_string(d);
+                crate::variable::interpolate(&raw, &base_ctx)
+            } else {
+                String::new()
+            };
+            inputs.insert(name.clone(), value);
+        }
+        for (name, v) in &workflow.invocation.inputs {
+            if !inputs.contains_key(name) {
                 let raw = Self::invocation_yaml_to_string(v);
                 let resolved = crate::variable::interpolate(&raw, &base_ctx);
-                (k.clone(), resolved)
-            })
-            .collect()
+                inputs.insert(name.clone(), resolved);
+            }
+        }
+        inputs
     }
 
     fn invocation_yaml_to_string(v: &serde_yaml::Value) -> String {
@@ -1361,6 +1376,23 @@ workflows:
         let mut parser = PipelineParser::new(&provider);
         let result = parser.parse(yaml).await;
         assert!(result.is_ok(), "parse error: {:?}", result.as_ref().err());
+        let ir = result.unwrap();
+        let script = ir.jobs[0]
+            .steps
+            .iter()
+            .find_map(|s| match &s.command {
+                crate::ir::StepCommand::Run { script, .. } => Some(script.as_str()),
+                _ => None,
+            })
+            .expect("run step");
+        assert!(
+            script.contains("--platform \"linux/amd64\""),
+            "optional input default must be interpolated for ${{ inputs.* }}: {script}"
+        );
+        assert!(
+            !script.contains("${{"),
+            "unsubstituted expressions must not reach the agent: {script}"
+        );
     }
 
     #[test]
