@@ -6,6 +6,7 @@ use met_core::ids::{
 };
 use met_core::models::{JobRun, JobStatus, Run, RunStatus, StepRun};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
@@ -478,6 +479,13 @@ pub struct JobQueueItemRow {
     pub project_slug: String,
 }
 
+/// Aggregated `job_runs` stats for one pipeline run (UI badges).
+#[derive(Debug, Clone, Copy)]
+pub struct JobRunRollup {
+    pub job_count: i64,
+    pub any_running: bool,
+}
+
 /// Repository for job run operations.
 pub struct JobRunRepo<'a> {
     pool: &'a PgPool,
@@ -644,6 +652,38 @@ impl<'a> JobRunRepo<'a> {
         .await?;
 
         Ok(job_runs)
+    }
+
+    /// Roll up job-run counts and whether any job is `running` per run (for run-list badges).
+    pub async fn rollup_by_run_ids(&self, run_ids: &[RunId]) -> Result<HashMap<RunId, JobRunRollup>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let uuids: Vec<Uuid> = run_ids.iter().map(|r| r.as_uuid()).collect();
+        let rows: Vec<(Uuid, i64, bool)> = sqlx::query_as(
+            r#"
+            SELECT run_id, COUNT(*)::bigint, BOOL_OR(status = 'running')
+            FROM job_runs
+            WHERE run_id = ANY($1)
+            GROUP BY run_id
+            "#,
+        )
+        .bind(&uuids[..])
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(rid, job_count, any_running)| {
+                (
+                    RunId::from_uuid(rid),
+                    JobRunRollup {
+                        job_count,
+                        any_running,
+                    },
+                )
+            })
+            .collect())
     }
 
     /// When a run is already terminal but `job_runs` / `step_runs` were never updated (missed

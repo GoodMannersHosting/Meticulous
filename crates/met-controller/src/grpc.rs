@@ -744,6 +744,7 @@ impl AgentService for AgentServiceImpl {
             };
 
             let result = match status {
+                JobStatus::Queued => job_run_repo.mark_queued(job_run_id).await,
                 JobStatus::Running => {
                     let Some(raw) = update.agent_id.as_deref().filter(|s| !s.is_empty()) else {
                         return Err(Status::invalid_argument(

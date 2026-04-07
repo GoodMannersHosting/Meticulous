@@ -36,6 +36,11 @@ function formatRunStatusLabel(status: string): string {
 		.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Primary badge status: API may suggest `queued` while `status` is still `running`. */
+export function effectiveRunStatusForBadge(row: Run): RunStatus | string {
+	return row.status_display ?? row.status;
+}
+
 export function runStatusBadgeHtml(status: RunStatus | string): string {
 	const key = status as RunStatus;
 	const cls = STATUS_BADGE_CLASSES[key] ?? STATUS_BADGE_CLASSES.pending;

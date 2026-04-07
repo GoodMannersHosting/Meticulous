@@ -530,7 +530,7 @@
 					<h1 class="text-2xl font-bold text-[var(--text-primary)]">
 						Run #{run.run_number}
 					</h1>
-					<StatusBadge status={run.status} />
+					<StatusBadge status={run.status_display ?? run.status} />
 				</div>
 				{#if run.parent_run_id}
 					<div
@@ -923,7 +923,7 @@
 							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
 								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
 									<span>Run #{baselineRun.run_number}</span>
-									<StatusBadge status={baselineRun.status} size="sm" />
+									<StatusBadge status={baselineRun.status_display ?? baselineRun.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">baseline</span>
 								</div>
 								{#if prevSbomRes?.job_name || prevSbomRes?.step_name}
@@ -972,7 +972,7 @@
 							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
 								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
 									<span>Run #{run.run_number}</span>
-									<StatusBadge status={run.status} size="sm" />
+									<StatusBadge status={run.status_display ?? run.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">this run</span>
 								</div>
 								{#if sbomRes?.job_name || sbomRes?.step_name}
@@ -1145,7 +1145,7 @@
 							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
 								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
 									<span>Run #{baselineRun.run_number}</span>
-									<StatusBadge status={baselineRun.status} size="sm" />
+									<StatusBadge status={baselineRun.status_display ?? baselineRun.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">baseline</span>
 								</div>
 								{#if prevFootprintError}
@@ -1159,7 +1159,7 @@
 							<div class="min-w-0 space-y-2 lg:rounded-lg lg:border lg:border-[var(--border-primary)] lg:bg-[var(--bg-secondary)]/40 lg:p-3">
 								<div class="flex flex-wrap items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
 									<span>Run #{run.run_number}</span>
-									<StatusBadge status={run.status} size="sm" />
+									<StatusBadge status={run.status_display ?? run.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">this run</span>
 								</div>
 								{#if footprint}

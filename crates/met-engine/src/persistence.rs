@@ -62,6 +62,9 @@ pub trait RunPersistence: Send + Sync {
         source: JobRunSourceRefs,
     ) -> Result<()>;
 
+    /// Mark job as queued after dispatch is successfully published (`pending` or already `queued` only).
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()>;
+
     /// Update job run status.
     async fn update_job_status(&self, job_run_id: JobRunId, status: JobStatus) -> Result<()>;
 
@@ -290,6 +293,32 @@ impl RunPersistence for PostgresRunPersistence {
         .map_err(met_store::StoreError::from)?;
 
         debug!(%job_run_id, %run_id, job_name, "created job run record");
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()> {
+        let res = sqlx::query(
+            r#"
+            UPDATE job_runs
+            SET status = 'queued'
+            WHERE id = $1
+              AND status IN ('pending', 'queued')
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+        if res.rows_affected() == 0 {
+            warn!(
+                %job_run_id,
+                "mark_job_queued: no row updated (job not pending/queued or missing)"
+            );
+        } else {
+            debug!(%job_run_id, "marked job run queued in database");
+        }
         Ok(())
     }
 
@@ -710,6 +739,16 @@ impl RunPersistence for MemoryRunPersistence {
         Ok(())
     }
 
+    async fn mark_job_queued(&self, job_run_id: JobRunId) -> Result<()> {
+        let mut jobs = self.job_runs.lock().unwrap();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
+            if matches!(job.status, JobStatus::Pending | JobStatus::Queued) {
+                job.status = JobStatus::Queued;
+            }
+        }
+        Ok(())
+    }
+
     async fn update_job_status(&self, job_run_id: JobRunId, status: JobStatus) -> Result<()> {
         let mut jobs = self.job_runs.lock().unwrap();
         if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
@@ -842,5 +881,43 @@ impl RunPersistence for MemoryRunPersistence {
             timestamp: Utc::now(),
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod mark_job_queued_tests {
+    use super::{JobRunSourceRefs, MemoryRunPersistence, RunPersistence};
+    use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, RunId};
+
+    #[tokio::test]
+    async fn mark_job_queued_memory_idempotent_and_no_downgrade_from_running() {
+        let p = MemoryRunPersistence::new();
+        let run_id = RunId::new();
+        let pipeline_id = PipelineId::new();
+        let org_id = OrganizationId::new();
+        p.create_run(
+            run_id,
+            pipeline_id,
+            org_id,
+            "tester",
+            uuid::Uuid::now_v7(),
+        )
+        .await
+        .unwrap();
+        let job_run_id = JobRunId::new();
+        let job_id = JobId::new();
+        let src = JobRunSourceRefs {
+            pipeline_definition_sha256: [9u8; 32],
+            workflow_definition_sha256: None,
+            source_workflow: None,
+        };
+        p.create_job_run(job_run_id, run_id, job_id, "j1", src)
+            .await
+            .unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.start_job(job_run_id, AgentId::new()).await.unwrap();
+        p.mark_job_queued(job_run_id).await.unwrap();
+        p.complete_job(job_run_id, true, Some(0), None).await.unwrap();
     }
 }

@@ -191,8 +191,6 @@ impl Scheduler {
             required_tags.clone(),
         )?;
 
-        run_state.mark_job_queued(&job.id).await;
-
         let proto_message = self.to_proto_message(&message)?;
         let subject = format!(
             "met.jobs.{}.{}.{}",
@@ -210,6 +208,9 @@ impl Scheduler {
             .map_err(|e| EngineError::Nats(format!("Failed to publish job dispatch: {e}")))?
             .await
             .map_err(|e| EngineError::Nats(format!("Failed to ack job dispatch: {e}")))?;
+
+        run_state.mark_job_queued(&job.id).await;
+        self.persistence.mark_job_queued(job_run_id).await?;
 
         self.active_jobs.write().await.insert(
             job_run_id,

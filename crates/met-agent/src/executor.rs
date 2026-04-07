@@ -452,17 +452,6 @@ impl JobExecutor {
 
         self.clear_footprint_accumulator().await;
 
-        // Report job accepted
-        self.report_job_status(
-            &job.job_run_id,
-            RunStatus::Running,
-            None,
-            None,
-            None,
-            None,
-        )
-            .await?;
-
         *self.active_trace.write().await = Some(ActiveJobTrace {
             job_run_id: job.job_run_id.clone(),
             step_run_id: None,
@@ -500,6 +489,17 @@ impl JobExecutor {
         } else {
             HashMap::new()
         };
+
+        // First Running report after workspace and secrets are ready (DB may already be `queued` from dispatch).
+        self.report_job_status(
+            &job.job_run_id,
+            RunStatus::Running,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
 
         // Collect execution metadata from all steps
         let mut step_metadata: Vec<(String, JobExecutionMetadata)> = Vec::new();

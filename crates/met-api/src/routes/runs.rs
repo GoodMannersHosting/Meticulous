@@ -95,6 +95,10 @@ pub struct RunResponse {
     /// Run number of `parent_run_id` when set (for display without a second fetch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_number: Option<i64>,
+    /// When set, UIs should prefer this over `run.status` for the primary badge (e.g. run is `running` but no job has reached agent execution yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub status_display: Option<RunStatus>,
 }
 
 impl From<Run> for RunResponse {
@@ -105,8 +109,32 @@ impl From<Run> for RunResponse {
             duration_ms,
             pipeline_name: None,
             parent_run_number: None,
+            status_display: None,
         }
     }
+}
+
+/// When the run row is `running` but every `job_run` is still `pending` or `queued`, show **Queued** on run lists/detail.
+async fn enrich_run_responses_status_display(
+    pool: &PgPool,
+    responses: &mut [RunResponse],
+) -> ApiResult<()> {
+    let ids: Vec<RunId> = responses.iter().map(|r| r.run.id).collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let rollups = JobRunRepo::new(pool).rollup_by_run_ids(&ids).await?;
+    for resp in responses.iter_mut() {
+        if resp.run.status != RunStatus::Running {
+            continue;
+        }
+        if let Some(rollup) = rollups.get(&resp.run.id) {
+            if rollup.job_count > 0 && !rollup.any_running {
+                resp.status_display = Some(RunStatus::Queued);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[utoipa::path(
@@ -157,12 +185,13 @@ async fn list_runs(
         if !user.can_access_project(pipeline.project_id) {
             return Err(ApiError::forbidden("no access to this project"));
         }
-        let items: Vec<RunResponse> = repo
+        let mut items: Vec<RunResponse> = repo
             .find_by_pipeline_and_run_number(pipeline_id, run_number)
             .await?
             .into_iter()
             .map(RunResponse::from)
             .collect();
+        enrich_run_responses_status_display(state.db(), &mut items).await?;
         let count = items.len();
         return Ok(Json(PaginatedResponse {
             data: items,
@@ -218,6 +247,8 @@ async fn list_runs(
     if has_more {
         items.pop();
     }
+
+    enrich_run_responses_status_display(state.db(), &mut items).await?;
 
     let count = items.len();
     let next_cursor = if has_more {
@@ -294,12 +325,15 @@ async fn get_run(
         None => None,
     };
     let duration_ms = run.duration().map(|d| d.num_milliseconds());
-    Ok(Json(RunResponse {
+    let mut responses = vec![RunResponse {
         run,
         duration_ms,
         pipeline_name: None,
         parent_run_number,
-    }))
+        status_display: None,
+    }];
+    enrich_run_responses_status_display(state.db(), &mut responses).await?;
+    Ok(Json(responses.pop().expect("one element")))
 }
 
 #[derive(Debug, Serialize, ToSchema)]

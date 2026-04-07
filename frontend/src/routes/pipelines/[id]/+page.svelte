@@ -38,6 +38,7 @@
 	import {
 		runNumberHtml,
 		runStatusBadgeHtml,
+		effectiveRunStatusForBadge,
 		runBranchColumnHtml,
 		runTriggeredByHtml,
 		runDurationHtml,
@@ -634,7 +635,7 @@
 			label: 'Status',
 			width: '140px',
 			sortable: true,
-			render: (_v, row) => runStatusBadgeHtml(row.status)
+			render: (_v, row) => runStatusBadgeHtml(effectiveRunStatusForBadge(row))
 		},
 		{
 			key: 'branch',

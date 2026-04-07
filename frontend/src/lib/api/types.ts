@@ -202,6 +202,8 @@ export interface Run {
 	started_at?: string;
 	finished_at?: string;
 	duration_ms?: number;
+	/** Prefer for badges when set (API: run is executing but no job is on an agent yet). */
+	status_display?: RunStatus | null;
 }
 
 /** GET /api/v1/runs/:id/dag — layout + exec telemetry per job. */
