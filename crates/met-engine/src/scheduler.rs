@@ -3,6 +3,7 @@
 use async_nats::jetstream::Context as JetStreamContext;
 use indexmap::IndexMap;
 use met_core::ids::{AgentId, JobId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepRunId};
+use met_core::models::{Agent, AgentStatus};
 use met_store::repos::AgentRepo;
 use met_parser::{JobIR, Shell, StepCommand, TagValue};
 use prost::Message;
@@ -37,6 +38,12 @@ pub struct JobDispatchMessage {
     pub timeout_secs: u64,
     pub required_tags: Vec<String>,
     pub priority: i32,
+    /// Subdirectory under agent workspace dir (`job_run_id` when empty).
+    pub workspace_root_id: String,
+    pub workspace_delete_after_job: bool,
+    pub suppress_exit_after_jobs_increment: bool,
+    pub workflow_invocation_id: String,
+    pub output_wrap_x25519_public_key: Vec<u8>,
 }
 
 /// Step specification for dispatch.
@@ -73,6 +80,8 @@ pub struct JobCompletionNotification {
     pub error_message: Option<String>,
     pub duration_ms: u64,
     pub outputs: IndexMap<String, String>,
+    /// Structured workflow invocation outputs (public map + sealed secrets).
+    pub workflow_outputs: Vec<met_proto::controller::v1::WorkflowInvocationOutputs>,
 }
 
 /// Scheduler configuration.
@@ -169,11 +178,40 @@ impl Scheduler {
             .list_available_for_dispatch(ctx.org_id(), &pool_tag, &required_tags)
             .await?;
 
-        let Some(chosen) = candidates.first() else {
-            return Err(EngineError::NoAvailableAgents {
-                job: job.name.clone(),
-                tags: required_tags.clone(),
-            });
+        let chosen_agent: Agent = if let Some(ref group) = job.affinity_group {
+            if let Some(pinned_id) = run_state.get_affinity_pin(group).await {
+                let agent = repo.get(pinned_id).await?;
+                if !Self::agent_eligible_for_dispatch(
+                    &agent,
+                    ctx.org_id(),
+                    &pool_tag,
+                    &required_tags,
+                ) {
+                    return Err(EngineError::AffinityScheduling {
+                        job: job.name.clone(),
+                        reason: format!(
+                            "pinned agent {pinned_id} is unavailable or no longer matches pool/tags"
+                        ),
+                    });
+                }
+                agent
+            } else {
+                let Some(first) = candidates.first() else {
+                    return Err(EngineError::NoAvailableAgents {
+                        job: job.name.clone(),
+                        tags: required_tags.clone(),
+                    });
+                };
+                first.clone()
+            }
+        } else {
+            let Some(first) = candidates.first() else {
+                return Err(EngineError::NoAvailableAgents {
+                    job: job.name.clone(),
+                    tags: required_tags.clone(),
+                });
+            };
+            first.clone()
         };
 
         for s in &steps {
@@ -182,21 +220,24 @@ impl Scheduler {
                 .await?;
         }
 
-        let message = self.build_dispatch_message(
-            ctx,
-            job,
-            job_run_id,
-            steps,
-            variables,
-            required_tags.clone(),
-        )?;
+        let message = self
+            .build_dispatch_message(
+                ctx,
+                run_state,
+                job,
+                job_run_id,
+                steps,
+                variables,
+                required_tags.clone(),
+            )
+            .await?;
 
         let proto_message = self.to_proto_message(&message)?;
         let subject = format!(
             "met.jobs.{}.{}.{}",
             ctx.org_id().as_uuid(),
             pool_tag,
-            chosen.id
+            chosen_agent.id
         );
         let payload = proto_message.encode_to_vec();
 
@@ -208,6 +249,12 @@ impl Scheduler {
             .map_err(|e| EngineError::Nats(format!("Failed to publish job dispatch: {e}")))?
             .await
             .map_err(|e| EngineError::Nats(format!("Failed to ack job dispatch: {e}")))?;
+
+        if let Some(ref group) = job.affinity_group {
+            run_state
+                .ensure_affinity_pin(group.clone(), chosen_agent.id)
+                .await?;
+        }
 
         run_state.mark_job_queued(&job.id).await;
         self.persistence.mark_job_queued(job_run_id).await?;
@@ -224,6 +271,32 @@ impl Scheduler {
 
         info!(job = %job.name, "job dispatched successfully");
         Ok(())
+    }
+
+    fn agent_eligible_for_dispatch(
+        agent: &Agent,
+        org_id: OrganizationId,
+        pool_tag: &str,
+        required_tags: &[String],
+    ) -> bool {
+        if agent.org_id != org_id {
+            return false;
+        }
+        if !matches!(agent.status, AgentStatus::Online | AgentStatus::Busy) {
+            return false;
+        }
+        if agent.running_jobs >= agent.max_jobs {
+            return false;
+        }
+        if !agent.pool_tags.iter().any(|p| p == pool_tag) {
+            return false;
+        }
+        for rt in required_tags {
+            if !agent.tags.iter().any(|t| t == rt) {
+                return false;
+            }
+        }
+        true
     }
 
     async fn prepare_steps(&self, ctx: &ExecutionContext, job: &JobIR) -> Result<Vec<StepDispatch>> {
@@ -281,9 +354,10 @@ impl Scheduler {
         Ok(steps)
     }
 
-    fn build_dispatch_message(
+    async fn build_dispatch_message(
         &self,
         ctx: &ExecutionContext,
+        run_state: &RunState,
         job: &JobIR,
         job_run_id: JobRunId,
         steps: Vec<StepDispatch>,
@@ -292,6 +366,20 @@ impl Scheduler {
     ) -> Result<JobDispatchMessage> {
         let (requires_secret_exchange, secret_resolution_hints_json) =
             met_secret_resolve::hints_json_from_secret_refs(&ctx.pipeline().secret_refs);
+
+        let workspace_root_id = if job.share_workspace {
+            job.affinity_group
+                .as_ref()
+                .map(|g| crate::affinity::workspace_root_dir_name(ctx.run_id(), g))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let workspace_delete_after_job =
+            crate::affinity::workspace_delete_after_job(ctx.pipeline(), job, run_state).await;
+        let suppress_exit_after_jobs_increment =
+            crate::affinity::suppress_exit_after_jobs_increment(ctx.pipeline(), job, run_state).await;
 
         Ok(JobDispatchMessage {
             job_run_id,
@@ -309,6 +397,17 @@ impl Scheduler {
             timeout_secs: job.timeout.as_secs(),
             required_tags,
             priority: self.config.base_priority,
+            workspace_root_id,
+            workspace_delete_after_job,
+            suppress_exit_after_jobs_increment,
+            workflow_invocation_id: job
+                .workflow_invocation_id
+                .clone()
+                .unwrap_or_default(),
+            output_wrap_x25519_public_key: ctx
+                .output_wrap_public_key_for_job_run(job_run_id)
+                .await
+                .unwrap_or_default(),
         })
     }
 
@@ -364,6 +463,11 @@ impl Scheduler {
             project_id,
             pipeline_id: msg.pipeline_id.to_string(),
             secret_resolution_hints_json: msg.secret_resolution_hints_json.clone(),
+            workspace_root_id: msg.workspace_root_id.clone(),
+            workspace_delete_after_job: msg.workspace_delete_after_job,
+            suppress_exit_after_jobs_increment: msg.suppress_exit_after_jobs_increment,
+            workflow_invocation_id: msg.workflow_invocation_id.clone(),
+            output_wrap_x25519_public_key: msg.output_wrap_x25519_public_key.clone(),
         })
     }
 
@@ -391,6 +495,14 @@ impl Scheduler {
 
             if !notification.outputs.is_empty() {
                 ctx.set_job_outputs(job_state.job_id, notification.outputs).await;
+            }
+            for wo in &notification.workflow_outputs {
+                if let Err(e) = ctx
+                    .ingest_workflow_outputs_from_completed_job(job_run_id, wo)
+                    .await
+                {
+                    warn!(error = %e, "workflow outputs ingest rejected");
+                }
             }
 
             let duration_ms = notification.duration_ms;

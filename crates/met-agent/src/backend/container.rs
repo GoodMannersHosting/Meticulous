@@ -89,7 +89,12 @@ impl ContainerBackend {
     }
 
     /// Build the docker/podman run command.
-    fn build_run_command(&self, step: &StepSpec, workspace: &Path) -> Command {
+    fn build_run_command(
+        &self,
+        step: &StepSpec,
+        workspace: &Path,
+        met_output_path_in_container: Option<&str>,
+    ) -> Command {
         let mut cmd = Command::new(self.runtime.command());
 
         match self.runtime {
@@ -107,6 +112,11 @@ impl ContainerBackend {
 
                 // Non-interactive git/SSH in CI (avoid credential-helper prompts blocking forever).
                 cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
+
+                if let Some(p) = met_output_path_in_container {
+                    cmd.arg("-e")
+                        .arg(format!("METICULOUS_OUTPUT_PATH={p}"));
+                }
 
                 // Set environment variables
                 for (key, value) in &step.environment {
@@ -206,8 +216,41 @@ impl ExecutionBackend for ContainerBackend {
         );
 
 
+        let (output_fifo_file, fifo_cleanup, met_out_container_path) = {
+            use std::fs::OpenOptions;
+            let met_dir = workspace.join(".meticulous");
+            tokio::fs::create_dir_all(&met_dir).await.map_err(|e| {
+                AgentError::ContainerRuntime(format!("create .meticulous: {e}"))
+            })?;
+            let fifo_path = met_dir.join(format!("met-output-{}.fifo", step.step_run_id));
+            if tokio::fs::metadata(&fifo_path).await.is_ok() {
+                let _ = tokio::fs::remove_file(&fifo_path).await;
+            }
+            let st = std::process::Command::new("mkfifo")
+                .arg("-m")
+                .arg("0600")
+                .arg(&fifo_path)
+                .status()
+                .map_err(|e| AgentError::ContainerRuntime(format!("mkfifo: {e}")))?;
+            if !st.success() {
+                return Err(AgentError::ContainerRuntime(
+                    "mkfifo failed (required for met-output)".into(),
+                ));
+            }
+            let canon = tokio::fs::canonicalize(&fifo_path)
+                .await
+                .unwrap_or_else(|_| fifo_path.clone());
+            let p_in_ctr = format!("/workspace/.meticulous/met-output-{}.fifo", step.step_run_id);
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&canon)
+                .map_err(|e| AgentError::ContainerRuntime(format!("open output fifo: {e}")))?;
+            (Some(f), Some(canon), Some(p_in_ctr))
+        };
+
         // Build and run command
-        let mut cmd = self.build_run_command(step, workspace);
+        let mut cmd = self.build_run_command(step, workspace, met_out_container_path.as_deref());
 
         let mut child = cmd.spawn().map_err(|e| {
             AgentError::ContainerRuntime(format!("failed to spawn container: {e}"))
@@ -363,12 +406,24 @@ impl ExecutionBackend for ContainerBackend {
             "container step completed"
         );
 
+        let mut output_ipc_bytes = Vec::new();
+        {
+            use std::io::Read;
+            if let Some(mut f) = output_fifo_file {
+                let _ = f.read_to_end(&mut output_ipc_bytes);
+            }
+            if let Some(p) = fifo_cleanup {
+                let _ = tokio::fs::remove_file(&p).await;
+            }
+        }
+
         Ok(StepResult {
             exit_code,
             duration,
             executed_binaries: metadata.executed_binaries,
             processes_spawned: metadata.total_processes_spawned,
             execution_tree_depth: metadata.execution_tree_depth,
+            output_ipc_bytes,
         })
     }
 

@@ -34,6 +34,26 @@ pub struct RawPipeline {
     /// Workflow invocations.
     #[serde(default)]
     pub workflows: Vec<RawWorkflowInvocation>,
+
+    /// Optional same-agent affinity and shared workspace policy (pipeline-level).
+    #[serde(default)]
+    pub agent_affinity: Option<RawAgentAffinity>,
+
+    /// Allow secret workflow outputs to flow into dependent job environment as plaintext (opt-in).
+    #[serde(default)]
+    pub expose_workflow_secret_outputs: bool,
+}
+
+/// Pipeline-level agent affinity defaults (optional `affinity-group` on invocations still applies).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawAgentAffinity {
+    /// When a workflow omits `affinity-group`, use this group name.
+    #[serde(default)]
+    pub default_group: Option<String>,
+    /// When true, jobs with an effective affinity group share one workspace directory per run (serial-only).
+    #[serde(default)]
+    pub share_workspace: bool,
 }
 
 /// Trigger configurations.
@@ -221,6 +241,10 @@ pub struct RawWorkflowInvocation {
     /// Cache configuration.
     #[serde(default)]
     pub cache: Option<RawCacheConfig>,
+
+    /// Same-agent affinity group (overrides pipeline `agent-affinity.default-group` when set).
+    #[serde(default)]
+    pub affinity_group: Option<String>,
 }
 
 /// Retry policy configuration.
@@ -311,12 +335,17 @@ fn default_input_type() -> String {
 /// Output definition.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawOutputDef {
-    /// Output value expression.
-    pub value: String,
+    /// Output value expression (optional when outputs are only produced via `met-output`).
+    #[serde(default)]
+    pub value: Option<String>,
 
     /// Description.
     #[serde(default)]
     pub description: Option<String>,
+
+    /// When true, this output is sensitive; plaintext env interpolation requires `expose-workflow-secret-outputs` on the pipeline.
+    #[serde(default)]
+    pub secret: bool,
 }
 
 /// Job definition within a workflow.
@@ -400,6 +429,20 @@ pub struct RawStep {
     /// Continue on error.
     #[serde(default)]
     pub continue_on_error: bool,
+
+    /// Optional declared outputs from this step (names only; values come from `met-output` at runtime).
+    #[serde(default)]
+    pub outputs: IndexMap<String, RawStepOutputDef>,
+}
+
+/// Declared step output (documentation / validation).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct RawStepOutputDef {
+    #[serde(default)]
+    pub description: Option<String>,
+
+    #[serde(default)]
+    pub secret: bool,
 }
 
 /// Service (sidecar container) definition.

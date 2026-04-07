@@ -14,6 +14,11 @@ met-secrets = { workspace = true }
 met-secret-resolve = { workspace = true }
 met-proto = { workspace = true }
 
+aes-gcm = { workspace = true }
+hkdf = { workspace = true }
+rand = { workspace = true }
+x25519-dalek = { workspace = true }
+
 async-nats = { workspace = true }
 async-trait = { workspace = true }
 cel-interpreter = "0.8"
@@ -22,6 +27,7 @@ secrecy = { workspace = true }
 chrono = { workspace = true }
 time = { version = "0.3", features = ["serde"] }
 futures = { workspace = true }
+hex = { workspace = true }
 indexmap = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }

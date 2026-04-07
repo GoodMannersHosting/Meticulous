@@ -179,6 +179,10 @@ pub struct JobRun {
     /// When [`Self::agent_snapshot`] was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_snapshot_captured_at: Option<DateTime<Utc>>,
+    /// X25519 static secret for `met-output secret` envelopes (32 bytes). Never log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub output_wrap_x25519_secret: Option<Vec<u8>>,
 }
 
 impl JobRun {
@@ -207,6 +211,7 @@ impl JobRun {
             created_at: Utc::now(),
             agent_snapshot: None,
             agent_snapshot_captured_at: None,
+            output_wrap_x25519_secret: None,
         }
     }
 

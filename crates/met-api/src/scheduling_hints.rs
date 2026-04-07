@@ -14,7 +14,7 @@ use met_parser::{
 };
 use met_store::{
     PgPool,
-    repos::{WorkflowRepo, WorkflowScope as DbWorkflowScope},
+    repos::{WorkflowRepo, WorkflowScope as DbWorkflowScope, WorkflowVersionListMode},
 };
 use tracing::debug;
 
@@ -68,7 +68,13 @@ impl WorkflowProvider for StoreWorkflowProvider {
                 .version
         } else if let Ok(constraint) = parse_version_constraint(version) {
             let versions = repo
-                .list_versions(self.org_id, project_ref, db_scope, name)
+                .list_versions(
+                    self.org_id,
+                    project_ref,
+                    db_scope,
+                    name,
+                    WorkflowVersionListMode::Execution,
+                )
                 .await
                 .map_err(|e| WorkflowFetchError::Network(e.to_string()))?;
             resolve_version(&constraint, &versions).ok_or_else(|| {
@@ -113,7 +119,13 @@ impl WorkflowProvider for StoreWorkflowProvider {
         let repo = WorkflowRepo::new(&self.pool);
         let db_scope = Self::map_scope(scope);
         let project_ref = self.project_for_scope(scope);
-        repo.list_versions(self.org_id, project_ref, db_scope, name)
+        repo.list_versions(
+            self.org_id,
+            project_ref,
+            db_scope,
+            name,
+            WorkflowVersionListMode::Execution,
+        )
             .await
             .map_err(|e| WorkflowFetchError::Network(e.to_string()))
     }

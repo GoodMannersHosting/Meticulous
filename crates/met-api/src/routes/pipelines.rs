@@ -9,7 +9,7 @@ use met_core::{
     ids::{PipelineId, ProjectId},
     models::{CreatePipeline, Pipeline, UpdatePipeline},
 };
-use met_store::repos::{PipelineRepo, ProjectRepo};
+use met_store::repos::{OrganizationRepo, PipelineRepo, ProjectRepo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -21,6 +21,7 @@ use crate::{
     github_scm,
     pipeline_execution,
     state::AppState,
+    workflow_diagnostics::{self, WorkflowDiagnosticItem},
 };
 
 pub fn router() -> Router<AppState> {
@@ -46,11 +47,21 @@ pub fn router() -> Router<AppState> {
         )
         .route("/pipelines/{id}/trigger", post(trigger_pipeline))
         .route("/pipelines/{id}/validate", post(validate_pipeline))
+        .route(
+            "/pipelines/{id}/workflow-diagnostics",
+            get(pipeline_workflow_diagnostics),
+        )
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ListPipelinesQuery {
     project_id: Option<ProjectId>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct WorkflowDiagnosticsQuery {
+    pub commit_sha: Option<String>,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -499,6 +510,30 @@ async fn trigger_pipeline(
         .await?;
     let org_id = project.org_id;
 
+    let org = OrganizationRepo::new(state.db()).get(org_id).await?;
+    let yaml = workflow_diagnostics::load_pipeline_yaml_string_for_diagnostics(
+        &state,
+        &pipeline,
+        org_id,
+        req.commit_sha.as_deref(),
+        req.branch.as_deref(),
+    )
+    .await?;
+    let wf_diag = workflow_diagnostics::collect_workflow_diagnostics(
+        state.db(),
+        org_id,
+        pipeline.project_id,
+        org.allow_untrusted_workflows,
+        &yaml,
+    )
+    .await?;
+    if workflow_diagnostics::diagnostics_has_blocking(&wf_diag) {
+        return Err(ApiError::bad_request(format!(
+            "workflow catalog policy: {}",
+            workflow_diagnostics::diagnostics_trigger_message(&wf_diag)
+        )));
+    }
+
     let pipeline_ir = pipeline_execution::load_pipeline_ir_for_execution(
         &state,
         &pipeline,
@@ -529,6 +564,61 @@ async fn trigger_pipeline(
         run_number: run.run_number,
         status: format!("{:?}", run.status).to_lowercase(),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/pipelines/{id}/workflow-diagnostics",
+    params(
+        ("id" = String, Path, description = "Pipeline ID"),
+        ("commit_sha" = Option<String>, Query, description = "Commit SHA override"),
+        ("branch" = Option<String>, Query, description = "Branch override"),
+    ),
+    responses(
+        (status = 200, description = "Per-invocation workflow resolution", body = Vec<WorkflowDiagnosticItem>),
+        (status = 404, description = "Pipeline not found"),
+    ),
+    tag = "pipelines",
+)]
+#[instrument(skip(state))]
+async fn pipeline_workflow_diagnostics(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<PipelineId>,
+    axum::extract::Query(q): axum::extract::Query<WorkflowDiagnosticsQuery>,
+) -> ApiResult<Json<Vec<WorkflowDiagnosticItem>>> {
+    let pipeline_repo = PipelineRepo::new(state.db());
+    let pipeline = pipeline_repo.get(id).await?;
+
+    if !user.can_access_project(pipeline.project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = ProjectRepo::new(state.db())
+        .get(pipeline.project_id)
+        .await?;
+    let org_id = project.org_id;
+    let org = OrganizationRepo::new(state.db()).get(org_id).await?;
+
+    let yaml = workflow_diagnostics::load_pipeline_yaml_string_for_diagnostics(
+        &state,
+        &pipeline,
+        org_id,
+        q.commit_sha.as_deref(),
+        q.branch.as_deref(),
+    )
+    .await?;
+
+    let items = workflow_diagnostics::collect_workflow_diagnostics(
+        state.db(),
+        org_id,
+        pipeline.project_id,
+        org.allow_untrusted_workflows,
+        &yaml,
+    )
+    .await?;
+
+    Ok(Json(items))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

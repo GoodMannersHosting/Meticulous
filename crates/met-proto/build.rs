@@ -6,9 +6,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile_protos(
             &[
                 "../../proto/meticulous/common/v1/types.proto",
+                "../../proto/meticulous/controller/v1/controller.proto",
                 "../../proto/meticulous/agent/v1/types.proto",
                 "../../proto/meticulous/agent/v1/agent.proto",
-                "../../proto/meticulous/controller/v1/controller.proto",
             ],
             &["../../proto"],
         )?;

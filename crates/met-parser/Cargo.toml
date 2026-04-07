@@ -25,6 +25,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 indoc = "2.0"
+met-engine = { path = "../met-engine" }
 tempfile = "3.10"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

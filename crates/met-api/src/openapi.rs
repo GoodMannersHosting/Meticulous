@@ -5,6 +5,9 @@ use utoipa::OpenApi;
 use crate::error::{ErrorBody, ErrorResponse};
 use crate::extractors::pagination::{PaginatedResponse, PaginationMeta};
 use crate::routes::{
+    admin_workflows::{
+        AdminWorkflowDeleteResponse, AdminWorkflowOpResponse,
+    },
     agents::{AgentActionResponse, AgentResponse},
     artifacts::{ArtifactResponse, AttestationResponse, SbomResponse},
     auth::{
@@ -35,7 +38,9 @@ use crate::routes::{
     variables::{CreateVariableRequest, UpdateVariableRequest, VariableResponse},
     webhooks::{SetupScmWebhookRequest, SetupScmWebhookResponse, WebhookResponse},
     workflows::{CreateWorkflowRequest, WorkflowResponse, WorkflowVersionsResponse},
+    workflows_catalog::{CatalogVersionsPage, ImportCatalogWorkflowGitRequest},
 };
+use crate::workflow_diagnostics::WorkflowDiagnosticItem;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -100,6 +105,7 @@ use crate::routes::{
         crate::routes::pipelines::delete_pipeline,
         crate::routes::pipelines::trigger_pipeline,
         crate::routes::pipelines::validate_pipeline,
+        crate::routes::pipelines::pipeline_workflow_diagnostics,
         crate::routes::pipelines::import_pipeline_git,
         crate::routes::pipelines::sync_pipeline_from_git,
         // Dashboard
@@ -152,6 +158,14 @@ use crate::routes::{
         crate::routes::workflows::create_project_workflow,
         crate::routes::workflows::get_workflow,
         crate::routes::workflows::list_versions,
+        crate::routes::workflows_catalog::list_catalog_workflows,
+        crate::routes::workflows_catalog::import_catalog_workflow_git,
+        crate::routes::workflows_catalog::list_catalog_versions,
+        crate::routes::admin_workflows::approve_catalog_workflow,
+        crate::routes::admin_workflows::reject_catalog_workflow,
+        crate::routes::admin_workflows::trust_catalog_workflow,
+        crate::routes::admin_workflows::untrust_catalog_workflow,
+        crate::routes::admin_workflows::soft_delete_catalog_workflow,
         // Webhooks
         crate::routes::webhooks::handle_webhook,
         crate::routes::webhooks::handle_github_webhook,
@@ -214,6 +228,9 @@ use crate::routes::{
             WebhookResponse, SetupScmWebhookRequest, SetupScmWebhookResponse,
             // Workflows
             WorkflowResponse, CreateWorkflowRequest, WorkflowVersionsResponse,
+            ImportCatalogWorkflowGitRequest, CatalogVersionsPage,
+            WorkflowDiagnosticItem,
+            AdminWorkflowOpResponse, AdminWorkflowDeleteResponse,
             // Artifacts
             ArtifactResponse, SbomResponse, AttestationResponse,
             // Debug

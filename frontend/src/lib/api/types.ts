@@ -50,6 +50,56 @@ export interface Organization {
 	name: string;
 	slug: string;
 	created_at: string;
+	/** When false, untrusted global catalog workflows cannot run. */
+	allow_untrusted_workflows?: boolean;
+}
+
+/** Global catalog workflow row (API `/workflows/catalog` and related). */
+export interface CatalogWorkflow {
+	id: string;
+	scope: string;
+	project_id?: string | null;
+	name: string;
+	version: string;
+	definition: Record<string, unknown>;
+	description?: string | null;
+	deprecated: boolean;
+	tags: string[];
+	created_at: string;
+	updated_at: string;
+	source: string;
+	scm_repository?: string | null;
+	scm_ref?: string | null;
+	scm_path?: string | null;
+	scm_revision?: string | null;
+	submission_status: string;
+	trust_state: string;
+	submitted_by?: string | null;
+	reviewed_by?: string | null;
+	reviewed_at?: string | null;
+	deleted_at?: string | null;
+	catalog_metadata: Record<string, unknown>;
+}
+
+export interface WorkflowDiagnosticItem {
+	invocation_id: string;
+	reference: string;
+	scope: string;
+	name: string;
+	version_requested: string;
+	version_resolved?: string | null;
+	status: string;
+	detail?: string | null;
+	blocking: boolean;
+	/** Declared output names from the workflow definition, when parseable */
+	declared_outputs?: string[] | null;
+}
+
+export interface CatalogVersionsPage {
+	workflow_name: string;
+	versions: CatalogWorkflow[];
+	has_more?: boolean;
+	next_cursor?: string | null;
 }
 
 // Project Types

@@ -51,6 +51,7 @@ fn mock_docker_workflow() -> RawWorkflowDef {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![],
             depends_on: vec![],
@@ -83,6 +84,7 @@ fn mock_test_workflow() -> RawWorkflowDef {
                 working_directory: None,
                 timeout: None,
                 continue_on_error: false,
+                outputs: IndexMap::new(),
             }],
             services: vec![],
             depends_on: vec![],
@@ -115,7 +117,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
@@ -144,7 +146,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -177,7 +179,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -213,7 +215,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -245,7 +247,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -273,7 +275,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -303,7 +305,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -331,7 +333,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -365,7 +367,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok());
@@ -387,7 +389,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -415,7 +417,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -439,7 +441,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -467,7 +469,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -488,7 +490,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -509,7 +511,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -537,7 +539,7 @@ workflows:
         strict: true,
         ..Default::default()
     };
-    let parser = PipelineParser::new(&provider).with_config(config);
+    let mut parser = PipelineParser::new(&provider).with_config(config);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_err());
@@ -596,7 +598,7 @@ workflows:
 "#;
 
     let provider = create_provider();
-    let parser = PipelineParser::new(&provider);
+    let mut parser = PipelineParser::new(&provider);
     let result = parser.parse(yaml).await;
 
     assert!(result.is_ok(), "Parse error: {:?}", result.err());

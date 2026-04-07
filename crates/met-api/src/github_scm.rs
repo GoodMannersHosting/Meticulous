@@ -356,13 +356,13 @@ pub async fn github_api_base_for_credentials_path(
     github_api_base_hint_from_encrypted_row(crypto, &row)
 }
 
-fn yaml_file_to_json_value(yaml: &str) -> ApiResult<serde_json::Value> {
+pub fn yaml_file_to_json_value(yaml: &str) -> ApiResult<serde_json::Value> {
     let v: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| ApiError::bad_request(format!("YAML: {e}")))?;
     serde_json::to_value(&v).map_err(|e| ApiError::bad_request(format!("JSON: {e}")))
 }
 
-fn json_workflow_version(v: &serde_json::Value) -> Option<String> {
+pub fn json_workflow_version(v: &serde_json::Value) -> Option<String> {
     if let Some(s) = v.as_str() {
         let t = s.trim();
         if !t.is_empty() {
@@ -448,6 +448,45 @@ pub async fn sync_project_workflows_from_stable_dir(
     }
 
     Ok(())
+}
+
+/// Load pipeline YAML text from a GitHub tarball checkout (same resolution as full parse).
+pub async fn fetch_pipeline_yaml_from_github_checkout(
+    pool: &PgPool,
+    crypto: &BuiltinStoredCrypto,
+    org_id: OrganizationId,
+    project_id: ProjectId,
+    repository: &str,
+    git_ref: &str,
+    scm_path: &str,
+    credentials_path: &str,
+) -> ApiResult<String> {
+    let slug = parse_github_repository(repository)?;
+    let api_base =
+        github_api_base_for_credentials_path(pool, crypto, org_id, project_id, credentials_path)
+            .await?;
+    let token = github_app_installation_token_for_project_secret(
+        pool,
+        crypto,
+        org_id,
+        project_id,
+        credentials_path,
+    )
+    .await?;
+
+    let tmp = tempfile::tempdir().map_err(|e| ApiError::internal(e.to_string()))?;
+    let unpack_root = tmp.path().join("t");
+    let repo_root = fetch_and_extract_tarball(
+        &token,
+        &slug.owner,
+        &slug.name,
+        git_ref,
+        &api_base,
+        &unpack_root,
+    )
+    .await?;
+
+    read_pipeline_yaml_from_checkout(&repo_root, scm_path)
 }
 
 /// Parse pipeline IR from a GitHub tarball (global DB workflows + `project/` files on disk).

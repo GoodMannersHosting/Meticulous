@@ -34,6 +34,7 @@ use crate::{
 /// Build the admin router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(crate::routes::admin_workflows::router())
         .merge(crate::routes::meticulous_apps::admin_router())
         // User management
         .route("/admin/users", get(list_users))

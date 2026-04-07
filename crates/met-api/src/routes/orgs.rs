@@ -160,6 +160,9 @@ async fn get_org(
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateOrgRequest {
     pub name: Option<String>,
+    /// When false, untrusted global catalog workflows cannot be executed.
+    #[serde(default)]
+    pub allow_untrusted_workflows: Option<bool>,
 }
 
 #[utoipa::path(
@@ -197,7 +200,13 @@ async fn update_org(
 
     let repo = OrganizationRepo::new(state.db());
     let org = repo
-        .update(id, &UpdateOrganization { name: req.name })
+        .update(
+            id,
+            &UpdateOrganization {
+                name: req.name,
+                allow_untrusted_workflows: req.allow_untrusted_workflows,
+            },
+        )
         .await?;
 
     tracing::info!(org_id = %id, "organization updated");

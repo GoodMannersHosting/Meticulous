@@ -343,7 +343,46 @@ export const apiMethods = {
 			api.put<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
-			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {})
+			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
+		workflowDiagnostics: (
+			id: string,
+			params?: { commit_sha?: string; branch?: string }
+		) =>
+			api.get<import('./types').WorkflowDiagnosticItem[]>(
+				`/api/v1/pipelines/${id}/workflow-diagnostics`,
+				{ params }
+			)
+	},
+
+	// Org workflow catalog (global reusable workflows)
+	wfCatalog: {
+		list: (params?: { status?: string; limit?: number; cursor?: string }) =>
+			api.get<import('./types').PaginatedResponse<import('./types').CatalogWorkflow>>(
+				'/api/v1/workflows/catalog',
+				{ params }
+			),
+		importGit: (
+			projectId: string,
+			body: {
+				repository: string;
+				git_ref: string;
+				workflow_path: string;
+				credentials_path: string;
+			}
+		) =>
+			api.post<import('./types').CatalogWorkflow>(
+				`/api/v1/projects/${projectId}/workflows/catalog/import-git`,
+				body
+			),
+		catalogVersions: (
+			workflowId: string,
+			params?: { q?: string; limit?: number; per_page?: number; cursor?: string }
+		) =>
+			api.get<import('./types').CatalogVersionsPage>(
+				`/api/v1/workflows/${workflowId}/catalog-versions`,
+				{ params }
+			),
+		get: (id: string) => api.get<import('./types').CatalogWorkflow>(`/api/v1/workflows/${id}`)
 	},
 
 	artifacts: {
@@ -436,6 +475,30 @@ export const apiMethods = {
 				api.post<{ message: string; scheduled_deletion_at: string }>(`/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
 			cancelDeletion: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/cancel-deletion`),
 			forceDelete: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/force-delete`)
+		},
+		workflows: {
+			approve: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/approve`,
+					{}
+				),
+			reject: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/reject`,
+					{}
+				),
+			trust: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/trust`,
+					{}
+				),
+			untrust: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/admin/workflows/${workflowId}/untrust`,
+					{}
+				),
+			delete: (workflowId: string) =>
+				api.post<{ ok: boolean }>(`/admin/workflows/${workflowId}/delete`, {})
 		},
 		// Auth provider management
 		authProviders: {

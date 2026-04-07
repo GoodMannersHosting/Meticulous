@@ -10,7 +10,8 @@
 		Settings,
 		ChevronLeft,
 		ChevronRight,
-		Shield
+		Shield,
+		Layers
 	} from 'lucide-svelte';
 	import Tooltip from '../ui/tooltip.svelte';
 
@@ -36,6 +37,7 @@
 			items: [
 				{ label: 'Projects', href: '/projects', icon: FolderKanban },
 				{ label: 'Pipelines', href: '/pipelines', icon: GitBranch },
+				{ label: 'Workflows', href: '/workflows', icon: Layers },
 				{ label: 'Runs', href: '/runs', icon: Play }
 			]
 		},

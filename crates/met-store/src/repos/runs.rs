@@ -366,7 +366,7 @@ impl<'a> RunRepo<'a> {
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                    pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                   agent_snapshot, agent_snapshot_captured_at
+                   agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -515,7 +515,7 @@ impl<'a> JobRunRepo<'a> {
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())
@@ -536,7 +536,7 @@ impl<'a> JobRunRepo<'a> {
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                    pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                   agent_snapshot, agent_snapshot_captured_at
+                   agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             FROM job_runs
             WHERE id = $1
             "#,
@@ -641,7 +641,7 @@ impl<'a> JobRunRepo<'a> {
             SELECT id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                    error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                    pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                   agent_snapshot, agent_snapshot_captured_at
+                   agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             FROM job_runs
             WHERE run_id = $1
             ORDER BY created_at
@@ -979,7 +979,7 @@ WHERE jr.run_id = r.id
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())
@@ -1012,7 +1012,7 @@ WHERE jr.run_id = r.id
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())
@@ -1058,7 +1058,7 @@ WHERE jr.run_id = r.id
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())
@@ -1081,7 +1081,7 @@ WHERE jr.run_id = r.id
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())
@@ -1137,7 +1137,7 @@ WHERE jr.run_id = r.id
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
-                      agent_snapshot, agent_snapshot_captured_at
+                      agent_snapshot, agent_snapshot_captured_at, output_wrap_x25519_secret
             "#,
         )
         .bind(id.as_uuid())

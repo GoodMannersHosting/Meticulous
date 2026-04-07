@@ -138,6 +138,8 @@ pub enum ErrorCode {
     E5003,
     /// Unreachable node in DAG.
     E5004,
+    /// Concurrent jobs in a shared-workspace affinity group.
+    E5005,
 
     // General errors (E9xxx)
     /// Internal parser error.
@@ -172,6 +174,7 @@ impl ErrorCode {
             ErrorCode::E5002 => "unknown dependency",
             ErrorCode::E5003 => "self-dependency not allowed",
             ErrorCode::E5004 => "unreachable node",
+            ErrorCode::E5005 => "unsafe concurrent jobs for shared workspace affinity",
             ErrorCode::E9001 => "internal error",
             ErrorCode::E9002 => "I/O error",
         }

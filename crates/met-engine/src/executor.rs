@@ -17,6 +17,7 @@ use met_store::repos::{
 };
 use met_secrets::BuiltinStoredCrypto;
 use met_store::repos::JobRunRepo;
+use rand::RngCore;
 use secrecy::SecretString;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -332,6 +333,8 @@ impl<C: CacheBackend> Executor<C> {
             };
 
             let job_run_id = JobRunId::new();
+            let mut output_wrap_secret = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut output_wrap_secret);
             self.persistence
                 .create_job_run(
                     job_run_id,
@@ -343,8 +346,11 @@ impl<C: CacheBackend> Executor<C> {
                         workflow_definition_sha256: workflow_digest,
                         source_workflow: source_meta,
                     },
+                    output_wrap_secret,
                 )
                 .await?;
+            ctx.register_output_wrap_x25519_secret(job_run_id, output_wrap_secret)
+                .await;
             let job_state = JobState::new(job.id, job_run_id, &job.name);
             run_state.register_job(job_state).await;
         }
@@ -538,6 +544,13 @@ impl<C: CacheBackend> Executor<C> {
                     ?tags,
                     "no eligible agent yet; job stays pending until one is available (retrying on next poll)"
                 );
+                Ok(())
+            }
+            Err(EngineError::AffinityScheduling { job: j, reason }) => {
+                error!(job = %j, %reason, "affinity scheduling failed; failing job");
+                run_state
+                    .mark_job_completed(&job.id, false, None, Some(reason))
+                    .await;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -768,6 +781,9 @@ mod tests {
             condition: None,
             source_workflow: None,
             env: Default::default(),
+            affinity_group: None,
+            share_workspace: false,
+            workflow_invocation_id: None,
         }
     }
 
@@ -782,6 +798,7 @@ mod tests {
             secret_refs: Default::default(),
             jobs,
             default_pool_selector: None,
+            expose_workflow_secret_outputs: false,
         }
     }
 

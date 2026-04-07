@@ -3,6 +3,7 @@ syntax = "proto3";
 package meticulous.agent.v1;
 
 import "meticulous/common/v1/types.proto";
+import "meticulous/controller/v1/controller.proto";
 
 // Agent registration information.
 message AgentInfo {
@@ -172,6 +173,8 @@ message JobStatusUpdate {
     optional string agent_id = 7;
     // CycloneDX JSON (UTF-8) written under the job workspace (e.g. `sbom.cdx.json`); optional on terminal updates.
     optional string sbom_cyclonedx_json = 8;
+    // Declared workflow outputs for this job (public map + wrapped secrets); see design/workflow-invocation-outputs.md.
+    optional meticulous.controller.v1.WorkflowInvocationOutputs workflow_invocation_outputs = 9;
 }
 
 // Step status update from agent.

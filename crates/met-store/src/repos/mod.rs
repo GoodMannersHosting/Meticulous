@@ -16,6 +16,7 @@ mod job_assignments;
 mod join_tokens;
 mod jobs;
 mod organizations;
+mod pipeline_run_workflow_outputs;
 mod pipelines;
 mod projects;
 mod roles;
@@ -50,6 +51,7 @@ pub use jobs::{JobDagNode, JobRepo};
 pub use join_tokens::JoinTokenRepo;
 pub use meticulous_apps::MeticulousAppRepo;
 pub use organizations::OrganizationRepo;
+pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipelines::PipelineRepo;
 pub use projects::ProjectRepo;
 pub use roles::RoleRepo;
@@ -58,7 +60,10 @@ pub use runs::{
     StepRunRepo,
 };
 pub use users::UserRepo;
-pub use workflows::{CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowScope};
+pub use workflows::{
+    CreateGlobalCatalogGit, CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowScope,
+    WorkflowSource, WorkflowSubmissionStatus, WorkflowTrustState, WorkflowVersionListMode,
+};
 pub use run_logs::{LogEntry, RunLogRepo};
 pub use run_binary_executions::{
     RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunBinaryFootprintRow,

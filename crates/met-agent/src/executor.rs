@@ -13,6 +13,7 @@ use met_proto::agent::v1::{
     JobExecutionMetadata as ProtoJobExecutionMetadata, JobKeyExchange, JobStatusUpdate,
     SecretMaterialKind, StepStatusUpdate,
 };
+use met_proto::controller::v1::WorkflowInvocationOutputs;
 use met_proto::common::v1::{RunStatus, Timestamp};
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -35,6 +36,7 @@ use crate::step_log::{step_log_spool_path, StepLogSession};
 struct ActiveJobTrace {
     job_run_id: String,
     step_run_id: Option<String>,
+    workspace_path: PathBuf,
 }
 
 /// Job executor that pulls jobs from NATS and executes them.
@@ -239,6 +241,7 @@ impl JobExecutor {
                             {
                                 Ok(job) => {
                                     let job_run_id = job.job_run_id.clone();
+                                    let suppress_exit_after_jobs = job.suppress_exit_after_jobs_increment;
                                     let shutdown_watcher = self.shutdown_rx.clone();
                                     tokio::select! {
                                         exec_res = self.execute_job(job) => {
@@ -247,14 +250,17 @@ impl JobExecutor {
                                                     if let Err(e) = message.ack().await {
                                                         warn!(error = %e, "failed to ack message after job success");
                                                     } else if let Some(limit) = self.config.exit_after_jobs {
-                                                        self.jobs_completed = self.jobs_completed.saturating_add(1);
-                                                        if self.jobs_completed >= limit {
-                                                            info!(
-                                                                jobs_completed = self.jobs_completed,
-                                                                limit,
-                                                                "exit_after_jobs reached; requesting graceful shutdown"
-                                                            );
-                                                            let _ = self.shutdown_tx.send(true);
+                                                        if !suppress_exit_after_jobs {
+                                                            self.jobs_completed =
+                                                                self.jobs_completed.saturating_add(1);
+                                                            if self.jobs_completed >= limit {
+                                                                info!(
+                                                                    jobs_completed = self.jobs_completed,
+                                                                    limit,
+                                                                    "exit_after_jobs reached; requesting graceful shutdown"
+                                                                );
+                                                                let _ = self.shutdown_tx.send(true);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -338,7 +344,18 @@ impl JobExecutor {
         self.join_pending_log_flushes().await;
 
         let merged = self.merged_footprint_metadata().await;
-        let ws = self.config.workspace_dir.join(job_run_id);
+        let ws = {
+            let trace = self.active_trace.read().await;
+            if let Some(t) = trace.as_ref() {
+                if t.job_run_id == job_run_id {
+                    t.workspace_path.clone()
+                } else {
+                    self.config.workspace_dir.join(job_run_id)
+                }
+            } else {
+                self.config.workspace_dir.join(job_run_id)
+            }
+        };
         let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
 
         let _ = self
@@ -349,6 +366,7 @@ impl JobExecutor {
                 Some(MSG.to_string()),
                 merged,
                 sbom,
+                None,
             )
             .await;
 
@@ -411,6 +429,11 @@ impl JobExecutor {
         }
         let _ = self.heartbeat_transition_wake.send(());
 
+        let workspace_key_for_paths = if job.workspace_root_id.is_empty() {
+            job.job_run_id.clone()
+        } else {
+            job.workspace_root_id.clone()
+        };
         let job_run_id = job.job_run_id.clone();
         let res = self.do_run_job_dispatch(job).await;
         self.release_job_heartbeat_slot().await;
@@ -424,7 +447,7 @@ impl JobExecutor {
                     "job aborted before completion; reporting failed to controller"
                 );
                 let merged = self.merged_footprint_metadata().await;
-                let ws = self.config.workspace_dir.join(&job_run_id);
+                let ws = self.config.workspace_dir.join(&workspace_key_for_paths);
                 let sbom = maybe_read_workspace_sbom_cyclonedx(&ws).await;
                 let _ = self
                     .report_job_status(
@@ -434,6 +457,7 @@ impl JobExecutor {
                         Some(msg),
                         merged,
                         sbom,
+                        None,
                     )
                     .await;
                 Ok(())
@@ -452,19 +476,27 @@ impl JobExecutor {
 
         self.clear_footprint_accumulator().await;
 
+        let ws_key = if job.workspace_root_id.is_empty() {
+            job.job_run_id.as_str()
+        } else {
+            job.workspace_root_id.as_str()
+        };
+        let workspace = self.create_workspace(ws_key).await?;
+
         *self.active_trace.write().await = Some(ActiveJobTrace {
             job_run_id: job.job_run_id.clone(),
             step_run_id: None,
+            workspace_path: workspace.clone(),
         });
-
-        // Create workspace
-        let workspace = self.create_workspace(&job.job_run_id).await?;
 
         let job_result = self.run_job_in_workspace(&job, &workspace).await;
 
         self.join_pending_log_flushes().await;
 
-        if let Err(e) = self.cleanup_workspace(&workspace).await {
+        if let Err(e) = self
+            .cleanup_workspace(&workspace, job.workspace_delete_after_job)
+            .await
+        {
             warn!(
                 error = %e,
                 job_run_id = %job.job_run_id,
@@ -498,6 +530,7 @@ impl JobExecutor {
             None,
             None,
             None,
+            None,
         )
         .await?;
 
@@ -507,12 +540,14 @@ impl JobExecutor {
         // Execute steps sequentially
         let mut job_success = true;
         let mut last_exit_code: Option<i32> = None;
+        let mut job_output_ipc = Vec::new();
         for step in &job.steps {
             match self
                 .execute_step(&job.job_run_id, step, workspace, &job.variables, &secrets)
                 .await
             {
-                Ok((exit_code, metadata)) => {
+                Ok((exit_code, metadata, ipc)) => {
+                    job_output_ipc.extend_from_slice(&ipc);
                     last_exit_code = Some(exit_code);
                     if let Some(meta) = metadata {
                         step_metadata.push((step.step_id.clone(), meta.clone()));
@@ -565,6 +600,18 @@ impl JobExecutor {
 
         let sbom_json = maybe_read_workspace_sbom_cyclonedx(workspace).await;
 
+        let workflow_outputs = match crate::workflow_outputs::build_workflow_invocation_outputs(
+            job,
+            &job_output_ipc,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                error!(error = %e, "workflow invocation outputs");
+                job_success = false;
+                None
+            }
+        };
+
         // Report job completion with execution metadata
         let final_status = if job_success {
             RunStatus::Succeeded
@@ -583,6 +630,7 @@ impl JobExecutor {
             None,
             job_metadata,
             sbom_json,
+            workflow_outputs,
         )
         .await?;
 
@@ -614,7 +662,7 @@ impl JobExecutor {
         workspace: &Path,
         variables: &HashMap<String, String>,
         secrets: &HashMap<String, String>,
-    ) -> Result<(i32, Option<JobExecutionMetadata>)> {
+    ) -> Result<(i32, Option<JobExecutionMetadata>, Vec<u8>)> {
         info!(step = %step.name, "executing step");
 
         let step_run_id = step.step_run_id.as_str();
@@ -756,24 +804,25 @@ impl JobExecutor {
                     &step.step_run_id,
                     &mut metadata,
                 );
-                Ok((step_result.exit_code, Some(metadata)))
+                Ok((
+                    step_result.exit_code,
+                    Some(metadata),
+                    step_result.output_ipc_bytes,
+                ))
             }
             Err(e) => {
                 let meta = watcher
                     .aggregate_metadata(&step.step_id, &step.step_run_id)
                     .await;
                 error!(step = %step.name, error = %e, "step backend error; still shipping footprint metadata");
-                Ok((1, Some(meta)))
+                Ok((1, Some(meta), Vec::new()))
             }
         }
     }
 
     /// Create a workspace directory for a job.
-    async fn create_workspace(&self, job_run_id: &str) -> Result<PathBuf> {
-        let workspace = self
-            .config
-            .workspace_dir
-            .join(job_run_id);
+    async fn create_workspace(&self, workspace_key: &str) -> Result<PathBuf> {
+        let workspace = self.config.workspace_dir.join(workspace_key);
 
         tokio::fs::create_dir_all(&workspace)
             .await
@@ -785,7 +834,10 @@ impl JobExecutor {
     }
 
     /// Cleanup workspace after job completion.
-    async fn cleanup_workspace(&self, workspace: &Path) -> Result<()> {
+    async fn cleanup_workspace(&self, workspace: &Path, delete: bool) -> Result<()> {
+        if !delete {
+            return Ok(());
+        }
         if workspace.exists() {
             tokio::fs::remove_dir_all(workspace)
                 .await
@@ -908,6 +960,7 @@ impl JobExecutor {
         error_message: Option<String>,
         execution_metadata: Option<JobExecutionMetadata>,
         sbom_cyclonedx_json: Option<String>,
+        workflow_invocation_outputs: Option<WorkflowInvocationOutputs>,
     ) -> Result<()> {
         // Convert execution metadata to protobuf format
         let proto_metadata = execution_metadata.map(|meta| {
@@ -951,6 +1004,7 @@ impl JobExecutor {
             execution_metadata: proto_metadata,
             agent_id: Some(self.identity.agent_id.clone()),
             sbom_cyclonedx_json,
+            workflow_invocation_outputs,
         };
 
         self.client

@@ -7,7 +7,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::ProjectId;
-use met_store::repos::{CreateWorkflow, ReusableWorkflow, WorkflowRepo};
+use met_store::repos::{
+    CreateWorkflow, ReusableWorkflow, WorkflowRepo, WorkflowVersionListMode,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -44,10 +46,47 @@ pub struct WorkflowResponse {
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scm_revision: Option<String>,
+    pub submission_status: String,
+    pub trust_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub catalog_metadata: serde_json::Value,
 }
 
 impl From<ReusableWorkflow> for WorkflowResponse {
     fn from(w: ReusableWorkflow) -> Self {
+        use met_store::repos::{
+            WorkflowSource as S, WorkflowSubmissionStatus as Sub, WorkflowTrustState as T,
+        };
+        let source = match w.source {
+            S::Git => "git",
+            S::Api => "api",
+            S::ProjectSync => "project_sync",
+        };
+        let submission_status = match w.submission_status {
+            Sub::Pending => "pending",
+            Sub::Approved => "approved",
+            Sub::Rejected => "rejected",
+        };
+        let trust_state = match w.trust_state {
+            T::Trusted => "trusted",
+            T::Untrusted => "untrusted",
+        };
         Self {
             id: w.id.to_string(),
             scope: format!("{:?}", w.scope).to_lowercase(),
@@ -60,6 +99,18 @@ impl From<ReusableWorkflow> for WorkflowResponse {
             tags: w.tags,
             created_at: w.created_at,
             updated_at: w.updated_at,
+            source: source.to_string(),
+            scm_repository: w.scm_repository,
+            scm_ref: w.scm_ref,
+            scm_path: w.scm_path,
+            scm_revision: w.scm_revision,
+            submission_status: submission_status.to_string(),
+            trust_state: trust_state.to_string(),
+            submitted_by: w.submitted_by.map(|u| u.to_string()),
+            reviewed_by: w.reviewed_by.map(|u| u.to_string()),
+            reviewed_at: w.reviewed_at,
+            deleted_at: w.deleted_at,
+            catalog_metadata: w.catalog_metadata,
         }
     }
 }
@@ -224,7 +275,9 @@ async fn get_workflow(
 
     let row = sqlx::query_as::<_, ReusableWorkflow>(
         r#"
-        SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at
+        SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at,
+               source, scm_repository, scm_ref, scm_path, scm_revision, submission_status, trust_state,
+               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata
         FROM reusable_workflows
         WHERE id = $1 AND org_id = $2
         "#,
@@ -267,7 +320,9 @@ async fn list_versions(
 
     let row = sqlx::query_as::<_, ReusableWorkflow>(
         r#"
-        SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at
+        SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at,
+               source, scm_repository, scm_ref, scm_path, scm_revision, submission_status, trust_state,
+               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata
         FROM reusable_workflows
         WHERE id = $1 AND org_id = $2
         "#,
@@ -282,7 +337,13 @@ async fn list_versions(
     let repo = WorkflowRepo::new(state.db());
     let project_id = row.project_id.map(ProjectId::from_uuid);
     let versions = repo
-        .list_versions(user.org_id, project_id, row.scope, &row.name)
+        .list_versions(
+            user.org_id,
+            project_id,
+            row.scope,
+            &row.name,
+            WorkflowVersionListMode::Catalog,
+        )
         .await?;
 
     Ok(Json(WorkflowVersionsResponse {

@@ -5,7 +5,7 @@
 use crate::error::{ErrorCode, ParseDiagnostics, SourceLocation};
 use indexmap::IndexMap;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 /// Pattern for variable references: ${name} or $name
@@ -50,6 +50,10 @@ pub struct VariableContext {
     pub inputs: IndexMap<String, String>,
     /// Step outputs from previous steps (for runtime resolution).
     pub step_outputs: IndexMap<String, IndexMap<String, String>>,
+    /// Pipeline `workflows[].id` values (for `${{ workflows.X.outputs.* }}` validation).
+    pub workflow_invocations: HashSet<String>,
+    /// Declared output names per workflow invocation id (from reusable workflow YAML). Empty set skips name checks.
+    pub workflow_declared_outputs: HashMap<String, HashSet<String>>,
 }
 
 impl VariableContext {
@@ -60,12 +64,26 @@ impl VariableContext {
             secrets,
             inputs: IndexMap::new(),
             step_outputs: IndexMap::new(),
+            workflow_invocations: HashSet::new(),
+            workflow_declared_outputs: HashMap::new(),
         }
     }
 
     /// Add workflow inputs to the context.
     pub fn with_inputs(mut self, inputs: IndexMap<String, String>) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    /// Pipeline workflow invocation ids available for `workflows.<id>.outputs.*` references.
+    pub fn with_workflow_invocations(mut self, ids: HashSet<String>) -> Self {
+        self.workflow_invocations = ids;
+        self
+    }
+
+    /// Declared `outputs` names for each `workflows[].id` (workflow- and step-level declarations).
+    pub fn with_workflow_declared_outputs(mut self, map: HashMap<String, HashSet<String>>) -> Self {
+        self.workflow_declared_outputs = map;
         self
     }
 
@@ -220,6 +238,43 @@ fn validate_expression(
     }
 
     match parts[0] {
+        "workflows" => {
+            if parts.len() == 4 && parts[2] == "outputs" {
+                let inv = parts[1];
+                let out_name = parts[3];
+                if !ctx.workflow_invocations.contains(inv) {
+                    diagnostics.push(
+                        crate::error::ParseError::new(
+                            ErrorCode::E4001,
+                            format!("unknown workflow invocation id in outputs reference: {inv}"),
+                        )
+                        .with_source(location),
+                    );
+                } else if let Some(declared) = ctx.workflow_declared_outputs.get(inv) {
+                    if !declared.is_empty() && !declared.contains(out_name) {
+                        let mut sample: Vec<&String> = declared.iter().collect();
+                        sample.sort();
+                        diagnostics.push(
+                            crate::error::ParseError::new(
+                                ErrorCode::E4001,
+                                format!(
+                                    "workflow invocation '{inv}' has no declared output '{out_name}'"
+                                ),
+                            )
+                            .with_source(location.clone())
+                            .with_hint(format!(
+                                "declared outputs for '{inv}': {}",
+                                sample
+                                    .into_iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )),
+                        );
+                    }
+                }
+            }
+        }
         "inputs" => {
             if parts.len() > 1 && !ctx.inputs.contains_key(parts[1]) {
                 diagnostics.push(

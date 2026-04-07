@@ -10,7 +10,8 @@
 		ProjectVariable,
 		Run,
 		StoredSecret,
-		UpdatePipelineInput
+		UpdatePipelineInput,
+		WorkflowDiagnosticItem
 	} from '$api/types';
 	import { formatRelativeTime, truncateId } from '$utils/format';
 	import {
@@ -93,6 +94,12 @@
 	let runsPerPage = $state('20');
 	let runsListOffset = $state(0);
 	let runsHasMore = $state(false);
+
+	let workflowDiagnostics = $state<WorkflowDiagnosticItem[]>([]);
+	let wfDiagLoading = $state(false);
+	let wfDiagError = $state<string | null>(null);
+
+	const workflowTriggerBlocked = $derived(workflowDiagnostics.some((d) => d.blocking));
 
 	let projectVariablesAll = $state<ProjectVariable[]>([]);
 	let variablesLoading = $state(false);
@@ -235,6 +242,22 @@
 		loadPipeline();
 	});
 
+	async function loadWorkflowDiagnostics() {
+		const p = pipeline;
+		if (!p) return;
+		wfDiagLoading = true;
+		wfDiagError = null;
+		try {
+			workflowDiagnostics = await apiMethods.pipelines.workflowDiagnostics(p.id);
+		} catch (e) {
+			wfDiagError =
+				e instanceof Error ? e.message : 'Could not load reusable workflow diagnostics';
+			workflowDiagnostics = [];
+		} finally {
+			wfDiagLoading = false;
+		}
+	}
+
 	async function loadPipeline() {
 		loading = true;
 		error = null;
@@ -243,6 +266,7 @@
 			runsListOffset = 0;
 			pipeline = await apiMethods.pipelines.get(pipelineId);
 			await loadRuns({ offset: 0 });
+			await loadWorkflowDiagnostics();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load pipeline';
 		} finally {
@@ -613,6 +637,7 @@
 		try {
 			const updated = await apiMethods.pipelines.syncFromGit(pipeline.id, {});
 			pipeline = updated;
+			await loadWorkflowDiagnostics();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to sync from Git';
 		} finally {
@@ -729,7 +754,15 @@
 					<Edit class="h-4 w-4" />
 					Edit
 				</Button>
-				<Button variant="primary" onclick={triggerPipeline} loading={triggerLoading}>
+				<Button
+					variant="primary"
+					onclick={triggerPipeline}
+					loading={triggerLoading}
+					disabled={workflowTriggerBlocked || wfDiagLoading}
+					title={workflowTriggerBlocked
+						? 'Fix workflow catalog issues before running'
+						: undefined}
+				>
 					<Play class="h-4 w-4" />
 					Run Pipeline
 				</Button>
@@ -741,6 +774,39 @@
 		<Alert variant="error" title="Error" dismissible ondismiss={() => (error = null)}>
 			{error}
 		</Alert>
+	{/if}
+
+	{#if !loading && pipeline && (wfDiagError || (!wfDiagLoading && workflowDiagnostics.length > 0))}
+		{#if wfDiagError}
+			<Alert variant="warning" title="Workflow diagnostics unavailable">
+				{wfDiagError}
+			</Alert>
+		{:else if workflowTriggerBlocked}
+			<Alert variant="warning" title="Reusable workflows block runs" dismissible={false}>
+				<p class="mb-2 text-sm">
+					Resolve catalog approval, trust, or missing versions (or adjust org policy) before
+					triggering.
+				</p>
+				<ul class="list-inside list-disc space-y-1 text-sm text-[var(--text-secondary)]">
+					{#each workflowDiagnostics.filter((d) => d.blocking) as d}
+						<li>
+							<strong class="text-[var(--text-primary)]">{d.invocation_id}</strong>
+							({d.reference}): {d.status}{#if d.detail} — {d.detail}{/if}
+						</li>
+					{/each}
+				</ul>
+				<p class="mt-2 text-sm">
+					<a href="/workflows" class="text-primary-600 underline hover:no-underline"
+						>Open workflow catalog</a
+					>
+				</p>
+			</Alert>
+		{:else}
+			<Alert variant="success" title="Reusable workflows OK">
+				All <code class="rounded bg-[var(--bg-tertiary)] px-1">{workflowDiagnostics.length}</code> workflow
+				reference(s) in this pipeline resolve for the current org policy.
+			</Alert>
+		{/if}
 	{/if}
 
 	{#if !loading && pipeline}
@@ -820,7 +886,15 @@
 						title="No runs yet"
 						description="Trigger this pipeline to start your first run."
 					>
-						<Button variant="primary" onclick={triggerPipeline} loading={triggerLoading}>
+						<Button
+							variant="primary"
+							onclick={triggerPipeline}
+							loading={triggerLoading}
+							disabled={workflowTriggerBlocked || wfDiagLoading}
+							title={workflowTriggerBlocked
+								? 'Fix workflow catalog issues before running'
+								: undefined}
+						>
 							<Play class="h-4 w-4" />
 							Run Pipeline
 						</Button>

@@ -37,6 +37,8 @@ pub mod variables;
 pub mod webhooks;
 pub mod websocket;
 pub mod workflows;
+pub mod workflows_catalog;
+pub mod admin_workflows;
 
 /// Build the complete API router with all middleware.
 pub fn build_router(state: AppState) -> Router {
@@ -67,6 +69,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(stored_secrets::router())
         .merge(variables::router())
         .merge(workflows::router())
+        .merge(workflows_catalog::router())
         .merge(debug::router())
         .merge(artifacts::router())
         .merge(webhooks::router())

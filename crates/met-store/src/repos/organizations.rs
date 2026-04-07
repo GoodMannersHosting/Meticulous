@@ -28,7 +28,7 @@ impl<'a> OrganizationRepo<'a> {
             r#"
             INSERT INTO organizations (id, name, slug, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $4)
-            RETURNING id, name, slug, created_at, updated_at, deleted_at
+            RETURNING id, name, slug, created_at, updated_at, deleted_at, allow_untrusted_workflows
             "#,
         )
         .bind(id.as_uuid())
@@ -45,7 +45,7 @@ impl<'a> OrganizationRepo<'a> {
     pub async fn get(&self, id: OrganizationId) -> Result<Organization> {
         sqlx::query_as::<_, Organization>(
             r#"
-            SELECT id, name, slug, created_at, updated_at, deleted_at
+            SELECT id, name, slug, created_at, updated_at, deleted_at, allow_untrusted_workflows
             FROM organizations
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -60,7 +60,7 @@ impl<'a> OrganizationRepo<'a> {
     pub async fn get_by_slug(&self, slug: &str) -> Result<Organization> {
         sqlx::query_as::<_, Organization>(
             r#"
-            SELECT id, name, slug, created_at, updated_at, deleted_at
+            SELECT id, name, slug, created_at, updated_at, deleted_at, allow_untrusted_workflows
             FROM organizations
             WHERE slug = $1 AND deleted_at IS NULL
             "#,
@@ -75,7 +75,7 @@ impl<'a> OrganizationRepo<'a> {
     pub async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Organization>> {
         let orgs = sqlx::query_as::<_, Organization>(
             r#"
-            SELECT id, name, slug, created_at, updated_at, deleted_at
+            SELECT id, name, slug, created_at, updated_at, deleted_at, allow_untrusted_workflows
             FROM organizations
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC
@@ -99,17 +99,23 @@ impl<'a> OrganizationRepo<'a> {
         let existing = self.get(id).await?;
 
         let name = input.name.as_ref().unwrap_or(&existing.name);
+        let allow_untrusted = input
+            .allow_untrusted_workflows
+            .unwrap_or(existing.allow_untrusted_workflows);
 
         let org = sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations
-            SET name = $2, updated_at = NOW()
+            SET name = $2,
+                allow_untrusted_workflows = $3,
+                updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
-            RETURNING id, name, slug, created_at, updated_at, deleted_at
+            RETURNING id, name, slug, created_at, updated_at, deleted_at, allow_untrusted_workflows
             "#,
         )
         .bind(id.as_uuid())
         .bind(name)
+        .bind(allow_untrusted)
         .fetch_one(self.pool)
         .await?;
 

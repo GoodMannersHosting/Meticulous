@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
+base64 = { workspace = true }
 met-core = { workspace = true }
 met-store = { workspace = true }
 met-proto = { workspace = true }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use met_core::ids::{AgentId, JobId, JobRunId, RunId, StepRunId};
+use std::collections::hash_map::Entry;
 use met_core::models::{JobStatus, RunStatus};
 use tokio::sync::RwLock;
 
@@ -79,6 +80,8 @@ struct RunStateInner {
     pending_jobs: RwLock<HashSet<JobId>>,
     running_jobs: RwLock<HashSet<JobId>>,
     cancellation_requested: RwLock<bool>,
+    /// First successful dispatch pins `(affinity group string) -> agent` for the lifetime of the run.
+    affinity_pins: RwLock<HashMap<String, AgentId>>,
 }
 
 impl RunState {
@@ -97,7 +100,39 @@ impl RunState {
                 pending_jobs: RwLock::new(HashSet::new()),
                 running_jobs: RwLock::new(HashSet::new()),
                 cancellation_requested: RwLock::new(false),
+                affinity_pins: RwLock::new(HashMap::new()),
             }),
+        }
+    }
+
+    /// Resolved agent for an affinity group, if already pinned.
+    pub async fn get_affinity_pin(&self, group: &str) -> Option<AgentId> {
+        self.inner.affinity_pins.read().await.get(group).copied()
+    }
+
+    /// After a successful dispatch, record or verify the affinity pin for this group.
+    pub async fn ensure_affinity_pin(
+        &self,
+        group: impl Into<String>,
+        agent: AgentId,
+    ) -> Result<(), crate::error::EngineError> {
+        let group = group.into();
+        let mut pins = self.inner.affinity_pins.write().await;
+        match pins.entry(group) {
+            Entry::Vacant(e) => {
+                e.insert(agent);
+                Ok(())
+            }
+            Entry::Occupied(e) => {
+                if *e.get() == agent {
+                    Ok(())
+                } else {
+                    Err(crate::error::EngineError::Internal(format!(
+                        "affinity group {:?} pinned to a different agent than dispatch target",
+                        e.key()
+                    )))
+                }
+            }
         }
     }
 

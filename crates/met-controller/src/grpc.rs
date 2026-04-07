@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use met_core::hash_join_token;
 use met_core::ids::{AgentId, JobRunId, OrganizationId, ProjectId, RunId, StepId, StepRunId};
 use met_core::models::{
@@ -26,7 +27,8 @@ use met_secrets::BuiltinStoredCrypto;
 use met_objstore::ObjectStore;
 use met_store::repos::{
     reenroll_agent_with_exhausted_join_token, register_agent_with_join_token, AgentHeartbeatRepo,
-    AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, ProjectRepo, StepRunRepo,
+    AgentRepo,     JobRunRepo, JoinTokenRepo, LogCacheRepo, PipelineRunWorkflowOutputsRepo, ProjectRepo,
+    StepRunRepo,
 };
 use met_store::PgPool;
 use sha2::{Digest, Sha256};
@@ -846,6 +848,48 @@ impl AgentService for AgentServiceImpl {
                         }
                     }
 
+                    if let Some(ref wo) = update.workflow_invocation_outputs {
+                        if !wo.workflow_invocation_id.is_empty() {
+                            let mut public_map = serde_json::Map::new();
+                            for (k, v) in &wo.public {
+                                public_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                            }
+                            let mut secret_map = serde_json::Map::new();
+                            for s in &wo.secrets {
+                                let mut packed = Vec::new();
+                                packed.extend_from_slice(&s.ephemeral_x25519_public);
+                                packed.extend_from_slice(&s.nonce);
+                                packed.extend_from_slice(&s.ciphertext);
+                                secret_map.insert(
+                                    s.name.clone(),
+                                    serde_json::Value::String(STANDARD.encode(&packed)),
+                                );
+                            }
+                            if let Err(e) = PipelineRunWorkflowOutputsRepo::new(self.pool.as_ref())
+                                .upsert_merge(
+                                    job_row.run_id.as_uuid(),
+                                    &wo.workflow_invocation_id,
+                                    job_row.id.as_uuid(),
+                                    serde_json::Value::Object(public_map),
+                                    serde_json::Value::Object(secret_map),
+                                )
+                                .await
+                            {
+                                warn!(
+                                    error = %e,
+                                    job_run_id = %job_run_id,
+                                    "failed to persist workflow invocation outputs"
+                                );
+                            }
+                        }
+                    }
+
+                    let workflow_completion_proto = update
+                        .workflow_invocation_outputs
+                        .as_ref()
+                        .map(|w| vec![w.clone()])
+                        .unwrap_or_default();
+
                     match job_run_repo.get_pipeline_context(job_run_id).await {
                         Ok(Some(ctx)) => {
                             let org_id = OrganizationId::from_uuid(ctx.org_id);
@@ -872,6 +916,7 @@ impl AgentService for AgentServiceImpl {
                                     seconds: ts.timestamp(),
                                     nanos: ts.timestamp_subsec_nanos() as i32,
                                 }),
+                                workflow_outputs: workflow_completion_proto,
                                 ..Default::default()
                             };
                             if let Err(e) = self

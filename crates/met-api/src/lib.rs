@@ -18,6 +18,7 @@ pub mod middleware;
 pub mod openapi;
 pub mod pipeline_execution;
 pub mod routes;
+pub mod workflow_diagnostics;
 pub mod scheduling_hints;
 pub mod state;
 

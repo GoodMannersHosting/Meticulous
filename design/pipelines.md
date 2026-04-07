@@ -59,3 +59,34 @@ workflows:
       image_tag: "${REGISTRY}/${CONTAINER}"
     depends-on: [dbap]
 ```
+
+## Agent affinity and shared workspace (checkout → build)
+
+Use pipeline-level **`agent-affinity`** so workflow invocations in the same **affinity group** run on the same agent. With **`share-workspace: true`**, those jobs reuse one workspace directory for the run (so a checkout job can leave sources on disk for a downstream build). The parser requires a **total order** via **`depends-on`** among jobs that share a workspace—no concurrent jobs in the same group.
+
+Optional per-invocation override: **`affinity-group`**.
+
+Ephemeral agents using **`MET_AGENT_EXIT_AFTER_JOBS=1`**: the engine sets **`suppress_exit_after_jobs_increment`** on dispatches until the last job in the affinity group completes, so the process stays up for the chained jobs.
+
+Example:
+
+```yaml
+name: ci
+agent-affinity:
+  default-group: linux-build
+  share-workspace: true
+workflows:
+  - id: checkout
+    workflow: global/git-checkout
+    version: "1.0.0"
+  - id: image
+    workflow: global/docker-build
+    version: "2.0.0"
+    depends-on: [checkout]
+```
+
+Workflows should use paths compatible with a shared root (e.g. checkout to `.` or honor `METICULOUS_WORKSPACE`).
+
+## Workflow invocation outputs
+
+For `met-output`, IPC limits, `${{ workflows.<id>.outputs.<name> }}`, and when secret outputs may flow into dependent job environment, see [workflow-invocation-outputs.md](workflow-invocation-outputs.md).

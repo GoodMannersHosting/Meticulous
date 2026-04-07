@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
@@ -181,10 +181,56 @@ impl ExecutionBackend for NativeBackend {
             command.env(key, value);
         }
 
+        // Anonymous pipe: child receives write end as FD 3 (`METICULOUS_OUTPUT_FD`); parent reads until EOF.
+        // (FIFO O_RDWR avoids open deadlock but never signals EOF on read — see workflow-invocation-outputs.md.)
+        #[cfg(unix)]
+        let ipc_ends: Option<(std::fs::File, std::os::fd::OwnedFd)> = {
+            use nix::fcntl::OFlag;
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+
+            let (read_pipe, write_pipe) = nix::unistd::pipe2(OFlag::O_CLOEXEC).map_err(|e| {
+                AgentError::ProcessExecution(format!("output ipc pipe: {e}"))
+            })?;
+            let r = read_pipe.as_raw_fd();
+            let w = write_pipe.as_raw_fd();
+            command.env("METICULOUS_OUTPUT_FD", "3");
+            command.env_remove("METICULOUS_OUTPUT_PATH");
+            #[allow(unsafe_code)]
+            unsafe {
+                command.as_std_mut().pre_exec(move || {
+                    if libc::dup2(w, 3) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::close(w) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::close(r) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let rf = std::fs::File::from(read_pipe);
+            Some((rf, write_pipe))
+        };
+        #[cfg(not(unix))]
+        let ipc_ends: Option<()> = None;
+
         // Spawn the process
         let mut child = command.spawn().map_err(|e| {
             AgentError::ProcessExecution(format!("failed to spawn process: {e}"))
         })?;
+
+        #[cfg(unix)]
+        let mut ipc_read_file = if let Some((read_f, write_fd)) = ipc_ends {
+            drop(write_fd);
+            Some(read_f)
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        let mut ipc_read_file: Option<std::fs::File> = None;
 
         // Get the PID and start process watching
         let pid = child.id().unwrap_or(0);
@@ -310,12 +356,22 @@ impl ExecutionBackend for NativeBackend {
             "step completed"
         );
 
+        let mut output_ipc_bytes = Vec::new();
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            if let Some(mut f) = ipc_read_file.take() {
+                let _ = f.read_to_end(&mut output_ipc_bytes);
+            }
+        }
+
         Ok(StepResult {
             exit_code,
             duration,
             executed_binaries: metadata.executed_binaries,
             processes_spawned: metadata.total_processes_spawned,
             execution_tree_depth: metadata.execution_tree_depth,
+            output_ipc_bytes,
         })
     }
 
@@ -332,6 +388,7 @@ impl ExecutionBackend for NativeBackend {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_native_backend_echo() {

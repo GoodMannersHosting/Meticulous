@@ -49,6 +49,7 @@
 //! let result = engine.execute(pipeline_ir, "manual").await?;
 //! ```
 
+pub mod affinity;
 pub mod artifacts;
 pub mod cache;
 pub mod cel;
@@ -73,6 +74,8 @@ pub use log_streaming::{LogChunk, LogStreamRelay};
 pub use persistence::{JobRunSourceRefs, MemoryRunPersistence, PostgresRunPersistence, RunPersistence};
 pub use retry::{RetryExecutor, RetryPolicy, RetryState};
 pub use scheduler::{JobCompletionNotification, JobDispatchMessage, Scheduler, SchedulerConfig, StepDispatch};
+
+mod output_crypto;
 pub use secrets::SecretEncryption;
 pub use state::{JobState, RunState, StepState};
 
@@ -441,7 +444,8 @@ pub(crate) fn parse_completion_message(payload: &[u8]) -> Result<JobCompletionNo
             Some(proto.error_message)
         },
         duration_ms: proto.duration_ms as u64,
-        outputs: indexmap::IndexMap::new(),
+        outputs: proto.outputs.into_iter().collect(),
+        workflow_outputs: proto.workflow_outputs,
     })
 }
 
@@ -461,6 +465,7 @@ mod tests {
             secret_refs: Default::default(),
             jobs: Vec::new(),
             default_pool_selector: None,
+            expose_workflow_secret_outputs: false,
         };
 
         let order = topological_order(&pipeline).unwrap();

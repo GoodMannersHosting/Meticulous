@@ -43,6 +43,8 @@ pub struct StepResult {
     pub executed_binaries: Vec<ExecutedBinaryRecord>,
     pub processes_spawned: u64,
     pub execution_tree_depth: u32,
+    /// Raw `met-output` IPC bytes captured for this step (native Unix with `METICULOUS_OUTPUT_FD`).
+    pub output_ipc_bytes: Vec<u8>,
 }
 
 impl StepResult {
@@ -54,6 +56,7 @@ impl StepResult {
             executed_binaries: Vec::new(),
             processes_spawned: 0,
             execution_tree_depth: 0,
+            output_ipc_bytes: Vec::new(),
         }
     }
 }
