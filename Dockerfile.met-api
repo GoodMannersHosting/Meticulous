@@ -18,7 +18,10 @@
 # ==============================================================================
 FROM docker.io/rust:1.91.1-slim-bookworm AS builder
 
+# curl: utoipa-swagger-ui build script fetches Swagger UI (reqwest feature not enabled on this crate).
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
