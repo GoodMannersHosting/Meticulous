@@ -4952,6 +4952,7 @@
       "JobLogLine": {
         "type": "object",
         "required": [
+          "sequence",
           "run_id",
           "job_run_id",
           "line",
@@ -4959,6 +4960,10 @@
           "timestamp"
         ],
         "properties": {
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
           "job_run_id": {
             "type": "string"
           },

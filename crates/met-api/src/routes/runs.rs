@@ -800,6 +800,8 @@ pub struct LogsQuery {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct JobLogLine {
+    /// Monotonic per job run (stable key for clients / virtualization).
+    pub sequence: i64,
     pub run_id: String,
     pub job_run_id: String,
     pub step_run_id: Option<String>,
@@ -874,6 +876,7 @@ async fn get_job_logs(
     let lines: Vec<JobLogLine> = taken
         .iter()
         .map(|e| JobLogLine {
+            sequence: e.sequence,
             run_id: e.run_id.to_string(),
             job_run_id: e.job_run_id.to_string(),
             // Match `StepRunId` JSON everywhere else (`srun_<uuid>`), not bare `Uuid::to_string()`.

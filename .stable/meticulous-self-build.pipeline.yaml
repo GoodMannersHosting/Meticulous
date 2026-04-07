@@ -4,7 +4,7 @@
 # Import catalog workflows first; set pipeline secrets: GITHUB_TOKEN (or catalog credential),
 # REGISTRY_USERNAME / REGISTRY_PASSWORD (global/docker-buildx-push and global/trivy-scan read these env names).
 # Map them to your Harbor robot credentials via stored: name — do not rename to HARBOR_* or login will not see them.
-# Trivy on PATH (global/trivy-scan ≥ 1.1.1), and git for checkout.
+# Trivy on PATH (global/trivy-scan ≥ 1.1.2), and git for checkout.
 #
 # share-workspace + agent-affinity require a total depends-on order (no concurrent jobs in the group).
 # Flow per image: push then Trivy image scan + CycloneDX → sbom.cdx.json; the agent uploads that file
@@ -54,7 +54,7 @@ workflows:
   - name: Trivy scan met-agent (SBOM)
     id: scan-agent
     workflow: global/trivy-scan
-    version: "1.1.1"
+    version: "1.1.2"
     depends-on: [push-agent]
     inputs:
       mode: image
@@ -74,7 +74,7 @@ workflows:
   - name: Trivy scan met-api (SBOM)
     id: scan-api
     workflow: global/trivy-scan
-    version: "1.1.1"
+    version: "1.1.2"
     depends-on: [push-api]
     inputs:
       mode: image
@@ -94,7 +94,7 @@ workflows:
   - name: Trivy scan met-controller (SBOM)
     id: scan-controller
     workflow: global/trivy-scan
-    version: "1.1.1"
+    version: "1.1.2"
     depends-on: [push-controller]
     inputs:
       mode: image
@@ -114,7 +114,7 @@ workflows:
   - name: Trivy scan sqlx-migrate (SBOM)
     id: scan-sqlx-migrate
     workflow: global/trivy-scan
-    version: "1.1.1"
+    version: "1.1.2"
     depends-on: [push-sqlx-migrate]
     inputs:
       mode: image

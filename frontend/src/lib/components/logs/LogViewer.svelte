@@ -12,7 +12,7 @@
 	export interface LogViewerProps {
 		runId: string;
 		jobRunId: string;
-		/** When running/queued, logs are polled periodically (live WebSocket hub is not wired yet). */
+		/** Polls while running/queued; merges incremental pages so the view does not flash. WebSocket lines merge when connected. */
 		jobStatus?: string;
 		/** When set, only log lines whose timestamps fall in [startIso, endIso] are shown (best-effort for multi-dispatch jobs). */
 		logTimeFilter?: LogTimeFilter | null;
@@ -68,7 +68,7 @@
 	}
 
 	function scrollToBottomIfFollowing() {
-		if (!browser || !logContainer || !autoScroll || !jobIsLive()) return;
+		if (!browser || !logContainer || !autoScroll) return;
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
 				if (logContainer) {
@@ -76,6 +76,34 @@
 				}
 			});
 		});
+	}
+
+	/** Stable {#each} key: DB sequence when present; else hash of content (WS / legacy). */
+	function lineStableKey(line: LogLinePayload): string {
+		if (line.sequence != null && Number.isFinite(line.sequence)) {
+			return `seq:${line.sequence}`;
+		}
+		let h = 5381;
+		const s = `${line.timestamp}\0${line.level}\0${line.step_run_id ?? ''}\0${line.line}`;
+		for (let i = 0; i < s.length; i++) {
+			h = ((h << 5) + h) ^ s.charCodeAt(i);
+		}
+		return `h:${line.job_run_id}:${h >>> 0}`;
+	}
+
+	function mergeAppendBySequence(base: LogLinePayload[], incoming: LogLinePayload[]): LogLinePayload[] {
+		const seen = new Set(
+			base.map((l) => l.sequence).filter((n): n is number => n != null && Number.isFinite(n))
+		);
+		const out = [...base];
+		for (const l of incoming) {
+			if (l.sequence != null && Number.isFinite(l.sequence)) {
+				if (seen.has(l.sequence)) continue;
+				seen.add(l.sequence);
+			}
+			out.push(l);
+		}
+		return out;
 	}
 
 	/**
@@ -197,7 +225,15 @@
 		run: string
 	): LogLinePayload[] {
 		if (data.lines && data.lines.length > 0) {
-			return data.lines;
+			return data.lines.map((l) => ({
+				sequence: l.sequence,
+				run_id: l.run_id,
+				job_run_id: l.job_run_id,
+				step_run_id: l.step_run_id,
+				line: l.line,
+				level: l.level,
+				timestamp: l.timestamp
+			}));
 		}
 		const raw = data.content?.trim();
 		if (!raw) return [];
@@ -223,16 +259,17 @@
 			jobStatus === 'queued' ||
 			jobStatus === 'pending';
 
-		void loadLogs(false);
+		void loadLogsInitial();
 		subscribeToLogs();
 
 		if (active) {
-			poll = setInterval(() => void loadLogs(true), 2000);
+			poll = setInterval(() => void loadLogsPoll(), 2000);
 		}
 
 		return () => {
 			if (wsUnsubscribe) {
 				wsUnsubscribe();
+				wsUnsubscribe = null;
 			}
 			if (poll) clearInterval(poll);
 		};
@@ -242,9 +279,9 @@
 		hasUnscopedLogLines = lines.some((l) => !l.step_run_id?.trim());
 	});
 
-	/** While the job is live, keep the viewport pinned to the newest lines whenever content updates. */
+	/** Keep the viewport pinned when following (live or after End / ↓). */
 	$effect(() => {
-		if (loading) return;
+		if (loading && lines.length === 0) return;
 		void lines.length;
 		void stepLogFilter;
 		void logTimeFilter?.startIso;
@@ -252,23 +289,53 @@
 		scrollToBottomIfFollowing();
 	});
 
-	async function loadLogs(silent: boolean) {
-		if (!silent) {
-			loading = true;
-			error = null;
+	const MAX_LOG_PAGES = 200;
+
+	async function loadLogPagesFrom(offset: number): Promise<LogLinePayload[]> {
+		const acc: LogLinePayload[] = [];
+		let o = offset;
+		for (let page = 0; page < MAX_LOG_PAGES; page++) {
+			const response = await apiMethods.runs.logs(runId, jobRunId, {
+				offset: o,
+				limit: 10000
+			});
+			const batch = normalizeLogResponse(response, jobRunId, runId);
+			acc.push(...batch);
+			if (!response.has_more || batch.length === 0) break;
+			o += batch.length;
 		}
+		return acc;
+	}
+
+	async function loadLogsInitial() {
+		loading = true;
+		error = null;
 		try {
-			const response = await apiMethods.runs.logs(runId, jobRunId);
-			lines = normalizeLogResponse(response, jobRunId, runId);
+			lines = await loadLogPagesFrom(0);
 		} catch (e) {
-			if (!silent) {
-				error = e instanceof Error ? e.message : 'Failed to load logs';
-				lines = [];
-			}
+			error = e instanceof Error ? e.message : 'Failed to load logs';
+			lines = [];
 		} finally {
-			if (!silent) loading = false;
+			loading = false;
 		}
+		autoScroll = true;
 		scrollToBottomIfFollowing();
+	}
+
+	async function loadLogsPoll() {
+		try {
+			const offset = lines.length;
+			const response = await apiMethods.runs.logs(runId, jobRunId, {
+				offset,
+				limit: 10000
+			});
+			const batch = normalizeLogResponse(response, jobRunId, runId);
+			if (batch.length === 0) return;
+			lines = mergeAppendBySequence(lines, batch);
+			scrollToBottomIfFollowing();
+		} catch {
+			/* ignore transient poll failures */
+		}
 	}
 
 	function subscribeToLogs() {
@@ -277,7 +344,7 @@
 
 		wsUnsubscribe = ws.on<LogLinePayload>('log_line', (message) => {
 			if (message.payload.job_run_id === jobRunId) {
-				lines = [...lines, message.payload];
+				lines = mergeAppendBySequence(lines, [message.payload]);
 				scrollToBottomIfFollowing();
 			}
 		});
@@ -294,7 +361,18 @@
 	function handleScroll() {
 		if (logContainer) {
 			const { scrollTop, scrollHeight, clientHeight } = logContainer;
-			autoScroll = scrollHeight - scrollTop - clientHeight < 50;
+			const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+			autoScroll = distanceFromBottom < 80;
+		}
+	}
+
+	function onLogContainerKeydown(e: KeyboardEvent) {
+		const goEnd =
+			e.key === 'End' ||
+			(e.key === 'ArrowDown' && (e.ctrlKey || e.metaKey));
+		if (goEnd && !e.altKey) {
+			e.preventDefault();
+			scrollToBottom();
 		}
 	}
 
@@ -388,6 +466,9 @@
 					{#if linesAfterScope.length !== lines.length}
 						<span class="text-zinc-500"> · {linesAfterScope.length} shown</span>
 					{/if}
+					{#if !autoScroll}
+						<span class="text-zinc-500"> · paused — End or ↓ to follow</span>
+					{/if}
 				</span>
 			</div>
 
@@ -447,12 +528,21 @@
 		</div>
 	</div>
 
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 	<div
 		bind:this={logContainer}
 		onscroll={handleScroll}
-		class="min-h-0 flex-1 overflow-auto bg-zinc-950 font-mono text-xs"
+		onkeydown={onLogContainerKeydown}
+		onmousedown={() => logContainer?.focus()}
+		tabindex="0"
+		role="log"
+		aria-live="polite"
+		aria-relevant="additions"
+		aria-label="Build log output"
+		class="min-h-0 flex-1 overflow-auto bg-zinc-950 font-mono text-xs outline-none focus-visible:ring-1 focus-visible:ring-sky-500/50"
 	>
-		{#if loading}
+		{#if loading && lines.length === 0}
 			<div class="space-y-1 p-4">
 				{#each Array(20) as _, i (i)}
 					<div class="h-4 animate-pulse rounded bg-zinc-800" style="width: {50 + Math.random() * 50}%"></div>
@@ -472,7 +562,7 @@
 			</div>
 		{:else}
 			<div class="p-2">
-				{#each filteredLines as row (row.lineNo)}
+				{#each filteredLines as row (lineStableKey(row.line))}
 					<div class="group flex min-h-0 hover:bg-zinc-900/70">
 						<span
 							class="w-14 flex-shrink-0 select-none pr-2 text-right tabular-nums text-zinc-500 group-hover:text-zinc-400"

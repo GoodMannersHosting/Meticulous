@@ -547,8 +547,8 @@
 	<title>Run #{run?.run_number ?? ''} | Meticulous</title>
 </svelte:head>
 
-<div class="space-y-6">
-	<div class="flex items-start gap-4">
+<div class="flex min-h-0 flex-1 flex-col gap-6">
+	<div class="flex shrink-0 items-start gap-4">
 		<Button variant="ghost" size="sm" href="/runs">
 			<ArrowLeft class="h-4 w-4" />
 		</Button>
@@ -646,21 +646,33 @@
 	</div>
 
 	{#if error}
-		<Alert variant="error" title="Error" dismissible ondismiss={() => (error = null)}>
-			{error}
-		</Alert>
+		<div class="shrink-0">
+			<Alert variant="error" title="Error" dismissible ondismiss={() => (error = null)}>
+				{error}
+			</Alert>
+		</div>
 	{/if}
 
 	{#if !loading && run}
-		<Tabs items={tabs} bind:value={activeTab} />
+		<div class="flex min-h-0 flex-1 flex-col gap-4">
+			<Tabs items={tabs} bind:value={activeTab} class="shrink-0" />
 
 		{#if activeTab === 'jobs'}
-			<div class="grid gap-6 lg:grid-cols-3 lg:items-stretch">
-				<div class="lg:col-span-1">
-					<Card padding="none">
-						<div class="border-b border-[var(--border-primary)] px-4 py-3">
+			<!-- Fills space below tabs; log lines scroll inside the card -->
+			<div
+				class="
+					grid min-h-0 gap-6 lg:grid-cols-3 lg:items-stretch lg:flex-1
+					lg:[grid-template-rows:minmax(0,1fr)]
+				"
+			>
+				<div class="flex min-h-0 flex-col lg:col-span-1">
+					<Card padding="none" class="flex min-h-0 max-h-full flex-1 flex-col overflow-hidden">
+						<div
+							class="shrink-0 border-b border-[var(--border-primary)] px-4 py-3"
+						>
 							<h3 class="font-medium text-[var(--text-primary)]">Jobs</h3>
 						</div>
+						<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 						<div class="divide-y divide-[var(--border-secondary)]">
 							{#if jobRuns.length === 0}
 								<div class="p-4 text-center text-sm text-[var(--text-secondary)]">
@@ -716,7 +728,7 @@
 							{/if}
 						</div>
 						{#if selectedJobRunId}
-							<div class="border-t border-[var(--border-primary)] bg-[var(--bg-secondary)]/25 px-3 py-3">
+							<div class="shrink-0 border-t border-[var(--border-primary)] bg-[var(--bg-secondary)]/25 px-3 py-3">
 								<p class="mb-2 text-xs font-medium text-[var(--text-secondary)]">Steps</p>
 								<p class="mb-2 text-[0.65rem] leading-snug text-[var(--text-tertiary)]">
 									Steps run in order for the selected job (see “Job · …” in the list).
@@ -791,10 +803,11 @@
 								</div>
 							</div>
 						{/if}
+						</div>
 					</Card>
 				</div>
 
-				<div class="lg:col-span-2 flex min-h-[calc(100dvh-11rem)] flex-col">
+				<div class="flex min-h-0 min-w-0 flex-col lg:col-span-2">
 					{#if selectedJobRun}
 						{@const sjdisp = jobRunDisplay(selectedJobRun)}
 						<Card padding="none" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1259,5 +1272,6 @@
 				{/if}
 			</Card>
 		{/if}
+		</div>
 	{/if}
 </div>

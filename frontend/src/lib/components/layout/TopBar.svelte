@@ -11,7 +11,7 @@
 
 <header
 	class="
-		sticky top-0 z-20
+		shrink-0
 		h-16 border-b border-[var(--border-primary)]
 		bg-[var(--bg-secondary)]/95 backdrop-blur
 	"

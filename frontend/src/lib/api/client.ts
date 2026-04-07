@@ -538,13 +538,17 @@ export const apiMethods = {
 			),
 		assignments: (runId: string, jobRunId: string) =>
 			api.get<import('./types').JobAssignment[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/assignments`),
-		logs: (runId: string, jobRunId: string) =>
+		logs: (
+			runId: string,
+			jobRunId: string,
+			params?: { offset?: number; limit?: number; stream?: string }
+		) =>
 			api.get<{
 				content?: string;
 				lines?: import('./types').LogLinePayload[];
 				offset?: number;
 				has_more?: boolean;
-			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`),
+			}>(`/api/v1/runs/${runId}/jobs/${jobRunId}/logs`, { params }),
 		jobSteps: (runId: string, jobRunId: string) =>
 			api.get<import('./types').StepRun[]>(`/api/v1/runs/${runId}/jobs/${jobRunId}/steps`)
 	},

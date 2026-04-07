@@ -14,16 +14,18 @@
 	);
 </script>
 
-<div class="min-h-screen bg-[var(--bg-primary)]">
+<div class="flex h-dvh max-h-dvh flex-col overflow-hidden bg-[var(--bg-primary)]">
 	<Sidebar />
 
 	<div
-		class="transition-[padding] duration-200 ease-out"
+		class="flex min-h-0 flex-1 flex-col overflow-hidden transition-[padding] duration-200 ease-out"
 		style="padding-left: {mainPaddingLeft};"
 	>
 		<TopBar />
 
-		<main class="px-4 py-6 sm:px-6 lg:px-8">
+		<main
+			class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-4 py-6 sm:px-6 lg:px-8"
+		>
 			{@render children?.()}
 		</main>
 	</div>

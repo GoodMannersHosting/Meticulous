@@ -650,6 +650,8 @@ export interface WsMessage<T = unknown> {
 }
 
 export interface LogLinePayload {
+	/** When present (REST logs), stable per job run for list keys and deduplication. */
+	sequence?: number;
 	run_id: string;
 	job_run_id: string;
 	step_run_id?: string;
