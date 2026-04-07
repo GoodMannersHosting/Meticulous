@@ -44,7 +44,7 @@ workflows:
   - name: Build and push met-agent
     id: push-agent
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [checkout]
     inputs:
       context_path: meticulous
@@ -64,7 +64,7 @@ workflows:
   - name: Build and push met-api
     id: push-api
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-agent]
     inputs:
       context_path: meticulous
@@ -84,7 +84,7 @@ workflows:
   - name: Build and push met-controller
     id: push-controller
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-api]
     inputs:
       context_path: meticulous
@@ -104,7 +104,7 @@ workflows:
   - name: Build and push sqlx-migrate
     id: push-sqlx-migrate
     workflow: global/docker-buildx-push
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [scan-controller]
     inputs:
       context_path: meticulous
