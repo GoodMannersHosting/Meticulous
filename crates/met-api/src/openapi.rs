@@ -45,7 +45,10 @@ use crate::routes::{
         CreateWorkflowRequest, ProjectWorkflowsAvailableResponse, WorkflowResponse,
         WorkflowVersionsResponse,
     },
-    workflows_catalog::{CatalogVersionsPage, ImportCatalogWorkflowGitRequest},
+    workflows_catalog::{
+        CatalogCommitPreview, CatalogRefItem, CatalogUpstreamRefSearchRequest,
+        CatalogUpstreamRefSearchResponse, CatalogVersionsPage, ImportCatalogWorkflowGitRequest,
+    },
 };
 use crate::workflow_diagnostics::WorkflowDiagnosticItem;
 
@@ -175,7 +178,9 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::workflows::list_versions,
         crate::routes::workflows_catalog::list_catalog_workflows,
         crate::routes::workflows_catalog::import_catalog_workflow_git_organization,
+        crate::routes::workflows_catalog::catalog_upstream_ref_search_organization,
         crate::routes::workflows_catalog::import_catalog_workflow_git,
+        crate::routes::workflows_catalog::catalog_upstream_ref_search_project,
         crate::routes::workflows_catalog::list_catalog_versions,
         crate::routes::admin_workflows::approve_catalog_workflow,
         crate::routes::admin_workflows::reject_catalog_workflow,
@@ -247,7 +252,8 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             // Workflows
             WorkflowResponse, ProjectWorkflowsAvailableResponse, CreateWorkflowRequest,
             WorkflowVersionsResponse,
-            ImportCatalogWorkflowGitRequest, CatalogVersionsPage,
+            ImportCatalogWorkflowGitRequest, CatalogVersionsPage, CatalogUpstreamRefSearchRequest,
+            CatalogUpstreamRefSearchResponse, CatalogRefItem, CatalogCommitPreview,
             WorkflowDiagnosticItem,
             AdminWorkflowOpResponse, AdminWorkflowDeleteResponse,
             // Artifacts

@@ -66,8 +66,9 @@
 				{/each}
 			</div>
 			<!-- No whitespace inside <code>: it would become a text node and indent the first line. -->
+			<!-- github-dark.min.css sets `pre code.hljs { padding: 1em }` which misaligns the gutter -->
 			<pre
-				class="m-0 min-w-0 flex-1 whitespace-pre py-1.5 pl-1 pr-2 font-mono {LINE_STYLE} text-[#e6edf3] [&_.hljs]:!bg-transparent"
+				class="m-0 min-w-0 flex-1 whitespace-pre py-1.5 pl-1 pr-2 font-mono {LINE_STYLE} text-[#e6edf3] [&_.hljs]:!bg-transparent [&_code.hljs]:!m-0 [&_code.hljs]:!p-0"
 			><code class="hljs language-{language}">{#if html}{@html html}{:else}{source}{/if}</code></pre>
 		</div>
 	{/if}

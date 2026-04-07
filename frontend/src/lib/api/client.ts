@@ -420,6 +420,30 @@ export const apiMethods = {
 			credentials_path: string;
 		}) =>
 			api.post<import('./types').CatalogWorkflow>('/api/v1/workflows/catalog/import-git', body),
+		/** List branches/tags (and optional recent commits) for catalog sync. Org: `org:admin`. */
+		upstreamRefSearchOrganization: (body: {
+			repository: string;
+			credentials_path: string;
+			q?: string;
+			commits_for_ref?: string;
+		}) =>
+			api.post<import('./types').CatalogUpstreamRefSearchResponse>(
+				'/api/v1/workflows/catalog/upstream-ref-search',
+				body
+			),
+		upstreamRefSearchProject: (
+			projectId: string,
+			body: {
+				repository: string;
+				credentials_path: string;
+				q?: string;
+				commits_for_ref?: string;
+			}
+		) =>
+			api.post<import('./types').CatalogUpstreamRefSearchResponse>(
+				`/api/v1/projects/${projectId}/workflows/catalog/upstream-ref-search`,
+				body
+			),
 		importGit: (
 			projectId: string,
 			body: {

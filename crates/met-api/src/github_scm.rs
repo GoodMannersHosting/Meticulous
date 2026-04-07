@@ -16,6 +16,7 @@ use met_store::PgPool;
 use met_store::repos::BuiltinSecretCipherRow;
 use met_store::repos::{BuiltinSecretsRepo, CreateWorkflow, StoredSecretKind, WorkflowRepo};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::instrument;
 
 use crate::error::{ApiError, ApiResult};
@@ -185,6 +186,149 @@ pub async fn resolve_github_commit_sha(
     let parsed: CommitResp = serde_json::from_str(&body)
         .map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))?;
     Ok(parsed.sha)
+}
+
+/// List branches (`name` + tip SHA), first page only (`per_page` max 100).
+#[instrument(skip(token), fields(owner = %owner, repo = %repo))]
+pub async fn list_github_branches(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    api_base: &str,
+    per_page: u32,
+) -> ApiResult<Vec<(String, String)>> {
+    #[derive(Deserialize)]
+    struct Row {
+        name: String,
+        commit: Tip,
+    }
+    #[derive(Deserialize)]
+    struct Tip {
+        sha: String,
+    }
+
+    let base = api_base.trim_end_matches('/');
+    let cap = per_page.clamp(1, 100);
+    let url = format!(
+        "{base}/repos/{owner}/{repo}/branches?per_page={cap}"
+    );
+    github_get_json_array::<Row>(token, &url).await.map(|rows| {
+        rows.into_iter()
+            .map(|r| (r.name, r.commit.sha))
+            .collect()
+    })
+}
+
+/// List tags (`name` + object SHA), first page only (`per_page` max 100).
+#[instrument(skip(token), fields(owner = %owner, repo = %repo))]
+pub async fn list_github_tags(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    api_base: &str,
+    per_page: u32,
+) -> ApiResult<Vec<(String, String)>> {
+    #[derive(Deserialize)]
+    struct Row {
+        name: String,
+        commit: Tip,
+    }
+    #[derive(Deserialize)]
+    struct Tip {
+        sha: String,
+    }
+
+    let base = api_base.trim_end_matches('/');
+    let cap = per_page.clamp(1, 100);
+    let url = format!("{base}/repos/{owner}/{repo}/tags?per_page={cap}");
+    github_get_json_array::<Row>(token, &url).await.map(|rows| {
+        rows.into_iter()
+            .map(|r| (r.name, r.commit.sha))
+            .collect()
+    })
+}
+
+/// Recent commits on `git_ref` (branch, tag, or SHA), first page only.
+#[instrument(skip(token), fields(owner = %owner, repo = %repo))]
+pub async fn list_github_commits(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    git_ref: &str,
+    api_base: &str,
+    per_page: u32,
+) -> ApiResult<Vec<(String, String, Option<String>)>> {
+    #[derive(Deserialize)]
+    struct Row {
+        sha: String,
+        commit: CommitBody,
+    }
+    #[derive(Deserialize)]
+    struct CommitBody {
+        message: Option<String>,
+        author: Option<Author>,
+    }
+    #[derive(Deserialize)]
+    struct Author {
+        date: Option<String>,
+    }
+
+    let base = api_base.trim_end_matches('/');
+    let cap = per_page.clamp(1, 100);
+    let url = format!(
+        "{base}/repos/{owner}/{repo}/commits?sha={}&per_page={cap}",
+        urlencoding::encode(git_ref)
+    );
+    let rows = github_get_json_array::<Row>(token, &url).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let title = r
+                .commit
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let at = r.commit.author.and_then(|a| a.date);
+            (r.sha, title, at)
+        })
+        .collect())
+}
+
+async fn github_get_json_array<T: DeserializeOwned>(
+    token: &str,
+    url: &str,
+) -> ApiResult<Vec<T>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let resp = client
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, "meticulous-control-plane")
+        .send()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("GitHub API request: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ApiError::bad_request(format!(
+            "GitHub API {}: {}",
+            status.as_u16(),
+            body.chars().take(400).collect::<String>()
+        )));
+    }
+
+    serde_json::from_str::<Vec<T>>(&body)
+        .map_err(|e| ApiError::bad_request(format!("GitHub JSON: {e}")))
 }
 
 /// Fetch a repository file via the GitHub JSON Contents API (includes blob SHA).

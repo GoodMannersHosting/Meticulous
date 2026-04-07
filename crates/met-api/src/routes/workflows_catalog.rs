@@ -33,8 +33,16 @@ pub fn router() -> Router<AppState> {
             post(import_catalog_workflow_git_organization),
         )
         .route(
+            "/workflows/catalog/upstream-ref-search",
+            post(catalog_upstream_ref_search_organization),
+        )
+        .route(
             "/projects/{project_id}/workflows/catalog/import-git",
             post(import_catalog_workflow_git),
+        )
+        .route(
+            "/projects/{project_id}/workflows/catalog/upstream-ref-search",
+            post(catalog_upstream_ref_search_project),
         )
         .route(
             "/workflows/{workflow_id}/catalog-versions",
@@ -207,7 +215,8 @@ async fn import_catalog_workflow_git_execute(
         commit_sha,
         req.workflow_path.trim_start_matches('/')
     );
-    let catalog_metadata = catalog_metadata_json(&def, upstream_url);
+    let catalog_metadata =
+        catalog_metadata_json(&def, upstream_url, Some(req.credentials_path.as_str()));
 
     WorkflowRepo::new(state.db())
         .create_global_catalog_git(
@@ -233,6 +242,7 @@ async fn import_catalog_workflow_git_execute(
 fn catalog_metadata_json(
     def: &serde_json::Value,
     upstream_url: impl Into<String>,
+    catalog_scm_credentials_path: Option<&str>,
 ) -> serde_json::Value {
     let summary = def
         .get("description")
@@ -253,13 +263,217 @@ fn catalog_metadata_json(
         }
     }
 
-    serde_json::json!({
+    let cred_path = catalog_scm_credentials_path.map(str::trim).filter(|s| !s.is_empty());
+    let mut meta = serde_json::json!({
         "summary": summary,
         "tools": tools,
         "target_arch": serde_json::Value::Null,
         "target_os": serde_json::Value::Null,
         "upstream_url": upstream_url.into(),
-    })
+    });
+    if let Some(p) = cred_path {
+        meta["catalog_scm_credentials_path"] = serde_json::Value::String(p.to_string());
+    }
+    meta
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CatalogUpstreamRefSearchRequest {
+    /// GitHub repository as `owner/name` or URL.
+    pub repository: String,
+    pub credentials_path: String,
+    /// Case-insensitive filter on branch name, tag name, and (when loading commits) subject line or SHA prefix.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// When set, include recent commits on this ref (branch name, tag, or SHA).
+    #[serde(default)]
+    pub commits_for_ref: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogRefItem {
+    pub name: String,
+    pub commit_sha: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogCommitPreview {
+    pub sha: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CatalogUpstreamRefSearchResponse {
+    pub branches: Vec<CatalogRefItem>,
+    pub tags: Vec<CatalogRefItem>,
+    #[serde(default)]
+    pub commits: Vec<CatalogCommitPreview>,
+}
+
+async fn catalog_upstream_ref_search_execute(
+    state: &AppState,
+    user_org_id: OrganizationId,
+    project_id_for_secrets: ProjectId,
+    catalog_scm: bool,
+    req: CatalogUpstreamRefSearchRequest,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
+    };
+
+    let slug = github_scm::parse_github_repository(&req.repository)?;
+    let api_base = github_scm::github_api_base_for_credentials_path(
+        state.db(),
+        crypto.as_ref(),
+        user_org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        catalog_scm,
+    )
+    .await?;
+    let token = github_scm::github_app_installation_token_for_project_secret(
+        state.db(),
+        crypto.as_ref(),
+        user_org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        catalog_scm,
+    )
+    .await?;
+
+    let (branches_raw, tags_raw) = tokio::join!(
+        github_scm::list_github_branches(
+            &token,
+            &slug.owner,
+            &slug.name,
+            &api_base,
+            100
+        ),
+        github_scm::list_github_tags(&token, &slug.owner, &slug.name, &api_base, 100)
+    );
+    let branches_raw = branches_raw?;
+    let tags_raw = tags_raw?;
+
+    let q = req
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase());
+
+    let mut branches: Vec<CatalogRefItem> = branches_raw
+        .into_iter()
+        .map(|(name, commit_sha)| CatalogRefItem { name, commit_sha })
+        .collect();
+    if let Some(ref ql) = q {
+        branches.retain(|b| b.name.to_lowercase().contains(ql));
+    }
+    branches.truncate(80);
+
+    let mut tags: Vec<CatalogRefItem> = tags_raw
+        .into_iter()
+        .map(|(name, commit_sha)| CatalogRefItem { name, commit_sha })
+        .collect();
+    if let Some(ref ql) = q {
+        tags.retain(|t| t.name.to_lowercase().contains(ql));
+    }
+    tags.truncate(80);
+
+    let mut commits_out = Vec::new();
+    if let Some(cref) = req.commits_for_ref.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let rows = github_scm::list_github_commits(
+            &token,
+            &slug.owner,
+            &slug.name,
+            cref,
+            &api_base,
+            30,
+        )
+        .await?;
+        for (sha, title, committed_at) in rows {
+            if let Some(ref ql) = q {
+                let sh = sha.to_lowercase();
+                if !title.to_lowercase().contains(ql) && !sh.starts_with(ql) {
+                    continue;
+                }
+            }
+            commits_out.push(CatalogCommitPreview {
+                sha,
+                title,
+                committed_at,
+            });
+        }
+        commits_out.truncate(40);
+    }
+
+    Ok(Json(CatalogUpstreamRefSearchResponse {
+        branches,
+        tags,
+        commits: commits_out,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/catalog/upstream-ref-search",
+    request_body = CatalogUpstreamRefSearchRequest,
+    responses(
+        (status = 200, description = "Branches, tags, optional commits", body = CatalogUpstreamRefSearchResponse),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn catalog_upstream_ref_search_organization(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Json(req): Json<CatalogUpstreamRefSearchRequest>,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    if !user.has_any_permission(&["*", "org:admin"]) {
+        return Err(ApiError::forbidden(
+            "upstream ref search requires org:admin (or *) permission",
+        ));
+    }
+
+    catalog_upstream_ref_search_execute(
+        &state,
+        user.org_id,
+        ProjectId::from_uuid(Uuid::nil()),
+        true,
+        req,
+    )
+    .await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/workflows/catalog/upstream-ref-search",
+    request_body = CatalogUpstreamRefSearchRequest,
+    responses(
+        (status = 200, description = "Branches, tags, optional commits", body = CatalogUpstreamRefSearchResponse),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn catalog_upstream_ref_search_project(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<CatalogUpstreamRefSearchRequest>,
+) -> ApiResult<Json<CatalogUpstreamRefSearchResponse>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = met_store::repos::ProjectRepo::new(state.db())
+        .get(project_id)
+        .await?;
+    if project.org_id != user.org_id {
+        return Err(ApiError::forbidden("project is not in your organization"));
+    }
+
+    catalog_upstream_ref_search_execute(&state, user.org_id, project_id, false, req).await
 }
 
 #[utoipa::path(

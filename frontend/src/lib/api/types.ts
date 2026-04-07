@@ -102,6 +102,24 @@ export interface CatalogVersionsPage {
 	next_cursor?: string | null;
 }
 
+/** POST /workflows/catalog/upstream-ref-search (org admin or project-scoped variant). */
+export interface CatalogRefItem {
+	name: string;
+	commit_sha: string;
+}
+
+export interface CatalogCommitPreview {
+	sha: string;
+	title: string;
+	committed_at?: string | null;
+}
+
+export interface CatalogUpstreamRefSearchResponse {
+	branches: CatalogRefItem[];
+	tags: CatalogRefItem[];
+	commits: CatalogCommitPreview[];
+}
+
 // Project Types
 export type OwnerType = 'user' | 'group';
 
