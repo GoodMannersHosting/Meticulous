@@ -267,6 +267,49 @@ export const apiMethods = {
 		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
 	},
 
+	/** Project-scoped webhook registrations (SCM + generic fan-out). */
+	projectWebhooks: {
+		list: (projectId: string) =>
+			api.get<import('./types').ProjectWebhookRegistration[]>(`/api/v1/projects/${projectId}/webhooks`),
+		setup: (projectId: string, body: import('./types').SetupScmWebhookInput) =>
+			api.post<import('./types').SetupScmWebhookResponse>(
+				`/api/v1/projects/${projectId}/scm/setup`,
+				body
+			),
+		patch: (projectId: string, registrationId: string, body: import('./types').PatchProjectWebhookInput) =>
+			api.patch<import('./types').ProjectWebhookRegistration>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}`,
+				body
+			),
+		rotateInboundSecret: (projectId: string, registrationId: string) =>
+			api.post<import('./types').RotateProjectWebhookSecretResponse>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/rotate-inbound-secret`,
+				{}
+			),
+		clearInboundSecret: (projectId: string, registrationId: string) =>
+			api.post<import('./types').ProjectWebhookRegistration>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/clear-inbound-secret`,
+				{}
+			),
+		listTargets: (projectId: string, registrationId: string) =>
+			api.get<import('./types').WebhookRegistrationTargetRow[]>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets`
+			),
+		addTarget: (
+			projectId: string,
+			registrationId: string,
+			body: { pipeline_id: string; enabled?: boolean; filter_config?: Record<string, unknown> }
+		) =>
+			api.post<import('./types').WebhookRegistrationTargetRow>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets`,
+				body
+			),
+		deleteTarget: (projectId: string, registrationId: string, targetId: string) =>
+			api.delete<void>(
+				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets/${targetId}`
+			)
+	},
+
 	// Platform stored secrets (encrypted at rest; values never returned)
 	storedSecrets: {
 		list: (projectId: string, params?: { pipeline_id?: string }) =>

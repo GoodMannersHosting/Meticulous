@@ -58,7 +58,7 @@ async fn upsert_repo_webhook(
             })?,
             description: None,
         };
-        repo.insert(org_id, pipeline_id, &input, true).await?;
+        repo.insert(org_id, pipeline_id, &input, true, None).await?;
     }
     Ok(())
 }

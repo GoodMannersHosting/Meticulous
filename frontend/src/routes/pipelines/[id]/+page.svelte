@@ -162,6 +162,8 @@
 	let triggersSuccess = $state<string | null>(null);
 	let showCreateTriggerDialog = $state(false);
 	let ntDescription = $state('');
+	let ntAuthMode = $state('hmac');
+	let ntQueryParamName = $state('token');
 	let ntGenerateSecret = $state(true);
 	let ntSecretManual = $state('');
 	let ntBranches = $state('main, master');
@@ -173,6 +175,8 @@
 	let editTriggerTarget = $state<PipelineTrigger | null>(null);
 	let etEnabled = $state(true);
 	let etDescription = $state('');
+	let etAuthMode = $state('hmac');
+	let etQueryParam = $state('token');
 	let etNewSecret = $state('');
 	let showDeleteTriggerDialog = $state(false);
 	let deleteTriggerTarget = $state<PipelineTrigger | null>(null);
@@ -326,6 +330,30 @@
 		return triggerConfigStr(t, 'managed_by') === 'repo';
 	}
 
+	type TriggerInboundAuth = 'none' | 'hmac' | 'query';
+
+	function triggerResolvedInboundAuth(t: PipelineTrigger): TriggerInboundAuth {
+		const a = t.inbound_auth?.toLowerCase().trim();
+		if (a === 'none' || a === 'query' || a === 'hmac') return a;
+		const raw = triggerConfigStr(t, 'inbound_auth')?.toLowerCase().trim();
+		if (raw === 'none' || raw === 'query' || raw === 'hmac') return raw;
+		return t.secret_configured ? 'hmac' : 'none';
+	}
+
+	function triggerQueryParamName(t: PipelineTrigger): string {
+		return (
+			(typeof t.inbound_query_param === 'string' && t.inbound_query_param.trim()) ||
+			triggerConfigStr(t, 'inbound_query_param') ||
+			'token'
+		);
+	}
+
+	const triggerInboundAuthOptions = [
+		{ value: 'hmac', label: 'HMAC header (X-Hub-Signature-256)' },
+		{ value: 'query', label: 'Query parameter (secret in URL)' },
+		{ value: 'none', label: 'None (open — no verification)' }
+	] as const;
+
 	function webhookPostUrl(triggerId: string): string {
 		const org = auth.user?.org_id ?? '{org_id}';
 		return `${apiPublicOrigin()}/api/v1/webhooks/${org}/${triggerId}`;
@@ -349,6 +377,8 @@
 		triggersSuccess = null;
 		createdTriggerSecret = null;
 		ntDescription = '';
+		ntAuthMode = 'hmac';
+		ntQueryParamName = 'token';
 		ntGenerateSecret = true;
 		ntSecretManual = '';
 		ntBranches = 'main, master';
@@ -380,14 +410,27 @@
 			if (ntRawBodyVar.trim()) {
 				config.include_raw_body_variable = ntRawBodyVar.trim();
 			}
-			if (!ntGenerateSecret && ntSecretManual.trim()) {
-				config.secret = ntSecretManual.trim();
+			config.inbound_auth = ntAuthMode;
+			if (ntAuthMode === 'query') {
+				config.inbound_query_param = ntQueryParamName.trim() || 'token';
+			}
+			let generateSecret = false;
+			if (ntAuthMode !== 'none') {
+				if (ntGenerateSecret) {
+					generateSecret = true;
+				} else if (ntSecretManual.trim()) {
+					config.secret = ntSecretManual.trim();
+				} else {
+					triggersError =
+						'For HMAC or query auth, either check “Generate secret” or paste a webhook secret.';
+					return;
+				}
 			}
 			const created = await apiMethods.triggers.create(pipeline.id, {
 				kind: 'webhook',
 				config,
 				description: ntDescription.trim() || undefined,
-				generate_webhook_secret: ntGenerateSecret
+				generate_webhook_secret: generateSecret
 			});
 			if (created.generated_secret) {
 				createdTriggerSecret = created.generated_secret;
@@ -409,6 +452,8 @@
 		editTriggerTarget = t;
 		etEnabled = t.enabled;
 		etDescription = t.description ?? '';
+		etAuthMode = triggerResolvedInboundAuth(t);
+		etQueryParam = triggerQueryParamName(t);
 		etNewSecret = '';
 		triggersError = null;
 		showEditTriggerDialog = true;
@@ -432,8 +477,28 @@
 				enabled: etEnabled,
 				description: etDescription.trim()
 			};
-			if (etNewSecret.trim()) {
-				body.config_patch = { secret: etNewSecret.trim() };
+			const configPatch: Record<string, unknown> = {};
+			const isRepo = triggerIsRepoManaged(editTriggerTarget);
+			if (editTriggerTarget.kind === 'webhook' && !isRepo) {
+				configPatch.inbound_auth = etAuthMode;
+				configPatch.inbound_query_param =
+					etAuthMode === 'query' ? etQueryParam.trim() || 'token' : null;
+				if (etAuthMode === 'none') {
+					configPatch.secret = null;
+				} else {
+					if (!editTriggerTarget.secret_configured && !etNewSecret.trim()) {
+						triggersError =
+							'HMAC or query auth requires a secret. Paste one or use Random secret.';
+						return;
+					}
+					if (etNewSecret.trim()) {
+						configPatch.secret = etNewSecret.trim();
+					}
+				}
+				body.config_patch = configPatch;
+			} else if (isRepo && etNewSecret.trim()) {
+				configPatch.secret = etNewSecret.trim();
+				body.config_patch = configPatch;
 			}
 			await apiMethods.triggers.update(editTriggerTarget.id, body);
 			showEditTriggerDialog = false;
@@ -1288,7 +1353,7 @@
 									>Description</th
 								>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Source</th>
-								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">HMAC</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Inbound</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Enabled</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Webhook URL</th>
 								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
@@ -1306,6 +1371,18 @@
 										{:else}
 											<span class="text-xs text-[var(--text-tertiary)]">—</span>
 										{/if}
+										{#if t.created_at}
+											<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+												{#if t.created_by_username}
+													{t.created_by_username}
+												{:else if triggerIsRepoManaged(t)}
+													Git
+												{:else}
+													—
+												{/if}
+												· {formatRelativeTime(t.created_at)}
+											</p>
+										{/if}
 									</td>
 									<td class="px-4 py-3">
 										{#if triggerIsRepoManaged(t)}
@@ -1320,10 +1397,28 @@
 										{/if}
 									</td>
 									<td class="px-4 py-3">
-										{#if t.secret_configured}
-											<Badge variant="success" size="sm">Required</Badge>
+										{#if t.kind === 'webhook'}
+											{@const inbound = triggerResolvedInboundAuth(t)}
+											<div class="flex flex-col gap-1">
+												{#if inbound === 'hmac'}
+													<Badge variant="success" size="sm">HMAC</Badge>
+													<span class="text-xs text-[var(--text-tertiary)]">
+														<code class="font-mono">X-Hub-Signature-256</code>
+													</span>
+												{:else if inbound === 'query'}
+													<Badge variant="success" size="sm">Query</Badge>
+													<span class="text-xs text-[var(--text-tertiary)]">
+														<code class="font-mono"
+															>?{triggerQueryParamName(t)}=&lt;secret&gt;</code
+														>
+													</span>
+												{:else}
+													<Badge variant="secondary" size="sm">Open</Badge>
+													<span class="text-xs text-[var(--text-tertiary)]">No verification</span>
+												{/if}
+											</div>
 										{:else}
-											<Badge variant="secondary" size="sm">Optional</Badge>
+											<span class="text-[var(--text-tertiary)]">—</span>
 										{/if}
 									</td>
 									<td class="px-4 py-3">
@@ -2249,34 +2344,65 @@
 				class="font-mono text-sm"
 			/>
 		</div>
-		<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-			<label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-				<input type="checkbox" bind:checked={ntGenerateSecret} class="rounded border-[var(--border-primary)]" />
-				Generate webhook secret (shown once after save)
-			</label>
-			{#if !ntGenerateSecret}
-				<div class="mt-3">
-					<label class="mb-1 block text-xs text-[var(--text-secondary)]" for="nt-sec">Webhook secret</label>
-					<div class="flex flex-wrap items-stretch gap-2">
-						<Input
-							id="nt-sec"
-							type="password"
-							bind:value={ntSecretManual}
-							autocomplete="off"
-							class="min-w-0 flex-1"
-						/>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							class="shrink-0"
-							onclick={() => applyRandomWebhookSecret((v) => (ntSecretManual = v))}
+		<div class="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-auth-mode"
+					>Inbound authentication</label
+				>
+				<Select
+					id="nt-auth-mode"
+					options={triggerInboundAuthOptions.map((o) => ({ value: o.value, label: o.label }))}
+					bind:value={ntAuthMode}
+				/>
+			</div>
+			{#if ntAuthMode === 'query'}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="nt-qparam"
+						>Query parameter name</label
+					>
+					<Input id="nt-qparam" bind:value={ntQueryParamName} placeholder="token" />
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						Callers append
+						<code class="font-mono"
+							>?{ntQueryParamName.trim() || 'token'}=&lt;secret&gt;</code
 						>
-							<Shuffle class="h-4 w-4" aria-hidden="true" />
-							Random secret
-						</Button>
-					</div>
+						using the webhook secret.
+					</p>
 				</div>
+			{/if}
+			{#if ntAuthMode === 'none'}
+				<p class="text-xs text-amber-700 dark:text-amber-400">
+					Anyone who can reach this URL can trigger runs. Prefer HMAC or a query secret when the caller supports it.
+				</p>
+			{:else}
+				<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-secondary)]">
+					<input type="checkbox" bind:checked={ntGenerateSecret} class="rounded border-[var(--border-primary)]" />
+					Generate secret (shown once after save)
+				</label>
+				{#if !ntGenerateSecret}
+					<div>
+						<label class="mb-1 block text-xs text-[var(--text-secondary)]" for="nt-sec">Webhook secret</label>
+						<div class="flex flex-wrap items-stretch gap-2">
+							<Input
+								id="nt-sec"
+								type="password"
+								bind:value={ntSecretManual}
+								autocomplete="off"
+								class="min-w-0 flex-1"
+							/>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								class="shrink-0"
+								onclick={() => applyRandomWebhookSecret((v) => (ntSecretManual = v))}
+							>
+								<Shuffle class="h-4 w-4" aria-hidden="true" />
+								Random secret
+							</Button>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</div>
 		<div class="flex justify-end gap-2 pt-2">
@@ -2292,8 +2418,8 @@
 	bind:open={showEditTriggerDialog}
 	title="Edit trigger"
 	description={editTriggerTarget && triggerIsRepoManaged(editTriggerTarget)
-		? 'Repo-managed: you can change status, description, and HMAC secret. Filters live in YAML.'
-		: 'Update trigger settings or rotate the webhook secret.'}
+		? 'Repo-managed: you can change status, description, and rotate the webhook secret. Inbound auth and filters live in YAML.'
+		: 'Update trigger settings, inbound authentication, or rotate the webhook secret.'}
 	onclose={() => {
 		editTriggerTarget = null;
 	}}
@@ -2310,33 +2436,76 @@
 				>
 				<Input id="et-desc" bind:value={etDescription} />
 			</div>
-			<div>
-				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-rosecret"
-					>New webhook secret (optional)</label
-				>
-				<div class="flex flex-wrap items-stretch gap-2">
-					<Input
-						id="et-rosecret"
-						type="password"
-						bind:value={etNewSecret}
-						autocomplete="off"
-						class="min-w-0 flex-1"
-					/>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						class="shrink-0"
-						onclick={() => applyRandomWebhookSecret((v) => (etNewSecret = v))}
-					>
-						<Shuffle class="h-4 w-4" aria-hidden="true" />
-						Random secret
-					</Button>
+			{#if editTriggerTarget.kind === 'webhook' && !triggerIsRepoManaged(editTriggerTarget)}
+				<div class="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<div>
+						<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-auth-mode"
+							>Inbound authentication</label
+						>
+						<Select
+							id="et-auth-mode"
+							options={triggerInboundAuthOptions.map((o) => ({ value: o.value, label: o.label }))}
+							bind:value={etAuthMode}
+						/>
+					</div>
+					{#if etAuthMode === 'query'}
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-qparam"
+								>Query parameter name</label
+							>
+							<Input id="et-qparam" bind:value={etQueryParam} placeholder="token" />
+							<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+								Callers append
+								<code class="font-mono">?{etQueryParam.trim() || 'token'}=&lt;secret&gt;</code>.
+							</p>
+						</div>
+					{/if}
+					{#if etAuthMode === 'none'}
+						<p class="text-xs text-[var(--text-tertiary)]">
+							Saving clears the stored secret; POSTs will not be verified unless you configure auth again later.
+						</p>
+					{/if}
 				</div>
-				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
-					Leaving blank keeps the current secret. Use a strong random value (compatible with GitHub-style HMAC).
+			{:else if editTriggerTarget.kind === 'webhook'}
+				<p class="text-xs text-[var(--text-tertiary)]">
+					Git-managed trigger: inbound authentication and filters come from pipeline YAML. You can rotate the secret
+					below; to change verification mode, edit the repo.
 				</p>
-			</div>
+			{/if}
+			{#if editTriggerTarget.kind === 'webhook' && (triggerIsRepoManaged(editTriggerTarget) || etAuthMode !== 'none')}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="et-rosecret"
+						>New webhook secret (optional)</label
+					>
+					<div class="flex flex-wrap items-stretch gap-2">
+						<Input
+							id="et-rosecret"
+							type="password"
+							bind:value={etNewSecret}
+							autocomplete="off"
+							class="min-w-0 flex-1"
+						/>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="shrink-0"
+							onclick={() => applyRandomWebhookSecret((v) => (etNewSecret = v))}
+						>
+							<Shuffle class="h-4 w-4" aria-hidden="true" />
+							Random secret
+						</Button>
+					</div>
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						{#if triggerIsRepoManaged(editTriggerTarget)}
+							Leave blank to keep the current secret from the last sync.
+						{:else}
+							Leave blank to keep the current secret. Required when using HMAC or query auth if there is no secret
+							yet.
+						{/if}
+					</p>
+				</div>
+			{/if}
 			<div class="flex justify-end gap-2 pt-2">
 				<Button variant="outline" onclick={() => (showEditTriggerDialog = false)}>Cancel</Button>
 				<Button variant="primary" onclick={submitEditTrigger} loading={triggerActionLoading}>
@@ -2376,7 +2545,7 @@
 <Dialog
 	bind:open={showWebhookHelpModal}
 	title="Authenticated webhook requests"
-	description="When a trigger has a secret, Meticulous expects a GitHub-style HMAC over the raw POST body."
+	description="Triggers can verify inbound calls with an HMAC header, a secret in the query string, or no verification (open)."
 	class="max-h-[90vh] max-w-3xl overflow-hidden sm:max-w-3xl"
 	onclose={() => {}}
 >
@@ -2395,14 +2564,18 @@
 			is enabled on the trigger.
 		</p>
 		<p>
-			If the trigger has a <strong>secret</strong>, add header
+			For <strong>HMAC</strong> mode, with a stored secret, add header
 			<code class="rounded bg-secondary-100 px-1 font-mono text-[11px] dark:bg-secondary-800"
 				>X-Hub-Signature-256: sha256=&lt;hex&gt;</code
 			>
 			where
 			<code class="font-mono text-xs">&lt;hex&gt;</code>
 			is the <strong>lowercase</strong> hex digest of
-			<code class="font-mono text-xs">HMAC-SHA256(secret, raw_body_bytes)</code>. If there is no secret, omit the header.
+			<code class="font-mono text-xs">HMAC-SHA256(secret, raw_body_bytes)</code>. In <strong>query</strong> mode, append
+			<code class="rounded bg-secondary-100 px-1 font-mono text-[11px] dark:bg-secondary-800"
+				>?&lt;param&gt;=&lt;secret&gt;</code
+			>
+			(see the trigger’s query parameter name in the UI). With <strong>open</strong> inbound auth, omit both.
 		</p>
 		<p class="text-xs text-secondary-500 dark:text-secondary-500">
 			The signed bytes must match the request body exactly (watch for extra newlines when piping into curl).

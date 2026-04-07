@@ -53,10 +53,10 @@ pub use jobs::{JobDagNode, JobRepo};
 pub use join_tokens::JoinTokenRepo;
 pub use meticulous_apps::MeticulousAppRepo;
 pub use organizations::OrganizationRepo;
-pub use triggers::{get_trigger_for_webhook_dispatch, TriggerRepo};
+pub use triggers::{get_trigger_for_webhook_dispatch, PipelineTriggerListEntry, TriggerRepo};
 pub use webhooks::{
     CreateWebhookTarget, UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext,
-    WebhookRegistrationTarget, WebhookRepo,
+    WebhookRegistrationSummary, WebhookRegistrationTarget, WebhookRepo,
 };
 pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipelines::PipelineRepo;

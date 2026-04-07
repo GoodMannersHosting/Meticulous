@@ -198,9 +198,14 @@ export interface PipelineTrigger {
 	pipeline_id: string;
 	kind: string;
 	config: Record<string, unknown>;
+	/** Effective inbound mode for webhooks: `none` | `hmac` | `query`. */
+	inbound_auth?: string | null;
+	inbound_query_param?: string | null;
 	secret_configured: boolean;
 	enabled: boolean;
 	description?: string | null;
+	created_by_user_id?: string | null;
+	created_by_username?: string | null;
 	created_at: string;
 	updated_at: string;
 	/** Only present on create when `generate_webhook_secret` was true. */
@@ -218,6 +223,72 @@ export interface UpdatePipelineTriggerInput {
 	enabled?: boolean;
 	description?: string;
 	config_patch?: Record<string, unknown>;
+}
+
+/** `GET /api/v1/projects/{id}/webhooks` */
+export interface ProjectWebhookRegistration {
+	id: string;
+	provider: string;
+	events: string[];
+	active: boolean;
+	payload_mapping: Record<string, unknown>;
+	created_at: string;
+	/** Path starting with `/api/v1/webhooks/...` — prepend public API origin. */
+	inbound_path: string;
+	/** `generic` only: `none` | `hmac` | `query` */
+	generic_inbound_auth?: string;
+	generic_query_param_name?: string | null;
+	/** Whether a signing secret is stored (HMAC / query value material). */
+	inbound_secret_configured?: boolean;
+	/** Only on PATCH/create when a new verifier was generated. */
+	signing_secret?: string | null;
+	description?: string | null;
+	created_by_user_id?: string | null;
+	created_by_username?: string | null;
+}
+
+/** `PATCH /api/v1/projects/{id}/webhooks/{registration_id}` */
+export interface PatchProjectWebhookInput {
+	description?: string;
+	target_pipeline_ids?: string[];
+	generic_inbound_auth?: 'none' | 'hmac' | 'query';
+	generic_query_param_name?: string;
+}
+
+/** `POST .../rotate-inbound-secret` */
+export interface RotateProjectWebhookSecretResponse {
+	signing_secret: string;
+}
+
+/** `POST /api/v1/projects/{id}/scm/setup` (SCM + `generic` multi-pipeline webhooks). */
+export interface SetupScmWebhookInput {
+	provider: string;
+	repository_url?: string;
+	events?: string[];
+	targets: Array<{ pipeline_id: string; filter_config?: Record<string, unknown> }>;
+	/** For `provider: generic` — optional [`WebhookConfig`] JSON without `secret`. */
+	payload_mapping?: Record<string, unknown>;
+	generic_inbound_auth?: 'none' | 'hmac' | 'query';
+	/** Required when `generic_inbound_auth` is `query`. */
+	generic_query_param_name?: string;
+	description?: string;
+}
+
+export interface SetupScmWebhookResponse {
+	webhook_id: string;
+	webhook_url: string;
+	provider: string;
+	events: string[];
+	/** Only for `generic`: HMAC signing key (store securely; shown once). */
+	signing_secret?: string;
+}
+
+/** Webhook routing target (`webhook_registration_targets`). */
+export interface WebhookRegistrationTargetRow {
+	id: string;
+	pipeline_id: string;
+	enabled: boolean;
+	filter_config: Record<string, unknown>;
 }
 
 export interface PipelineDefinition {

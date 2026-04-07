@@ -3,8 +3,10 @@
 //! Run creation for SCM webhooks is performed in `met-api` via [`crate::pipeline_execution`] so
 //! the engine is scheduled consistently with other triggers.
 
-use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId};
+use chrono::{DateTime, Utc};
+use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId, UserId};
 use sqlx::PgPool;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
@@ -19,6 +21,30 @@ pub struct WebhookRegistrationContext {
     pub events: Vec<String>,
     pub active: bool,
     pub secret_verifier: String,
+    /// For `provider = generic`: maps JSON body to variables ([`met_core::models::WebhookConfig`] subset, no `secret`).
+    pub payload_mapping: serde_json::Value,
+    /// For `provider = generic`: `none` (open), `hmac`, or `query` (secret in URL).
+    pub generic_inbound_auth: String,
+    /// When `generic_inbound_auth == query`: required query parameter name (e.g. `token`).
+    pub generic_query_param_name: Option<String>,
+}
+
+/// Summary row for listing project webhook registrations (admin UI).
+#[derive(Debug, Clone)]
+pub struct WebhookRegistrationSummary {
+    pub id: Uuid,
+    pub provider: String,
+    pub events: Vec<String>,
+    pub active: bool,
+    pub payload_mapping: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub generic_inbound_auth: String,
+    pub generic_query_param_name: Option<String>,
+    /// Whether `secret_hash` is non-empty (caller-visible secret exists for signing).
+    pub secret_configured: bool,
+    pub description: Option<String>,
+    pub created_by_user_id: Option<UserId>,
+    pub created_by_username: Option<String>,
 }
 
 /// A routing target row.
@@ -70,9 +96,21 @@ impl<'a> WebhookRepo<'a> {
         &self,
         registration_id: TriggerId,
     ) -> Result<Option<WebhookRegistrationContext>> {
-        let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Vec<String>, bool, String)>(
+        let row = sqlx::query_as::<_, (
+            Uuid,
+            Uuid,
+            Uuid,
+            String,
+            Vec<String>,
+            bool,
+            String,
+            serde_json::Value,
+            String,
+            Option<String>,
+        )>(
             r#"
-            SELECT wr.id, wr.project_id, p.org_id, wr.provider, wr.events, wr.active, wr.secret_hash
+            SELECT wr.id, wr.project_id, p.org_id, wr.provider, wr.events, wr.active, wr.secret_hash,
+                   wr.payload_mapping, wr.generic_inbound_auth, wr.generic_query_param_name
             FROM webhook_registrations wr
             JOIN projects p ON p.id = wr.project_id AND p.deleted_at IS NULL
             WHERE wr.id = $1 AND wr.active = true
@@ -83,7 +121,7 @@ impl<'a> WebhookRepo<'a> {
         .await?;
 
         Ok(row.map(
-            |(id, project_id, org_id, provider, events, active, secret_verifier)| {
+            |(id, project_id, org_id, provider, events, active, secret_verifier, payload_mapping, gia, gqpn)| {
                 WebhookRegistrationContext {
                     registration_id: id,
                     project_id: ProjectId::from_uuid(project_id),
@@ -92,9 +130,395 @@ impl<'a> WebhookRepo<'a> {
                     events,
                     active,
                     secret_verifier,
+                    payload_mapping,
+                    generic_inbound_auth: gia,
+                    generic_query_param_name: gqpn,
                 }
             },
         ))
+    }
+
+    /// List webhook registrations for a project (any `active`; UI may filter).
+    pub async fn list_registrations_for_project(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<WebhookRegistrationSummary>> {
+        let rows = sqlx::query_as::<_, (
+            Uuid,
+            String,
+            Vec<String>,
+            bool,
+            serde_json::Value,
+            DateTime<Utc>,
+            String,
+            Option<String>,
+            bool,
+            Option<String>,
+            Option<Uuid>,
+            Option<String>,
+        )>(
+            r#"
+            SELECT wr.id, wr.provider, wr.events, wr.active, wr.payload_mapping, wr.created_at,
+                   wr.generic_inbound_auth, wr.generic_query_param_name,
+                   (wr.secret_hash IS NOT NULL AND wr.secret_hash <> '') AS secret_configured,
+                   wr.description, wr.created_by_user_id, u.username AS created_by_username
+            FROM webhook_registrations wr
+            LEFT JOIN users u ON u.id = wr.created_by_user_id AND u.deleted_at IS NULL
+            WHERE wr.project_id = $1
+            ORDER BY wr.created_at ASC
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    provider,
+                    events,
+                    active,
+                    payload_mapping,
+                    created_at,
+                    gia,
+                    gqpn,
+                    secret_configured,
+                    description,
+                    created_by_user_id,
+                    created_by_username,
+                )| {
+                    WebhookRegistrationSummary {
+                        id,
+                        provider,
+                        events,
+                        active,
+                        payload_mapping,
+                        created_at,
+                        generic_inbound_auth: gia,
+                        generic_query_param_name: gqpn,
+                        secret_configured,
+                        description,
+                        created_by_user_id: created_by_user_id.map(UserId::from_uuid),
+                        created_by_username,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    /// One registration summary for `project_id` (admin UI / patch response).
+    pub async fn get_registration_summary_for_project(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+    ) -> Result<WebhookRegistrationSummary> {
+        let row = sqlx::query_as::<_, (
+            Uuid,
+            String,
+            Vec<String>,
+            bool,
+            serde_json::Value,
+            DateTime<Utc>,
+            String,
+            Option<String>,
+            bool,
+            Option<String>,
+            Option<Uuid>,
+            Option<String>,
+        )>(
+            r#"
+            SELECT wr.id, wr.provider, wr.events, wr.active, wr.payload_mapping, wr.created_at,
+                   wr.generic_inbound_auth, wr.generic_query_param_name,
+                   (wr.secret_hash IS NOT NULL AND wr.secret_hash <> '') AS secret_configured,
+                   wr.description, wr.created_by_user_id, u.username AS created_by_username
+            FROM webhook_registrations wr
+            LEFT JOIN users u ON u.id = wr.created_by_user_id AND u.deleted_at IS NULL
+            WHERE wr.project_id = $1 AND wr.id = $2
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .bind(registration_id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("webhook_registration", registration_id))?;
+
+        let (
+            id,
+            provider,
+            events,
+            active,
+            payload_mapping,
+            created_at,
+            gia,
+            gqpn,
+            secret_configured,
+            description,
+            created_by_user_id,
+            created_by_username,
+        ) = row;
+
+        Ok(WebhookRegistrationSummary {
+            id,
+            provider,
+            events,
+            active,
+            payload_mapping,
+            created_at,
+            generic_inbound_auth: gia,
+            generic_query_param_name: gqpn,
+            secret_configured,
+            description,
+            created_by_user_id: created_by_user_id.map(UserId::from_uuid),
+            created_by_username,
+        })
+    }
+
+    /// Inbound signing material (stored verifier string), server-side only.
+    pub async fn get_secret_hash_for_project_registration(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+    ) -> Result<String> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT COALESCE(secret_hash, '') FROM webhook_registrations
+            WHERE project_id = $1 AND id = $2
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .bind(registration_id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?;
+
+        let Some((h,)) = row else {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        };
+        Ok(h)
+    }
+
+    pub async fn update_generic_inbound_for_project(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+        generic_inbound_auth: &str,
+        generic_query_param_name: Option<&str>,
+        secret_hash: &str,
+    ) -> Result<()> {
+        let r = sqlx::query(
+            r#"
+            UPDATE webhook_registrations
+            SET generic_inbound_auth = $1,
+                generic_query_param_name = $2,
+                secret_hash = $3,
+                updated_at = NOW()
+            WHERE id = $4 AND project_id = $5 AND provider = 'generic'
+            "#,
+        )
+        .bind(generic_inbound_auth)
+        .bind(generic_query_param_name)
+        .bind(secret_hash)
+        .bind(registration_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        }
+        Ok(())
+    }
+
+    pub async fn update_registration_description(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+        description: Option<String>,
+    ) -> Result<()> {
+        let r = sqlx::query(
+            r#"
+            UPDATE webhook_registrations
+            SET description = $1, updated_at = NOW()
+            WHERE id = $2 AND project_id = $3
+            "#,
+        )
+        .bind(&description)
+        .bind(registration_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        }
+        Ok(())
+    }
+
+    /// Replace inbound secret material (hex form stored in `secret_hash`, per setup/verify).
+    pub async fn update_registration_secret_hash(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+        secret_hash: &str,
+    ) -> Result<()> {
+        let r = sqlx::query(
+            r#"
+            UPDATE webhook_registrations
+            SET secret_hash = $1, updated_at = NOW()
+            WHERE id = $2 AND project_id = $3
+            "#,
+        )
+        .bind(secret_hash)
+        .bind(registration_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        }
+        Ok(())
+    }
+
+    /// Generic webhooks: disable verification (open URL). SCM rows: only clear `secret_hash` (handlers skip verify when empty).
+    pub async fn clear_registration_inbound_secret(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+        provider: &str,
+    ) -> Result<()> {
+        let r = if provider.eq_ignore_ascii_case("generic") {
+            sqlx::query(
+                r#"
+                UPDATE webhook_registrations
+                SET secret_hash = '',
+                    generic_inbound_auth = 'none',
+                    generic_query_param_name = NULL,
+                    updated_at = NOW()
+                WHERE id = $1 AND project_id = $2 AND provider = 'generic'
+                "#,
+            )
+            .bind(registration_id.as_uuid())
+            .bind(project_id.as_uuid())
+            .execute(self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE webhook_registrations
+                SET secret_hash = '', updated_at = NOW()
+                WHERE id = $1 AND project_id = $2
+                "#,
+            )
+            .bind(registration_id.as_uuid())
+            .bind(project_id.as_uuid())
+            .execute(self.pool)
+            .await?
+        };
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        }
+        Ok(())
+    }
+
+    /// Replace targets with exactly `pipeline_ids` (must belong to `project_id`). Idempotent inserts use empty `filter_config`.
+    pub async fn sync_registration_targets(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+        pipeline_ids: &[PipelineId],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let reg_ok: Option<(bool,)> = sqlx::query_as(
+            r#"
+            SELECT TRUE FROM webhook_registrations WHERE id = $1 AND project_id = $2
+            "#,
+        )
+        .bind(registration_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if reg_ok.is_none() {
+            return Err(StoreError::not_found("webhook_registration", registration_id));
+        }
+
+        let want: HashSet<Uuid> = pipeline_ids.iter().map(|p| p.as_uuid()).collect();
+
+        for pid in pipeline_ids {
+            let ok: Option<(Uuid,)> = sqlx::query_as(
+                r#"
+                SELECT p.id
+                FROM pipelines p
+                INNER JOIN projects pr ON pr.id = p.project_id AND pr.deleted_at IS NULL
+                WHERE p.id = $1 AND p.project_id = $2
+                "#,
+            )
+            .bind(pid.as_uuid())
+            .bind(project_id.as_uuid())
+            .fetch_optional(&mut *tx)
+            .await?;
+            if ok.is_none() {
+                return Err(StoreError::Validation(format!(
+                    "pipeline {} is not in this project",
+                    pid
+                )));
+            }
+        }
+
+        let current: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            r#"
+            SELECT id, pipeline_id
+            FROM webhook_registration_targets
+            WHERE webhook_registration_id = $1
+            "#,
+        )
+        .bind(registration_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let have_pipelines: HashSet<Uuid> = current.iter().map(|(_, p)| *p).collect();
+
+        for (target_id, puuid) in current {
+            if !want.contains(&puuid) {
+                sqlx::query(
+                    r#"DELETE FROM webhook_registration_targets WHERE id = $1"#,
+                )
+                .bind(target_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        for pid in pipeline_ids {
+            if !have_pipelines.contains(&pid.as_uuid()) {
+                sqlx::query(
+                    r#"
+                    INSERT INTO webhook_registration_targets
+                        (webhook_registration_id, pipeline_id, enabled, filter_config)
+                    VALUES ($1, $2, true, '{}'::jsonb)
+                    "#,
+                )
+                .bind(registration_id.as_uuid())
+                .bind(pid.as_uuid())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| {
+                    if let sqlx::Error::Database(ref db) = e {
+                        if db.code().as_deref() == Some("23505") {
+                            return StoreError::Validation(
+                                "target for this pipeline already exists for this webhook".to_string(),
+                            );
+                        }
+                    }
+                    e.into()
+                })?;
+            }
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Ensure the registration belongs to `project_id` (for admin routes).

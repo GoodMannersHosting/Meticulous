@@ -1,7 +1,19 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Button, Card, Badge, Tabs, Dialog, Input, Alert, Select } from '$components/ui';
+	import { PUBLIC_API_URL } from '$env/static/public';
+	import {
+		Button,
+		Card,
+		Badge,
+		Tabs,
+		Dialog,
+		Input,
+		Alert,
+		Select,
+		CopyButton
+	} from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type {
@@ -9,7 +21,10 @@
 		Pipeline,
 		ProjectVariable,
 		StoredSecret,
-		CatalogWorkflow
+		CatalogWorkflow,
+		PatchProjectWebhookInput,
+		ProjectWebhookRegistration,
+		WebhookRegistrationTargetRow
 	} from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
 	import {
@@ -25,7 +40,8 @@
 		Braces,
 		History,
 		Layers,
-		ExternalLink
+		ExternalLink,
+		Webhook
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -95,6 +111,32 @@
 	let settingsSaving = $state(false);
 	let settingsError = $state<string | null>(null);
 
+	let projectWebhooks = $state<ProjectWebhookRegistration[]>([]);
+	let pwLoading = $state(false);
+	let pwError = $state<string | null>(null);
+	let pwTargetsRegistrationId = $state<string | null>(null);
+	let pwTargets = $state<WebhookRegistrationTargetRow[]>([]);
+	let pwTargetsLoading = $state(false);
+	let showCreatePw = $state(false);
+	let pwCreatePipelineIds = $state<string[]>([]);
+	let pwCreateLoading = $state(false);
+	let pwLastSigningSecret = $state<string | null>(null);
+	let pwAddPipelineId = $state('');
+	let pwAuthMode = $state('hmac');
+	let pwQueryParamName = $state('token');
+	let pwDescription = $state('');
+
+	let showEditPw = $state(false);
+	let editPwTarget = $state<ProjectWebhookRegistration | null>(null);
+	let epwDescription = $state('');
+	let epwAuthMode = $state('hmac');
+	let epwQueryParam = $state('token');
+	let pwEditLoading = $state(false);
+	let pwRotatingId = $state<string | null>(null);
+	let showClearPwInboundDialog = $state(false);
+	let clearPwTarget = $state<ProjectWebhookRegistration | null>(null);
+	let clearPwLoading = $state(false);
+
 	const kindOptions = [
 		{ value: 'kv', label: 'Key / value (kv)' },
 		{ value: 'api_key', label: 'API key' },
@@ -105,6 +147,7 @@
 
 	const tabs = [
 		{ id: 'pipelines', label: 'Pipelines', icon: GitBranch },
+		{ id: 'triggers', label: 'Triggers', icon: Webhook },
 		{ id: 'workflows', label: 'Workflows', icon: Layers },
 		{ id: 'runs', label: 'Recent Runs', icon: Play },
 		{ id: 'variables', label: 'Variables', icon: Braces },
@@ -175,6 +218,207 @@
 		if (!id) return '—';
 		const p = pipelines.find((x) => x.id === id);
 		return p ? p.name : id.slice(0, 8);
+	}
+
+	function apiPublicOrigin(): string {
+		const base = PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
+		if (base) return base;
+		if (browser) return window.location.origin;
+		return '';
+	}
+
+	function projectWebhookFullUrl(inboundPath: string): string {
+		return `${apiPublicOrigin()}${inboundPath}`;
+	}
+
+	async function loadProjectWebhooks() {
+		if (!project) return;
+		pwLoading = true;
+		pwError = null;
+		try {
+			projectWebhooks = await apiMethods.projectWebhooks.list(project.id);
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to load webhooks';
+			projectWebhooks = [];
+		} finally {
+			pwLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (activeTab !== 'triggers' || !project?.id || loading) return;
+		void loadProjectWebhooks();
+	});
+
+	async function loadPwTargets(registrationId: string) {
+		if (!project) return;
+		pwTargetsLoading = true;
+		try {
+			pwTargets = await apiMethods.projectWebhooks.listTargets(project.id, registrationId);
+		} catch {
+			pwTargets = [];
+		} finally {
+			pwTargetsLoading = false;
+		}
+	}
+
+	$effect(() => {
+		const rid = pwTargetsRegistrationId;
+		if (!rid || !project || activeTab !== 'triggers') return;
+		void loadPwTargets(rid);
+	});
+
+	function togglePwCreatePipeline(id: string) {
+		if (pwCreatePipelineIds.includes(id)) {
+			pwCreatePipelineIds = pwCreatePipelineIds.filter((x) => x !== id);
+		} else {
+			pwCreatePipelineIds = [...pwCreatePipelineIds, id];
+		}
+	}
+
+	function openCreateProjectWebhook() {
+		pwLastSigningSecret = null;
+		pwAuthMode = 'hmac';
+		pwQueryParamName = 'token';
+		pwDescription = '';
+		pwCreatePipelineIds = pipelines.length > 0 ? [pipelines[0].id] : [];
+		showCreatePw = true;
+	}
+
+	function openEditProjectWebhook(wh: ProjectWebhookRegistration) {
+		if (wh.provider !== 'generic') return;
+		editPwTarget = wh;
+		epwDescription = wh.description?.trim() ?? '';
+		epwAuthMode = (wh.generic_inbound_auth ?? 'hmac').toLowerCase();
+		if (epwAuthMode !== 'none' && epwAuthMode !== 'hmac' && epwAuthMode !== 'query') {
+			epwAuthMode = 'hmac';
+		}
+		epwQueryParam = (wh.generic_query_param_name?.trim() || 'token') as string;
+		pwError = null;
+		showEditPw = true;
+	}
+
+	async function submitEditProjectWebhook() {
+		if (!project || !editPwTarget || editPwTarget.provider !== 'generic') return;
+		if (epwAuthMode === 'query' && !epwQueryParam.trim()) {
+			pwError = 'Query parameter name is required for query authentication';
+			return;
+		}
+		pwEditLoading = true;
+		pwError = null;
+		try {
+			const body: PatchProjectWebhookInput = {
+				description: epwDescription.trim(),
+				generic_inbound_auth: epwAuthMode as 'none' | 'hmac' | 'query'
+			};
+			if (epwAuthMode === 'query') {
+				body.generic_query_param_name = epwQueryParam.trim() || 'token';
+			}
+			const res = await apiMethods.projectWebhooks.patch(project.id, editPwTarget.id, body);
+			if (res.signing_secret) {
+				pwLastSigningSecret = res.signing_secret;
+			}
+			showEditPw = false;
+			editPwTarget = null;
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to update webhook';
+		} finally {
+			pwEditLoading = false;
+		}
+	}
+
+	async function rotateProjectWebhookSecret(wh: ProjectWebhookRegistration) {
+		if (!project) return;
+		pwRotatingId = wh.id;
+		pwError = null;
+		try {
+			const r = await apiMethods.projectWebhooks.rotateInboundSecret(project.id, wh.id);
+			pwLastSigningSecret = r.signing_secret;
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to rotate secret';
+		} finally {
+			pwRotatingId = null;
+		}
+	}
+
+	async function submitClearPwInbound() {
+		if (!project || !clearPwTarget) return;
+		clearPwLoading = true;
+		pwError = null;
+		try {
+			await apiMethods.projectWebhooks.clearInboundSecret(project.id, clearPwTarget.id);
+			showClearPwInboundDialog = false;
+			clearPwTarget = null;
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to clear verification';
+		} finally {
+			clearPwLoading = false;
+		}
+	}
+
+	async function submitCreateProjectWebhook() {
+		if (!project) return;
+		if (pwAuthMode === 'query' && !pwQueryParamName.trim()) {
+			pwError = 'Query parameter name is required for query authentication';
+			return;
+		}
+		pwCreateLoading = true;
+		pwError = null;
+		try {
+			const targets = pwCreatePipelineIds.map((pipeline_id) => ({
+				pipeline_id,
+				filter_config: {}
+			}));
+			const desc = pwDescription.trim();
+			const res = await apiMethods.projectWebhooks.setup(project.id, {
+				provider: 'generic',
+				events: [],
+				targets,
+				payload_mapping: { flatten_top_level: true },
+				generic_inbound_auth: pwAuthMode as 'none' | 'hmac' | 'query',
+				...(pwAuthMode === 'query'
+					? { generic_query_param_name: pwQueryParamName.trim() }
+					: {}),
+				...(desc ? { description: desc } : {})
+			});
+			pwLastSigningSecret = res.signing_secret ?? null;
+			showCreatePw = false;
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to create webhook';
+		} finally {
+			pwCreateLoading = false;
+		}
+	}
+
+	async function removePwTarget(registrationId: string, targetId: string) {
+		if (!project) return;
+		try {
+			await apiMethods.projectWebhooks.deleteTarget(project.id, registrationId, targetId);
+			await loadPwTargets(registrationId);
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to remove target';
+		}
+	}
+
+	async function addPwTarget(registrationId: string) {
+		if (!project || !pwAddPipelineId.trim()) return;
+		try {
+			await apiMethods.projectWebhooks.addTarget(project.id, registrationId, {
+				pipeline_id: pwAddPipelineId.trim(),
+				enabled: true,
+				filter_config: {}
+			});
+			pwAddPipelineId = '';
+			await loadPwTargets(registrationId);
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to add target';
+		}
 	}
 
 	async function loadWorkflowsAvailable() {
@@ -613,6 +857,241 @@
 					rowKey="id"
 					onRowClick={handlePipelineClick}
 				/>
+			{/if}
+		{:else if activeTab === 'triggers'}
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<p class="text-sm text-[var(--text-secondary)]">
+					<strong>Project webhooks</strong> receive one HTTP POST and can start multiple pipelines in this project.
+					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">generic</code> URLs use
+					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">/api/v1/webhooks/&lt;org&gt;/&lt;id&gt;</code>
+					with GitHub-style 					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">X-Hub-Signature-256</code>,
+					a shared secret in a query parameter, or no verification (open URL — use only on trusted networks).
+					Per-target filters match SCM webhooks.
+				</p>
+				<div class="flex gap-2">
+					<Button variant="outline" size="sm" onclick={loadProjectWebhooks} loading={pwLoading}>
+						<RefreshCw class="h-4 w-4" />
+						Refresh
+					</Button>
+					<Button
+						variant="primary"
+						size="sm"
+						onclick={openCreateProjectWebhook}
+						disabled={pipelines.length === 0}
+					>
+						<Plus class="h-4 w-4" />
+						New project webhook
+					</Button>
+				</div>
+			</div>
+			{#if pwLastSigningSecret}
+				<Alert
+					variant="info"
+					title="Signing secret"
+					dismissible
+					ondismiss={() => (pwLastSigningSecret = null)}
+				>
+					<p class="mb-2 text-sm">
+						Copy this value now; it is not shown again. Use it for
+						<code class="font-mono text-xs">X-Hub-Signature-256</code> (HMAC mode) or as the query parameter value
+						(query mode). Shown after create, after enabling auth from an open URL, or after rotating the secret.
+					</p>
+					<div class="flex flex-wrap items-center gap-2">
+						<code class="max-w-full break-all rounded bg-[var(--bg-tertiary)] px-2 py-1 text-xs">{pwLastSigningSecret}</code>
+						<CopyButton text={pwLastSigningSecret} size="sm" />
+					</div>
+				</Alert>
+			{/if}
+			{#if pwError}
+				<Alert variant="error" title="Webhooks" dismissible ondismiss={() => (pwError = null)}>
+					{pwError}
+				</Alert>
+			{/if}
+			{#if pipelines.length === 0}
+				<Card>
+					<EmptyState
+						title="Add a pipeline first"
+						description="Project webhooks route to one or more pipelines in this project."
+					>
+						<Button variant="primary" href="/pipelines/new?project={project.id}">
+							<Plus class="h-4 w-4" />
+							Create Pipeline
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else if pwLoading && projectWebhooks.length === 0}
+				<Card>
+					<div class="space-y-3 p-4">
+						{#each Array(3) as _, i (i)}
+							<Skeleton class="h-12 w-full" />
+						{/each}
+					</div>
+				</Card>
+			{:else if projectWebhooks.length === 0}
+				<Card>
+					<EmptyState
+						title="No project webhooks yet"
+						description="Create a generic webhook to map JSON POST bodies to variables and fan out runs to selected pipelines."
+					>
+						<Button variant="primary" onclick={openCreateProjectWebhook}>
+							<Plus class="h-4 w-4" />
+							New project webhook
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="space-y-4">
+					{#each projectWebhooks as wh (wh.id)}
+						<Card>
+							<div class="space-y-3 p-4">
+								<div class="flex flex-wrap items-start justify-between gap-3">
+									<div>
+										<div class="flex flex-wrap items-center gap-2">
+											<h3 class="text-lg font-medium text-[var(--text-primary)]">
+												{wh.provider === 'generic' ? 'Generic (multi-pipeline)' : wh.provider}
+											</h3>
+											{#if !wh.active}
+												<Badge variant="secondary">Inactive</Badge>
+											{/if}
+										</div>
+										<p class="mt-1 font-mono text-xs text-[var(--text-secondary)] break-all">
+											{projectWebhookFullUrl(wh.inbound_path)}
+										</p>
+										{#if wh.description?.trim()}
+											<p class="mt-1 text-sm text-[var(--text-secondary)]">{wh.description}</p>
+										{/if}
+										<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+											Created {formatRelativeTime(wh.created_at)}
+											{#if wh.created_by_username}
+												· {wh.created_by_username}
+											{/if}
+										</p>
+										{#if wh.generic_inbound_auth}
+											<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+												Auth:
+												<span class="font-mono text-[var(--text-secondary)]">{wh.generic_inbound_auth}</span>
+												{#if wh.generic_inbound_auth === 'query' && wh.generic_query_param_name}
+													· append
+													<span class="font-mono"
+														>?{wh.generic_query_param_name}=&lt;secret&gt;</span
+													>
+												{/if}
+												{#if wh.generic_inbound_auth === 'none'}
+													· no verification (any client can POST)
+												{/if}
+											</p>
+										{/if}
+										{#if wh.events.length > 0}
+											<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+												Registration events: {wh.events.join(', ')}
+											</p>
+										{/if}
+									</div>
+									<div class="flex flex-wrap gap-2">
+										<CopyButton text={projectWebhookFullUrl(wh.inbound_path)} size="sm" />
+										{#if wh.provider === 'generic'}
+											<Button variant="outline" size="sm" onclick={() => openEditProjectWebhook(wh)}>
+												<Edit class="h-4 w-4" aria-hidden="true" />
+												Edit
+											</Button>
+										{/if}
+										{#if wh.inbound_secret_configured && (wh.provider !== 'generic' || wh.generic_inbound_auth !== 'none')}
+											<Button
+												variant="outline"
+												size="sm"
+												title="Generate a new signing secret (updates HMAC key / query value)"
+												disabled={pwRotatingId === wh.id}
+												onclick={() => rotateProjectWebhookSecret(wh)}
+											>
+												<KeyRound class="h-4 w-4" aria-hidden="true" />
+												{pwRotatingId === wh.id ? 'Rotating…' : 'Rotate secret'}
+											</Button>
+										{/if}
+										{#if wh.provider === 'generic' && wh.generic_inbound_auth && wh.generic_inbound_auth !== 'none'}
+											<Button
+												variant="outline"
+												size="sm"
+												class="border-amber-600/50 text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/40"
+												onclick={() => {
+													clearPwTarget = wh;
+													showClearPwInboundDialog = true;
+												}}
+											>
+												Open URL
+											</Button>
+										{/if}
+										<Button
+											variant={pwTargetsRegistrationId === wh.id ? 'primary' : 'outline'}
+											size="sm"
+											onclick={() => {
+												pwTargetsRegistrationId = pwTargetsRegistrationId === wh.id ? null : wh.id;
+												pwAddPipelineId = '';
+											}}
+										>
+											{pwTargetsRegistrationId === wh.id ? 'Hide targets' : 'Pipelines'}
+										</Button>
+									</div>
+								</div>
+								{#if pwTargetsRegistrationId === wh.id}
+									<div
+										class="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/40 p-3"
+									>
+										<p class="mb-2 text-sm font-medium text-[var(--text-primary)]">
+											Pipelines that receive a run
+										</p>
+										{#if pwTargetsLoading}
+											<Skeleton class="h-8 w-full" />
+										{:else if pwTargets.length === 0}
+											<p class="text-sm text-[var(--text-secondary)]">No targets yet. Add a pipeline below.</p>
+										{:else}
+											<ul class="divide-y divide-[var(--border-secondary)] text-sm">
+												{#each pwTargets as t (t.id)}
+													<li
+														class="flex flex-wrap items-center justify-between gap-2 py-2"
+													>
+														<span class="font-medium text-[var(--text-primary)]"
+															>{pipelineLabel(t.pipeline_id)}</span
+														>
+														<Button
+															variant="ghost"
+															size="sm"
+															onclick={() => removePwTarget(wh.id, t.id)}
+														>
+															<Trash2 class="h-4 w-4" />
+														</Button>
+													</li>
+												{/each}
+											</ul>
+										{/if}
+										<div class="mt-3 flex flex-wrap items-end gap-2">
+											<div class="min-w-[200px] flex-1">
+												<label class="mb-1 block text-xs text-[var(--text-secondary)]"
+													>Add pipeline</label
+												>
+												<Select
+													bind:value={pwAddPipelineId}
+													options={pipelines.map((p) => ({
+														value: p.id,
+														label: p.name
+													}))}
+													placeholder="Select pipeline…"
+												/>
+											</div>
+											<Button
+												variant="outline"
+												size="sm"
+												onclick={() => addPwTarget(wh.id)}
+												disabled={!pwAddPipelineId.trim()}
+											>
+												Add
+											</Button>
+										</div>
+									</div>
+								{/if}
+							</div>
+						</Card>
+					{/each}
+				</div>
 			{/if}
 		{:else if activeTab === 'variables'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
@@ -1485,6 +1964,167 @@
 				loading={variableActionLoading}
 			>
 				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showCreatePw}
+	title="New project webhook"
+	onclose={() => {
+		pwCreatePipelineIds = [];
+		pwDescription = '';
+	}}
+>
+	<p class="text-sm text-[var(--text-secondary)]">
+		Choose one or more pipelines to run for each matching request. The inbound URL and (when applicable) signing secret
+		are shown after creation.
+	</p>
+	<div class="mt-4 space-y-3">
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pw-desc"
+				>Description (optional)</label
+			>
+			<Input id="pw-desc" bind:value={pwDescription} placeholder="e.g. ACME deploy hook" />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pw-auth-mode"
+				>Inbound authentication</label
+			>
+			<Select
+				id="pw-auth-mode"
+				options={[
+					{ value: 'hmac', label: 'HMAC header (X-Hub-Signature-256)' },
+					{ value: 'query', label: 'Query parameter (secret in URL)' },
+					{ value: 'none', label: 'None (open — no verification)' }
+				]}
+				bind:value={pwAuthMode}
+			/>
+		</div>
+		{#if pwAuthMode === 'query'}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pw-qparam"
+					>Query parameter name</label
+				>
+				<Input id="pw-qparam" bind:value={pwQueryParamName} placeholder="token" />
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					Callers append <code class="font-mono">?{pwQueryParamName.trim() || 'token'}=&lt;secret&gt;</code> using the
+					signing secret shown once after create.
+				</p>
+			</div>
+		{/if}
+		{#if pwAuthMode === 'none'}
+			<p class="text-xs text-amber-700 dark:text-amber-400">
+				Anyone who can reach this URL can trigger pipelines. Prefer HMAC or query secret when the caller supports it.
+			</p>
+		{/if}
+	</div>
+	<p class="mt-4 text-sm font-medium text-[var(--text-primary)]">Pipelines to run</p>
+	<div class="mt-2 max-h-60 space-y-2 overflow-y-auto">
+		{#each pipelines as p (p.id)}
+			<label class="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-primary)]">
+				<input
+					type="checkbox"
+					class="rounded border-[var(--border-primary)]"
+					checked={pwCreatePipelineIds.includes(p.id)}
+					onchange={() => togglePwCreatePipeline(p.id)}
+				/>
+				<span>{p.name}</span>
+			</label>
+		{/each}
+	</div>
+	<div class="mt-6 flex justify-end gap-2">
+		<Button variant="outline" onclick={() => (showCreatePw = false)}>Cancel</Button>
+		<Button
+			variant="primary"
+			onclick={submitCreateProjectWebhook}
+			loading={pwCreateLoading}
+			disabled={pwCreatePipelineIds.length === 0}
+		>
+			Create
+		</Button>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showEditPw}
+	title="Edit generic webhook"
+	description="Update description and inbound authentication. Enabling HMAC or query from an open URL generates a new signing secret (shown once below the list, same as create)."
+	onclose={() => {
+		editPwTarget = null;
+	}}
+>
+	{#if editPwTarget}
+		<div class="space-y-4">
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="epw-desc"
+					>Description</label
+				>
+				<Input id="epw-desc" bind:value={epwDescription} placeholder="Optional label" />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="epw-auth-mode"
+					>Inbound authentication</label
+				>
+				<Select
+					id="epw-auth-mode"
+					options={[
+						{ value: 'hmac', label: 'HMAC header (X-Hub-Signature-256)' },
+						{ value: 'query', label: 'Query parameter (secret in URL)' },
+						{ value: 'none', label: 'None (open — no verification)' }
+					]}
+					bind:value={epwAuthMode}
+				/>
+			</div>
+			{#if epwAuthMode === 'query'}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="epw-qparam"
+						>Query parameter name</label
+					>
+					<Input id="epw-qparam" bind:value={epwQueryParam} placeholder="token" />
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						Callers append
+						<code class="font-mono">?{epwQueryParam.trim() || 'token'}=&lt;secret&gt;</code>.
+					</p>
+				</div>
+			{/if}
+			{#if epwAuthMode === 'none'}
+				<p class="text-xs text-amber-700 dark:text-amber-400">
+					Saving removes the stored signing secret. Anyone who can reach the URL can trigger pipelines.
+				</p>
+			{/if}
+			<div class="flex justify-end gap-2 pt-2">
+				<Button variant="outline" onclick={() => (showEditPw = false)}>Cancel</Button>
+				<Button variant="primary" onclick={submitEditProjectWebhook} loading={pwEditLoading}>
+					Save
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showClearPwInboundDialog}
+	title="Use an open webhook URL?"
+	onclose={() => {
+		clearPwTarget = null;
+	}}
+>
+	{#if clearPwTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			This removes signing verification for this generic webhook. Any client that can POST to the URL can start runs
+			in the configured pipelines. Prefer keeping HMAC or query auth when possible.
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showClearPwInboundDialog = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-amber-600 hover:bg-amber-700"
+				onclick={submitClearPwInbound}
+				loading={clearPwLoading}
+			>
+				Remove verification
 			</Button>
 		</div>
 	{/if}

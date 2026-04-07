@@ -5,9 +5,9 @@ use axum::{
     extract::{Path, State},
     routing::{delete, get, patch, post},
 };
-use met_core::ids::{PipelineId, TriggerId};
+use met_core::ids::{PipelineId, TriggerId, UserId};
 use met_core::models::{CreateTrigger, Trigger, TriggerKind, UpdateTrigger, WebhookConfig};
-use met_store::repos::{PipelineRepo, ProjectRepo, TriggerRepo};
+use met_store::repos::{PipelineRepo, ProjectRepo, TriggerRepo, UserRepo};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -19,6 +19,14 @@ use crate::{
     extractors::Auth,
     state::AppState,
 };
+
+async fn username_for_user_id(
+    pool: &met_store::PgPool,
+    user_id: Option<UserId>,
+) -> Option<String> {
+    let uid = user_id?;
+    UserRepo::new(pool).get(uid).await.ok().map(|u| u.username)
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -55,12 +63,23 @@ pub struct TriggerPublicResponse {
     pub pipeline_id: PipelineId,
     #[schema(value_type = String)]
     pub kind: TriggerKind,
-    /// Webhook configuration without `secret`; use `secret_configured` to see if HMAC is required.
+    /// Webhook configuration without `secret`; use `secret_configured` for whether a shared secret is set.
     #[schema(value_type = Object)]
     pub config: JsonValue,
+    /// Webhook only: effective inbound mode `none`, `hmac`, or `query`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_auth: Option<String>,
+    /// Webhook + `query` mode: query parameter name (secret must match its value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_query_param: Option<String>,
     pub secret_configured: bool,
     pub enabled: bool,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, nullable = true)]
+    pub created_by_user_id: Option<UserId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_username: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Present only on create when `generate_webhook_secret` was true.
@@ -69,19 +88,60 @@ pub struct TriggerPublicResponse {
 }
 
 impl TriggerPublicResponse {
-    fn from_trigger(t: &Trigger, generated_secret: Option<String>) -> Self {
+    fn from_trigger(
+        t: &Trigger,
+        generated_secret: Option<String>,
+        created_by_username: Option<String>,
+    ) -> Self {
+        let (inbound_auth, inbound_query_param) = webhook_inbound_public_fields(t);
         Self {
             id: t.id,
             pipeline_id: t.pipeline_id,
             kind: t.kind,
             config: redact_trigger_config(&t.config),
+            inbound_auth,
+            inbound_query_param,
             secret_configured: secret_configured(&t.config),
             enabled: t.enabled,
             description: t.description.clone(),
+            created_by_user_id: t.created_by_user_id,
+            created_by_username,
             created_at: t.created_at,
             updated_at: t.updated_at,
             generated_secret,
         }
+    }
+}
+
+fn webhook_inbound_public_fields(t: &Trigger) -> (Option<String>, Option<String>) {
+    if t.kind != TriggerKind::Webhook {
+        return (None, None);
+    }
+    let Ok(wc) = serde_json::from_value::<WebhookConfig>(t.config.clone()) else {
+        return (None, None);
+    };
+    let qp = wc
+        .inbound_query_param
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+    (Some(wc.resolved_inbound_auth()), qp)
+}
+
+fn merge_trigger_config_for_validation(base: &mut JsonValue, patch: &JsonValue) {
+    match (base, patch) {
+        (JsonValue::Object(a), JsonValue::Object(b)) => {
+            for (k, v) in b {
+                match a.get_mut(k) {
+                    Some(existing) if existing.is_object() && v.is_object() => {
+                        merge_trigger_config_for_validation(existing, v);
+                    }
+                    Some(_) | None => {
+                        a.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (base, patch) => *base = patch.clone(),
     }
 }
 
@@ -102,6 +162,8 @@ pub struct UpdateTriggerRequest {
     pub enabled: Option<bool>,
     pub description: Option<String>,
     /// Merged into existing JSON config (objects merge recursively).
+    /// For webhook triggers: `"inbound_auth"` (`none` | `hmac` | `query`), `"inbound_query_param"` (for `query`),
+    /// `"secret"` (non-empty or `null` to clear). Patches merge into existing config JSON.
     #[schema(value_type = Object)]
     pub config_patch: Option<JsonValue>,
 }
@@ -135,7 +197,13 @@ async fn list_triggers(
         .await?;
     let out = rows
         .iter()
-        .map(|t| TriggerPublicResponse::from_trigger(t, None))
+        .map(|row| {
+            TriggerPublicResponse::from_trigger(
+                &row.trigger,
+                None,
+                row.created_by_username.clone(),
+            )
+        })
         .collect();
     Ok(Json(out))
 }
@@ -193,6 +261,12 @@ async fn create_trigger(
         obj.remove("managed_by");
     }
 
+    let wc: WebhookConfig = serde_json::from_value(config_val.clone()).map_err(|_| {
+        ApiError::bad_request("invalid webhook configuration JSON")
+    })?;
+    wc.validate_inbound_for_trigger()
+        .map_err(ApiError::bad_request)?;
+
     let input = CreateTrigger {
         kind: body.kind,
         config: config_val,
@@ -200,12 +274,20 @@ async fn create_trigger(
     };
 
     let trigger = TriggerRepo::new(state.db())
-        .insert(project.org_id, pipeline_id, &input, true)
+        .insert(
+            project.org_id,
+            pipeline_id,
+            &input,
+            true,
+            Some(user.user_id),
+        )
         .await?;
+    let created_by_username = username_for_user_id(state.db(), trigger.created_by_user_id).await;
 
     Ok(Json(TriggerPublicResponse::from_trigger(
         &trigger,
         generated,
+        created_by_username,
     )))
 }
 
@@ -253,13 +335,30 @@ async fn update_trigger(
         }
     }
 
+    if prior.kind == TriggerKind::Webhook {
+        if let Some(ref p) = body.config_patch {
+            let mut merged = prior.config.clone();
+            merge_trigger_config_for_validation(&mut merged, p);
+            let wc: WebhookConfig = serde_json::from_value(merged).map_err(|_| {
+                ApiError::bad_request("invalid webhook configuration JSON after patch")
+            })?;
+            wc.validate_inbound_for_trigger()
+                .map_err(ApiError::bad_request)?;
+        }
+    }
+
     let patch = UpdateTrigger {
         enabled: body.enabled,
         description: body.description,
         config_patch: body.config_patch,
     };
     let updated = repo.update(user.org_id, trigger_id, &patch).await?;
-    Ok(Json(TriggerPublicResponse::from_trigger(&updated, None)))
+    let created_by_username = username_for_user_id(state.db(), updated.created_by_user_id).await;
+    Ok(Json(TriggerPublicResponse::from_trigger(
+        &updated,
+        None,
+        created_by_username,
+    )))
 }
 
 #[utoipa::path(

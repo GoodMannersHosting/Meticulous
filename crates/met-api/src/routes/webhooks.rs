@@ -4,14 +4,14 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{ConnectInfo, Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, Uri},
     routing::{delete, get, patch, post},
 };
-use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId};
+use met_core::ids::{OrganizationId, PipelineId, ProjectId, TriggerId, UserId};
 use met_core::models::{TriggerKind, WebhookConfig, WEBHOOK_MAX_BODY_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tracing::{debug, info, instrument};
 use utoipa::ToSchema;
@@ -25,8 +25,8 @@ use crate::{
 };
 use met_store::repos::{
     get_trigger_for_webhook_dispatch, CreateWebhookTarget, PipelineRepo, ProjectRepo,
-    UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext, WebhookRegistrationTarget,
-    WebhookRepo,
+    UpdateWebhookTarget, WebhookDeliveryClaim, WebhookRegistrationContext, WebhookRegistrationSummary,
+    WebhookRegistrationTarget, WebhookRepo,
 };
 
 /// Prefer proxy headers (when present); otherwise use the direct TCP peer address.
@@ -63,6 +63,19 @@ pub fn router() -> Router<AppState> {
             post(handle_bitbucket_webhook),
         )
         .route("/projects/{project_id}/scm/setup", post(setup_scm_webhook))
+        .route("/projects/{project_id}/webhooks", get(list_project_webhooks))
+        .route(
+            "/projects/{project_id}/webhooks/{registration_id}/rotate-inbound-secret",
+            post(rotate_project_webhook_inbound_secret),
+        )
+        .route(
+            "/projects/{project_id}/webhooks/{registration_id}/clear-inbound-secret",
+            post(clear_project_webhook_inbound_secret),
+        )
+        .route(
+            "/projects/{project_id}/webhooks/{registration_id}",
+            patch(patch_project_webhook),
+        )
         .route(
             "/projects/{project_id}/webhooks/{registration_id}/targets",
             get(list_webhook_targets).post(create_webhook_target),
@@ -128,6 +141,35 @@ fn default_target_enabled() -> bool {
 pub struct UpdateWebhookTargetRequest {
     pub enabled: Option<bool>,
     pub filter_config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PatchProjectWebhookRequest {
+    /// Omit to leave unchanged. Empty string clears the description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// When set, replaces pipeline targets with this exact list (pipelines must belong to the project).
+    #[serde(default)]
+    #[schema(value_type = Option<Vec<String>>)]
+    pub target_pipeline_ids: Option<Vec<PipelineId>>,
+    /// For `provider: generic` only. When enabling HMAC or query auth from `none`, a new signing secret is generated and returned once.
+    #[serde(default)]
+    pub generic_inbound_auth: Option<String>,
+    /// For generic `query` auth: parameter name (letters, digits, `-`, `_`; must start with a letter). Ignored when effective auth is not `query`.
+    #[serde(default)]
+    pub generic_query_param_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RotateInboundSecretResponse {
+    /// Value to configure in your caller (HMAC key material / query value), same as at create time. Shown once.
+    pub signing_secret: String,
+}
+
+/// Matching [`setup_scm_webhook`]: store and reveal SHA-256 hex of a random UUID string.
+fn generate_inbound_secret_hash() -> String {
+    let secret = uuid::Uuid::new_v4().to_string();
+    format!("{:x}", Sha256::digest(secret.as_bytes()))
 }
 
 async fn require_project_in_user_org(
@@ -202,8 +244,16 @@ fn scm_webhook_response_dispatched(
     }
 }
 
+fn registration_event_allowed(ctx: &WebhookRegistrationContext, event_type: &str) -> bool {
+    if ctx.provider.eq_ignore_ascii_case("generic") {
+        ctx.events.is_empty() || ctx.events.iter().any(|e| e == event_type)
+    } else {
+        ctx.events.iter().any(|e| e == event_type)
+    }
+}
+
 /// ADR-013: after signature verify — dedupe, fan out to target pipelines via [`pipeline_execution`].
-async fn dispatch_scm_registration_webhook(
+async fn dispatch_registered_webhook_fanout(
     state: &AppState,
     ctx: &WebhookRegistrationContext,
     provider: &str,
@@ -214,6 +264,7 @@ async fn dispatch_scm_registration_webhook(
     trigger_data: serde_json::Value,
     log_label: &str,
     webhook_remote_addr: Option<String>,
+    vars_base: HashMap<String, String>,
 ) -> ApiResult<WebhookResponse> {
     let registration_tid = TriggerId::from_uuid(ctx.registration_id);
     let hook_repo = WebhookRepo::new(state.db());
@@ -225,25 +276,12 @@ async fn dispatch_scm_registration_webhook(
         return Ok(scm_webhook_response_duplicate(run_ids));
     }
 
-    let event_ok = ctx.events.iter().any(|e| e == event_type);
+    let event_ok = registration_event_allowed(ctx, event_type);
     let mut target_errors: Vec<String> = Vec::new();
     let mut run_ids: Vec<Uuid> = Vec::new();
     let mut matched: usize = 0;
 
     let triggered_by = format!("{provider}:webhook:{delivery_id}");
-
-    let mut vars_base: HashMap<String, String> = HashMap::new();
-    if let Some(b) = branch {
-        if !b.is_empty() {
-            vars_base.insert("webhook_branch".into(), b.to_string());
-        }
-    }
-    if let Some(c) = commit_sha {
-        if !c.is_empty() {
-            vars_base.insert("webhook_commit".into(), c.to_string());
-        }
-    }
-    vars_base.insert("webhook_event".into(), event_type.to_string());
 
     if !event_ok {
         target_errors.push("event type ignored by registration filters".to_string());
@@ -339,6 +377,7 @@ async fn dispatch_scm_registration_webhook(
         provider = %provider,
         event = %event_type,
         ?branch,
+        trigger_data = ?trigger_data,
         "webhook dispatch completed for {}",
         log_label
     );
@@ -349,6 +388,47 @@ async fn dispatch_scm_registration_webhook(
         target_errors,
         &format!("{} event accepted", log_label),
     ))
+}
+
+async fn dispatch_scm_registration_webhook(
+    state: &AppState,
+    ctx: &WebhookRegistrationContext,
+    provider: &str,
+    delivery_id: &str,
+    event_type: &str,
+    branch: Option<&str>,
+    commit_sha: Option<&str>,
+    trigger_data: serde_json::Value,
+    log_label: &str,
+    webhook_remote_addr: Option<String>,
+) -> ApiResult<WebhookResponse> {
+    let mut vars_base: HashMap<String, String> = HashMap::new();
+    if let Some(b) = branch {
+        if !b.is_empty() {
+            vars_base.insert("webhook_branch".into(), b.to_string());
+        }
+    }
+    if let Some(c) = commit_sha {
+        if !c.is_empty() {
+            vars_base.insert("webhook_commit".into(), c.to_string());
+        }
+    }
+    vars_base.insert("webhook_event".into(), event_type.to_string());
+
+    dispatch_registered_webhook_fanout(
+        state,
+        ctx,
+        provider,
+        delivery_id,
+        event_type,
+        branch,
+        commit_sha,
+        trigger_data,
+        log_label,
+        webhook_remote_addr,
+        vars_base,
+    )
+    .await
 }
 
 fn github_delivery_id(headers: &HeaderMap, body: &[u8]) -> String {
@@ -395,11 +475,12 @@ pub struct GenericWebhookPayload {
     ),
     tag = "webhooks",
 )]
-#[instrument(skip(state, headers, body))]
+#[instrument(skip(state, headers, body, uri))]
 async fn handle_webhook(
     State(state): State<AppState>,
     Path((org_id, trigger_id)): Path<(OrganizationId, TriggerId)>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<WebhookResponse>> {
@@ -417,41 +498,109 @@ async fn handle_webhook(
         )));
     }
 
-    let trigger =
-        get_trigger_for_webhook_dispatch(state.db(), org_id, trigger_id).await?;
+    let client_ip = webhook_client_ip(&headers, &addr);
 
-    if trigger.kind != TriggerKind::Webhook {
+    let pipeline_trigger = match get_trigger_for_webhook_dispatch(state.db(), org_id, trigger_id).await {
+        Ok(t) => Some(t),
+        Err(e) if e.is_not_found() => None,
+        Err(e) => return Err(e.into()),
+    };
+
+    if let Some(trigger) = pipeline_trigger {
+        if trigger.kind != TriggerKind::Webhook {
+            return Err(ApiError::not_found("trigger"));
+        }
+        if !trigger.enabled {
+            return Err(ApiError::bad_request("trigger is disabled"));
+        }
+
+        let cfg: WebhookConfig = serde_json::from_value(trigger.config.clone()).map_err(|_| {
+            ApiError::bad_request("trigger has invalid webhook configuration JSON")
+        })?;
+
+        verify_pipeline_trigger_inbound_auth(&cfg, &uri, &headers, &body)?;
+
+        let mut vars = cfg
+            .map_payload_to_variables(&body)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+        if let Ok(payload) = serde_json::from_slice::<GenericWebhookPayload>(&body) {
+            if let Some(b) = payload.branch.filter(|s| !s.is_empty()) {
+                vars.entry("webhook_branch".into()).or_insert(b);
+            }
+            if let Some(c) = payload.commit.filter(|s| !s.is_empty()) {
+                vars.entry("webhook_commit".into()).or_insert(c);
+            }
+            if let Some(r) = payload.ref_name.filter(|s| !s.is_empty()) {
+                vars.entry("webhook_ref".into()).or_insert(r);
+            }
+        }
+
+        let pipeline_repo = PipelineRepo::new(state.db());
+        let pipeline = pipeline_repo.get(trigger.pipeline_id).await?;
+
+        let run = pipeline_execution::dispatch_pipeline_run(
+            &state,
+            &pipeline,
+            org_id,
+            None,
+            None,
+            Some(trigger_id),
+            "Webhook",
+            "Webhook",
+            Some(vars),
+            Some(client_ip.clone()),
+        )
+        .await?;
+
+        info!(run_id = %run.id, "webhook started pipeline run");
+
+        return Ok(Json(WebhookResponse {
+            accepted: true,
+            run_id: Some(run.id.to_string()),
+            run_ids: vec![run.id.to_string()],
+            duplicate: false,
+            targets_matched: Some(1),
+            target_errors: vec![],
+            message: "Webhook accepted; pipeline run created".to_string(),
+        }));
+    }
+
+    // Project-level `generic` registration: same URL shape, fans out via `webhook_registration_targets`.
+    let hook_repo = WebhookRepo::new(state.db());
+    let Some(ctx) = hook_repo.get_registration_context(trigger_id).await? else {
+        return Err(ApiError::not_found("trigger"));
+    };
+    if ctx.org_id != org_id {
         return Err(ApiError::not_found("trigger"));
     }
-    if !trigger.enabled {
-        return Err(ApiError::bad_request("trigger is disabled"));
+    if !ctx.provider.eq_ignore_ascii_case("generic") {
+        return Err(ApiError::not_found("trigger"));
     }
 
-    let cfg: WebhookConfig = serde_json::from_value(trigger.config.clone()).map_err(|_| {
-        ApiError::bad_request("trigger has invalid webhook configuration JSON")
-    })?;
+    verify_generic_inbound_auth(&ctx, &uri, &headers, &body)?;
 
-    if let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) {
-        let signature = headers
-            .get(GITHUB_SIGNATURE_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
-
-        if !verify_github_signature(secret.as_bytes(), &body, signature) {
-            return Err(ApiError::forbidden("Invalid webhook signature"));
-        }
-    }
+    let cfg: WebhookConfig =
+        serde_json::from_value(ctx.payload_mapping.clone()).unwrap_or_default();
 
     let mut vars = cfg
         .map_payload_to_variables(&body)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    // Optional compatibility: generic JSON payloads may carry branch/commit hints.
+    let mut event_type = String::from("webhook");
+    let mut branch: Option<String> = None;
+    let mut commit_sha: Option<String> = None;
+
     if let Ok(payload) = serde_json::from_slice::<GenericWebhookPayload>(&body) {
+        if let Some(ev) = payload.event.filter(|s| !s.is_empty()) {
+            event_type = ev;
+        }
         if let Some(b) = payload.branch.filter(|s| !s.is_empty()) {
+            branch = Some(b.clone());
             vars.entry("webhook_branch".into()).or_insert(b);
         }
         if let Some(c) = payload.commit.filter(|s| !s.is_empty()) {
+            commit_sha = Some(c.clone());
             vars.entry("webhook_commit".into()).or_insert(c);
         }
         if let Some(r) = payload.ref_name.filter(|s| !s.is_empty()) {
@@ -459,36 +608,31 @@ async fn handle_webhook(
         }
     }
 
-    let pipeline_repo = PipelineRepo::new(state.db());
-    let pipeline = pipeline_repo.get(trigger.pipeline_id).await?;
+    vars.entry("webhook_event".into()).or_insert(event_type.clone());
 
-    let client_ip = webhook_client_ip(&headers, &addr);
+    let delivery_id = github_delivery_id(&headers, &body);
+    let trigger_data = serde_json::json!({
+        "provider": "generic",
+        "registration_id": ctx.registration_id,
+        "delivery_id": delivery_id,
+    });
 
-    let run = pipeline_execution::dispatch_pipeline_run(
+    let resp = dispatch_registered_webhook_fanout(
         &state,
-        &pipeline,
-        org_id,
-        None,
-        None,
-        Some(trigger_id),
-        "Webhook",
-        "Webhook",
-        Some(vars),
+        &ctx,
+        "generic",
+        &delivery_id,
+        &event_type,
+        branch.as_deref(),
+        commit_sha.as_deref(),
+        trigger_data,
+        "generic project webhook",
         Some(client_ip),
+        vars,
     )
     .await?;
 
-    info!(run_id = %run.id, "webhook started pipeline run");
-
-    Ok(Json(WebhookResponse {
-        accepted: true,
-        run_id: Some(run.id.to_string()),
-        run_ids: vec![run.id.to_string()],
-        duplicate: false,
-        targets_matched: Some(1),
-        target_errors: vec![],
-        message: "Webhook accepted; pipeline run created".to_string(),
-    }))
+    Ok(Json(resp))
 }
 
 #[derive(Debug, Deserialize)]
@@ -837,6 +981,144 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b.iter()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+fn query_param_first_raw(query: Option<&str>, key: &str) -> Option<String> {
+    let q = query?;
+    url::form_urlencoded::parse(q.as_bytes())
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
+}
+
+fn verify_pipeline_trigger_inbound_auth(
+    cfg: &WebhookConfig,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> ApiResult<()> {
+    match cfg.resolved_inbound_auth().as_str() {
+        "none" => Ok(()),
+        "hmac" => {
+            let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) else {
+                return Err(ApiError::bad_request(
+                    "webhook trigger misconfigured: hmac inbound_auth without secret",
+                ));
+            };
+            let signature = headers
+                .get(GITHUB_SIGNATURE_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
+
+            if !verify_github_signature(secret.as_bytes(), body, signature) {
+                return Err(ApiError::forbidden("Invalid webhook signature"));
+            }
+            Ok(())
+        }
+        "query" => {
+            let Some(param) = cfg
+                .inbound_query_param
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return Err(ApiError::internal(
+                    "webhook trigger misconfigured (query auth without inbound_query_param)",
+                ));
+            };
+            let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) else {
+                return Err(ApiError::internal(
+                    "webhook trigger misconfigured (query auth without secret)",
+                ));
+            };
+            let got = query_param_first_raw(uri.query(), param).ok_or_else(|| {
+                ApiError::forbidden("Missing webhook authentication query parameter")
+            })?;
+            if !constant_time_eq(got.as_bytes(), secret.as_bytes()) {
+                return Err(ApiError::forbidden("Invalid webhook query authentication"));
+            }
+            Ok(())
+        }
+        _ => Err(ApiError::internal("unsupported pipeline inbound_auth")),
+    }
+}
+
+/// Inbound auth for `provider = generic` only (`none` | `hmac` | `query`).
+fn verify_generic_inbound_auth(
+    ctx: &WebhookRegistrationContext,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> ApiResult<()> {
+    let mode = ctx.generic_inbound_auth.to_lowercase();
+    match mode.as_str() {
+        "none" => Ok(()),
+        "hmac" => {
+            let secret = ctx.secret_verifier.as_bytes();
+            if secret.is_empty() {
+                return Ok(());
+            }
+            let signature = headers
+                .get(GITHUB_SIGNATURE_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| ApiError::bad_request("Missing X-Hub-Signature-256 header"))?;
+
+            if !verify_github_signature(secret, body, signature) {
+                return Err(ApiError::forbidden("Invalid webhook signature"));
+            }
+            Ok(())
+        }
+        "query" => {
+            let Some(param) = ctx
+                .generic_query_param_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return Err(ApiError::internal(
+                    "webhook registration is misconfigured (query auth without parameter name)",
+                ));
+            };
+            if ctx.secret_verifier.is_empty() {
+                return Err(ApiError::internal(
+                    "webhook registration is misconfigured (query auth without secret)",
+                ));
+            }
+            let got = query_param_first_raw(uri.query(), param).ok_or_else(|| {
+                ApiError::forbidden("Missing webhook authentication query parameter")
+            })?;
+            if !constant_time_eq(got.as_bytes(), ctx.secret_verifier.as_bytes()) {
+                return Err(ApiError::forbidden("Invalid webhook query authentication"));
+            }
+            Ok(())
+        }
+        _ => Err(ApiError::internal("unsupported generic_inbound_auth")),
+    }
+}
+
+fn normalize_generic_inbound_auth(raw: Option<String>) -> ApiResult<String> {
+    let v = raw
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "hmac".to_string())
+        .to_lowercase();
+    match v.as_str() {
+        "none" | "hmac" | "query" => Ok(v),
+        _ => Err(ApiError::bad_request(
+            "generic_inbound_auth must be none, hmac, or query",
+        )),
+    }
+}
+
+/// Allow-list query parameter names (first character alphabetic).
+fn generic_query_param_name_valid(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BitbucketWebhookPayload {
     pub push: Option<BitbucketPush>,
@@ -1001,10 +1283,24 @@ pub struct SetupScmWebhookTargetInput {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetupScmWebhookRequest {
     pub provider: String,
-    pub repository_url: String,
+    /// Stored for compatibility; not written to the database today.
+    #[serde(default)]
+    pub repository_url: Option<String>,
     pub events: Option<Vec<String>>,
     #[serde(default)]
     pub targets: Vec<SetupScmWebhookTargetInput>,
+    /// For `provider: generic`: optional [`WebhookConfig`] JSON (no `secret`); controls JSON→variable mapping.
+    #[serde(default)]
+    pub payload_mapping: Option<serde_json::Value>,
+    /// For `provider: generic`: `none` (no verification), `hmac` (default, `X-Hub-Signature-256`), or `query` (secret in URL).
+    #[serde(default)]
+    pub generic_inbound_auth: Option<String>,
+    /// For `generic_inbound_auth: query`: query parameter name (e.g. `token`). Value must equal the signing secret.
+    #[serde(default)]
+    pub generic_query_param_name: Option<String>,
+    /// Optional label shown in the project webhooks list.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1013,6 +1309,76 @@ pub struct SetupScmWebhookResponse {
     pub webhook_url: String,
     pub provider: String,
     pub events: Vec<String>,
+    /// For `generic` with `hmac` or `query` auth: shared secret (hex). Shown once. Omitted for `generic_inbound_auth: none`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectWebhookRegistrationResponse {
+    #[schema(value_type = String)]
+    pub id: Uuid,
+    pub provider: String,
+    pub events: Vec<String>,
+    pub active: bool,
+    #[schema(value_type = Object)]
+    pub payload_mapping: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Relative inbound URL (prepend public API origin), includes org id and provider when needed.
+    pub inbound_path: String,
+    /// For `generic`: `none`, `hmac`, or `query`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_inbound_auth: Option<String>,
+    /// When auth is `query`: parameter name callers must append to the URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_query_param_name: Option<String>,
+    /// Whether inbound signing material is stored (`secret_hash` non-empty).
+    pub inbound_secret_configured: bool,
+    /// Present only when a new verifier was generated (e.g. enabling auth from `none`). Same semantics as create.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, nullable = true)]
+    pub created_by_user_id: Option<UserId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_username: Option<String>,
+}
+
+impl ProjectWebhookRegistrationResponse {
+    fn from_summary(s: WebhookRegistrationSummary, org_id: OrganizationId) -> Self {
+        let prov = s.provider.to_lowercase();
+        let inbound_path = if prov == "generic" {
+            format!("/api/v1/webhooks/{org_id}/{}", s.id)
+        } else {
+            format!("/api/v1/webhooks/{prov}/{org_id}/{}", s.id)
+        };
+        let (gia, gqpn) = if prov == "generic" {
+            (
+                Some(s.generic_inbound_auth.clone()),
+                s.generic_query_param_name.clone(),
+            )
+        } else {
+            (None, None)
+        };
+        Self {
+            id: s.id,
+            provider: s.provider,
+            events: s.events,
+            active: s.active,
+            payload_mapping: s.payload_mapping,
+            created_at: s.created_at,
+            inbound_path,
+            generic_inbound_auth: gia,
+            generic_query_param_name: gqpn,
+            inbound_secret_configured: s.secret_configured,
+            signing_secret: None,
+            description: s.description,
+            created_by_user_id: s.created_by_user_id,
+            created_by_username: s.created_by_username,
+        }
+    }
 }
 
 #[utoipa::path(
@@ -1036,24 +1402,76 @@ async fn setup_scm_webhook(
     require_project_in_user_org(state.db(), &user, project_id).await?;
 
     let provider = req.provider.to_lowercase();
-    if !matches!(provider.as_str(), "github" | "gitlab" | "bitbucket") {
+    let (events, payload_mapping): (Vec<String>, serde_json::Value) = if provider == "generic" {
+        (
+            req.events.unwrap_or_default(),
+            req.payload_mapping.unwrap_or_else(|| serde_json::json!({})),
+        )
+    } else if matches!(provider.as_str(), "github" | "gitlab" | "bitbucket") {
+        (
+            req.events.unwrap_or_else(|| {
+                vec!["push".to_string(), "pull_request".to_string()]
+            }),
+            serde_json::json!({}),
+        )
+    } else {
         return Err(ApiError::bad_request(format!(
-            "Unsupported SCM provider: {}. Supported: github, gitlab, bitbucket",
+            "Unsupported provider: {}. Supported: github, gitlab, bitbucket, generic",
             req.provider
         )));
-    }
+    };
 
-    let events = req
-        .events
-        .unwrap_or_else(|| vec!["push".to_string(), "pull_request".to_string()]);
+    let (generic_auth, query_param_name): (String, Option<String>) = if provider == "generic" {
+        let auth = normalize_generic_inbound_auth(req.generic_inbound_auth.clone())?;
+        let qn = req
+            .generic_query_param_name
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if auth == "query" {
+            let Some(ref n) = qn else {
+                return Err(ApiError::bad_request(
+                    "generic_query_param_name is required when generic_inbound_auth is query",
+                ));
+            };
+            if !generic_query_param_name_valid(n) {
+                return Err(ApiError::bad_request(
+                    "generic_query_param_name must start with a letter and use only letters, digits, hyphen, or underscore",
+                ));
+            }
+        } else if qn.is_some() {
+            return Err(ApiError::bad_request(
+                "generic_query_param_name is only allowed when generic_inbound_auth is query",
+            ));
+        }
+        (auth, qn)
+    } else {
+        ("hmac".to_string(), None)
+    };
 
-    let secret = uuid::Uuid::new_v4().to_string();
-    let secret_hash = format!("{:x}", Sha256::digest(secret.as_bytes()));
+    let (secret_hash, signing_secret): (String, Option<String>) =
+        if provider == "generic" && generic_auth == "none" {
+            (String::new(), None)
+        } else {
+            let secret = uuid::Uuid::new_v4().to_string();
+            let h = format!("{:x}", Sha256::digest(secret.as_bytes()));
+            let reveal = if provider == "generic" {
+                (generic_auth != "none").then_some(h.clone())
+            } else {
+                None
+            };
+            (h, reveal)
+        };
+
+    let description: Option<String> = req.description.and_then(|s| {
+        let t = s.trim().to_string();
+        (!t.is_empty()).then_some(t)
+    });
 
     let webhook_id: (uuid::Uuid,) = sqlx::query_as(
         r#"
-        INSERT INTO webhook_registrations (project_id, provider, secret_hash, events)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO webhook_registrations (project_id, provider, secret_hash, events, payload_mapping, generic_inbound_auth, generic_query_param_name, description, created_by_user_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id
         "#,
     )
@@ -1061,6 +1479,11 @@ async fn setup_scm_webhook(
     .bind(&provider)
     .bind(&secret_hash)
     .bind(&events)
+    .bind(&payload_mapping)
+    .bind(&generic_auth)
+    .bind(&query_param_name)
+    .bind(&description)
+    .bind(user.user_id.as_uuid())
     .fetch_one(state.db())
     .await
     .map_err(met_store::StoreError::from)?;
@@ -1089,19 +1512,291 @@ async fn setup_scm_webhook(
             .await?;
     }
 
-    let webhook_url = format!(
-        "/api/v1/webhooks/{provider}/{org}/{trigger}",
-        provider = provider,
-        org = user.org_id,
-        trigger = registration_id.as_uuid(),
-    );
+    let webhook_url = if provider == "generic" {
+        format!(
+            "/api/v1/webhooks/{org}/{trigger}",
+            org = user.org_id,
+            trigger = registration_id.as_uuid(),
+        )
+    } else {
+        format!(
+            "/api/v1/webhooks/{provider}/{org}/{trigger}",
+            provider = provider,
+            org = user.org_id,
+            trigger = registration_id.as_uuid(),
+        )
+    };
 
     Ok(Json(SetupScmWebhookResponse {
         webhook_id: registration_id.as_uuid().to_string(),
         webhook_url,
         provider,
         events,
+        signing_secret,
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/webhooks",
+    params(("project_id" = String, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Webhook registrations", body = Vec<ProjectWebhookRegistrationResponse>),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn list_project_webhooks(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+) -> ApiResult<Json<Vec<ProjectWebhookRegistrationResponse>>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let rows = WebhookRepo::new(state.db())
+        .list_registrations_for_project(project_id)
+        .await?;
+    let out = rows
+        .into_iter()
+        .map(|s| ProjectWebhookRegistrationResponse::from_summary(s, user.org_id))
+        .collect();
+    Ok(Json(out))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    request_body = PatchProjectWebhookRequest,
+    responses(
+        (status = 200, description = "Updated registration", body = ProjectWebhookRegistrationResponse),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state, body))]
+async fn patch_project_webhook(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+    Json(body): Json<PatchProjectWebhookRequest>,
+) -> ApiResult<Json<ProjectWebhookRegistrationResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+
+    if body.description.is_none()
+        && body.target_pipeline_ids.is_none()
+        && body.generic_inbound_auth.is_none()
+        && body.generic_query_param_name.is_none()
+    {
+        return Err(ApiError::bad_request(
+            "provide description, target_pipeline_ids, generic_inbound_auth, and/or generic_query_param_name to update",
+        ));
+    }
+
+    let mut signing_secret_out: Option<String> = None;
+
+    if body.generic_inbound_auth.is_some() || body.generic_query_param_name.is_some() {
+        let summary = repo
+            .get_registration_summary_for_project(project_id, registration_id)
+            .await?;
+        if !summary.provider.eq_ignore_ascii_case("generic") {
+            return Err(ApiError::bad_request(
+                "generic_inbound_auth and generic_query_param_name apply only to generic webhooks",
+            ));
+        }
+
+        let new_auth = if let Some(ref raw) = body.generic_inbound_auth {
+            normalize_generic_inbound_auth(Some(raw.clone()))?
+        } else {
+            summary.generic_inbound_auth.to_lowercase()
+        };
+
+        if body.generic_query_param_name.is_some() && new_auth != "query" {
+            return Err(ApiError::bad_request(
+                "generic_query_param_name is only valid when generic_inbound_auth is query (set auth to query in the same request)",
+            ));
+        }
+
+        let qn_db: Option<String> = if new_auth == "query" {
+            if let Some(ref raw) = body.generic_query_param_name {
+                let t = raw.trim();
+                if t.is_empty() {
+                    return Err(ApiError::bad_request(
+                        "generic_query_param_name must be non-empty for query authentication",
+                    ));
+                }
+                if !generic_query_param_name_valid(t) {
+                    return Err(ApiError::bad_request(
+                        "generic_query_param_name must start with a letter and use only letters, digits, hyphen, or underscore",
+                    ));
+                }
+                Some(t.to_string())
+            } else {
+                let fallback = summary
+                    .generic_query_param_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("token")
+                    .to_string();
+                if !generic_query_param_name_valid(&fallback) {
+                    return Err(ApiError::bad_request(
+                        "existing generic_query_param_name is invalid; set generic_query_param_name explicitly",
+                    ));
+                }
+                Some(fallback)
+            }
+        } else {
+            None
+        };
+
+        let current_secret = repo
+            .get_secret_hash_for_project_registration(project_id, registration_id)
+            .await?;
+
+        let (secret_to_store, revealed): (String, Option<String>) = if new_auth == "none" {
+            (String::new(), None)
+        } else if current_secret.is_empty() || summary.generic_inbound_auth.eq_ignore_ascii_case("none")
+        {
+            let h = generate_inbound_secret_hash();
+            (h.clone(), Some(h))
+        } else {
+            (current_secret, None)
+        };
+
+        repo.update_generic_inbound_for_project(
+            project_id,
+            registration_id,
+            &new_auth,
+            qn_db.as_deref(),
+            &secret_to_store,
+        )
+        .await?;
+        signing_secret_out = revealed;
+    }
+
+    if let Some(ref raw) = body.description {
+        let stored = raw.trim();
+        let desc = if stored.is_empty() {
+            None
+        } else {
+            Some(stored.to_string())
+        };
+        repo.update_registration_description(project_id, registration_id, desc)
+            .await?;
+    }
+
+    if let Some(ref pids) = body.target_pipeline_ids {
+        let unique: Vec<PipelineId> = {
+            let mut seen = HashSet::new();
+            pids.iter()
+                .copied()
+                .filter(|p| seen.insert(p.as_uuid()))
+                .collect()
+        };
+        repo.sync_registration_targets(project_id, registration_id, &unique)
+            .await?;
+    }
+
+    let summary = repo
+        .get_registration_summary_for_project(project_id, registration_id)
+        .await?;
+    let mut response = ProjectWebhookRegistrationResponse::from_summary(summary, user.org_id);
+    response.signing_secret = signing_secret_out;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/rotate-inbound-secret",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    responses(
+        (status = 200, description = "New secret (shown once)", body = RotateInboundSecretResponse),
+        (status = 400, description = "Cannot rotate (e.g. open/generic none)"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn rotate_project_webhook_inbound_secret(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+) -> ApiResult<Json<RotateInboundSecretResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+
+    let summary = repo
+        .get_registration_summary_for_project(project_id, registration_id)
+        .await?;
+    if summary.provider.eq_ignore_ascii_case("generic")
+        && summary.generic_inbound_auth.eq_ignore_ascii_case("none")
+    {
+        return Err(ApiError::bad_request(
+            "cannot rotate secret while inbound authentication is disabled",
+        ));
+    }
+
+    let signing_secret = generate_inbound_secret_hash();
+    repo.update_registration_secret_hash(
+        project_id,
+        registration_id,
+        &signing_secret,
+    )
+    .await?;
+
+    Ok(Json(RotateInboundSecretResponse { signing_secret }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/clear-inbound-secret",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    responses(
+        (status = 200, description = "Updated registration", body = ProjectWebhookRegistrationResponse),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn clear_project_webhook_inbound_secret(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+) -> ApiResult<Json<ProjectWebhookRegistrationResponse>> {
+    require_project_in_user_org(state.db(), &user, project_id).await?;
+    let repo = WebhookRepo::new(state.db());
+    repo.assert_registration_in_project(project_id, registration_id)
+        .await?;
+
+    let summary = repo
+        .get_registration_summary_for_project(project_id, registration_id)
+        .await?;
+    repo.clear_registration_inbound_secret(
+        project_id,
+        registration_id,
+        &summary.provider,
+    )
+    .await?;
+
+    let summary = repo
+        .get_registration_summary_for_project(project_id, registration_id)
+        .await?;
+    Ok(Json(ProjectWebhookRegistrationResponse::from_summary(
+        summary,
+        user.org_id,
+    )))
 }
 
 #[utoipa::path(

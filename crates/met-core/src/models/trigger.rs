@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::ids::{PipelineId, TriggerId};
+use crate::ids::{PipelineId, TriggerId, UserId};
 
 /// Maximum raw webhook body size accepted for JSON parsing and variable mapping (defense in depth).
 /// Larger than [`WEBHOOK_MAX_TOTAL_MAPPED_BYTES`] so JSON structure overhead can carry several large strings
@@ -37,6 +37,9 @@ pub struct Trigger {
     /// Optional description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// User who created this trigger (API or UI); unset for repo-synced rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by_user_id: Option<UserId>,
     /// When the trigger was created.
     pub created_at: DateTime<Utc>,
     /// When the trigger was last updated.
@@ -55,6 +58,7 @@ impl Trigger {
             config: serde_json::to_value(config).unwrap_or_default(),
             enabled: true,
             description: None,
+            created_by_user_id: None,
             created_at: now,
             updated_at: now,
         }
@@ -71,6 +75,7 @@ impl Trigger {
             config: serde_json::to_value(config).unwrap_or_default(),
             enabled: true,
             description: None,
+            created_by_user_id: None,
             created_at: now,
             updated_at: now,
         }
@@ -87,6 +92,7 @@ impl Trigger {
             config: JsonValue::Object(serde_json::Map::new()),
             enabled: true,
             description: None,
+            created_by_user_id: None,
             created_at: now,
             updated_at: now,
         }
@@ -116,9 +122,16 @@ pub enum TriggerKind {
 /// Configuration for webhook triggers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
-    /// Webhook secret for signature verification.
+    /// Webhook secret for signature verification (`hmac` / `query`) or omitted when `inbound_auth` is `none`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
+    /// Inbound verification: `none`, `hmac` (`X-Hub-Signature-256`), or `query` (secret must match query param value).
+    /// When omitted: legacy behavior — `hmac` if `secret` is non-empty, otherwise `none`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_auth: Option<String>,
+    /// When `inbound_auth` is `query`: query parameter name whose value must equal `secret`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_query_param: Option<String>,
     /// Branch filter (glob patterns).
     #[serde(default)]
     pub branches: Vec<String>,
@@ -153,6 +166,8 @@ impl Default for WebhookConfig {
     fn default() -> Self {
         Self {
             secret: None,
+            inbound_auth: None,
+            inbound_query_param: None,
             branches: vec!["main".to_string(), "master".to_string()],
             paths: Vec::new(),
             paths_ignore: Vec::new(),
@@ -188,6 +203,73 @@ pub enum WebhookVariableMapError {
 }
 
 impl WebhookConfig {
+    /// Effective inbound mode: `none`, `hmac`, or `query`.
+    #[must_use]
+    pub fn resolved_inbound_auth(&self) -> String {
+        if let Some(raw) = self.inbound_auth.as_deref() {
+            match raw.trim().to_lowercase().as_str() {
+                "none" => return "none".into(),
+                "query" => return "query".into(),
+                "hmac" => return "hmac".into(),
+                _ => return "hmac".into(),
+            }
+        }
+        if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+            "none".into()
+        } else {
+            "hmac".into()
+        }
+    }
+
+    /// Whether `inbound_query_param` is a valid identifier (letter first; letters, digits, `-`, `_`).
+    #[must_use]
+    pub fn inbound_query_param_name_valid(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !first.is_alphabetic() {
+            return false;
+        }
+        name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+
+    /// Validate `inbound_auth` / `secret` / `inbound_query_param` for a persisted pipeline webhook trigger.
+    pub fn validate_inbound_for_trigger(&self) -> Result<(), String> {
+        match self.resolved_inbound_auth().as_str() {
+            "none" => Ok(()),
+            "hmac" => {
+                if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+                    Err(r#"inbound_auth "hmac" requires a non-empty secret"#.into())
+                } else {
+                    Ok(())
+                }
+            }
+            "query" => {
+                let name = self
+                    .inbound_query_param
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let Some(n) = name else {
+                    return Err(r#"inbound_auth "query" requires inbound_query_param (e.g. "token")"#.into());
+                };
+                if !Self::inbound_query_param_name_valid(n) {
+                    return Err(
+                        "inbound_query_param must start with a letter and use only letters, digits, hyphen, or underscore"
+                            .into(),
+                    );
+                }
+                if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+                    return Err(r#"inbound_auth "query" requires a non-empty secret"#.into());
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Parse `raw_body` as JSON (empty body → empty object) and build trigger variables per config.
     ///
     /// `flatten_top_level` applies only when the root is a JSON object. Keys are used as variable names;

@@ -1,12 +1,20 @@
 //! Pipeline trigger repository (DB triggers table).
 
 use chrono::Utc;
-use met_core::ids::{OrganizationId, PipelineId, TriggerId};
+use met_core::ids::{OrganizationId, PipelineId, TriggerId, UserId};
 use met_core::models::{CreateTrigger, Trigger, UpdateTrigger};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
 use crate::error::{Result, StoreError};
+
+/// Trigger row with creator username (for list UIs).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PipelineTriggerListEntry {
+    #[sqlx(flatten)]
+    pub trigger: Trigger,
+    pub created_by_username: Option<String>,
+}
 
 /// Repository for pipeline triggers (`triggers` table).
 pub struct TriggerRepo<'a> {
@@ -27,18 +35,19 @@ impl<'a> TriggerRepo<'a> {
         pipeline_id: PipelineId,
         input: &CreateTrigger,
         enabled: bool,
+        created_by_user_id: Option<UserId>,
     ) -> Result<Trigger> {
         let id = TriggerId::new();
         let now = Utc::now();
 
         let trigger = sqlx::query_as::<_, Trigger>(
             r#"
-            INSERT INTO triggers (id, pipeline_id, kind, config, enabled, description, created_at, updated_at)
-            SELECT $1, $2, $3, $4, $5, $6, $7, $7
+            INSERT INTO triggers (id, pipeline_id, kind, config, enabled, description, created_by_user_id, created_at, updated_at)
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8, $8
             FROM pipelines p
-            INNER JOIN projects pr ON pr.id = p.project_id AND pr.org_id = $8 AND pr.deleted_at IS NULL
+            INNER JOIN projects pr ON pr.id = p.project_id AND pr.org_id = $9 AND pr.deleted_at IS NULL
             WHERE p.id = $2
-            RETURNING id, pipeline_id, kind, config, enabled, description, created_at, updated_at
+            RETURNING id, pipeline_id, kind, config, enabled, description, created_by_user_id, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -47,6 +56,7 @@ impl<'a> TriggerRepo<'a> {
         .bind(&input.config)
         .bind(enabled)
         .bind(&input.description)
+        .bind(created_by_user_id.map(|u| u.as_uuid()))
         .bind(now)
         .bind(org_id.as_uuid())
         .fetch_optional(self.pool)
@@ -64,7 +74,7 @@ impl<'a> TriggerRepo<'a> {
     ) -> Result<Trigger> {
         sqlx::query_as::<_, Trigger>(
             r#"
-            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_at, t.updated_at
+            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_by_user_id, t.created_at, t.updated_at
             FROM triggers t
             INNER JOIN pipelines p ON p.id = t.pipeline_id
             INNER JOIN projects pr ON pr.id = p.project_id
@@ -83,13 +93,15 @@ impl<'a> TriggerRepo<'a> {
         &self,
         org_id: OrganizationId,
         pipeline_id: PipelineId,
-    ) -> Result<Vec<Trigger>> {
-        let rows = sqlx::query_as::<_, Trigger>(
+    ) -> Result<Vec<PipelineTriggerListEntry>> {
+        let rows = sqlx::query_as::<_, PipelineTriggerListEntry>(
             r#"
-            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_at, t.updated_at
+            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_by_user_id, t.created_at, t.updated_at,
+                   u.username AS created_by_username
             FROM triggers t
             INNER JOIN pipelines p ON p.id = t.pipeline_id
             INNER JOIN projects pr ON pr.id = p.project_id
+            LEFT JOIN users u ON u.id = t.created_by_user_id AND u.deleted_at IS NULL
             WHERE t.pipeline_id = $1 AND pr.org_id = $2 AND pr.deleted_at IS NULL
             ORDER BY t.created_at ASC
             "#,
@@ -136,7 +148,7 @@ impl<'a> TriggerRepo<'a> {
             FROM pipelines p
             INNER JOIN projects pr ON pr.id = p.project_id
             WHERE t.id = $1 AND t.pipeline_id = p.id AND pr.org_id = $2 AND pr.deleted_at IS NULL
-            RETURNING t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_at, t.updated_at
+            RETURNING t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_by_user_id, t.created_at, t.updated_at
             "#,
         )
         .bind(trigger_id.as_uuid())
@@ -165,7 +177,7 @@ impl<'a> TriggerRepo<'a> {
             FROM pipelines p
             INNER JOIN projects pr ON pr.id = p.project_id
             WHERE t.id = $1 AND t.pipeline_id = p.id AND pr.org_id = $2 AND pr.deleted_at IS NULL
-            RETURNING t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_at, t.updated_at
+            RETURNING t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_by_user_id, t.created_at, t.updated_at
             "#,
         )
         .bind(trigger.id.as_uuid())
@@ -211,7 +223,7 @@ impl<'a> TriggerRepo<'a> {
     ) -> Result<Option<Trigger>> {
         let row = sqlx::query_as::<_, Trigger>(
             r#"
-            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_at, t.updated_at
+            SELECT t.id, t.pipeline_id, t.kind, t.config, t.enabled, t.description, t.created_by_user_id, t.created_at, t.updated_at
             FROM triggers t
             INNER JOIN pipelines p ON p.id = t.pipeline_id
             INNER JOIN projects pr ON pr.id = p.project_id
