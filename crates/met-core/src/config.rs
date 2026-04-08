@@ -9,8 +9,54 @@
 
 use crate::error::{MetError, Result};
 use config::{Config, Environment, File, FileFormat};
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Split comma-separated origins (common for `MET_HTTP__CORS_ORIGINS` in Kubernetes).
+fn split_cors_origins_csv(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn deserialize_cors_origins<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct CorsVisitor;
+
+    impl<'de> de::Visitor<'de> for CorsVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of origin strings or one comma-separated string")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut v = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                v.push(s);
+            }
+            Ok(v)
+        }
+
+        fn visit_str<E: de::Error>(self, s: &str) -> std::result::Result<Self::Value, E> {
+            Ok(split_cors_origins_csv(s))
+        }
+
+        fn visit_string<E: de::Error>(self, s: String) -> std::result::Result<Self::Value, E> {
+            Ok(split_cors_origins_csv(&s))
+        }
+    }
+
+    deserializer.deserialize_any(CorsVisitor)
+}
 
 /// Top-level configuration for Meticulous components.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +235,7 @@ pub struct HttpConfig {
     /// Address to listen on.
     pub listen_addr: String,
     /// Allowed CORS origins.
+    #[serde(deserialize_with = "deserialize_cors_origins")]
     pub cors_origins: Vec<String>,
     /// Request body size limit in bytes.
     pub body_limit_bytes: usize,
@@ -372,6 +419,52 @@ mod tests {
         assert_eq!(
             config.database.url,
             "postgres://u:pw@pg.example:5432/app"
+        );
+    }
+
+    #[test]
+    fn test_cors_origins_comma_separated_env_string() {
+        use config::Environment;
+        use std::collections::HashMap;
+
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "MET_HTTP__CORS_ORIGINS".to_string(),
+            "https://ci.example.com,http://localhost:5173".to_string(),
+        );
+        let config: MetConfig = Config::builder()
+            .add_source(
+                Environment::default()
+                    .prefix("MET")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true)
+                    .source(Some(env_map)),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(
+            config.http.cors_origins,
+            vec![
+                "https://ci.example.com".to_string(),
+                "http://localhost:5173".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cors_origins_toml_array_unchanged() {
+        let toml = r#"
+            [http]
+            cors_origins = ["https://a.example", "https://b.example"]
+        "#;
+        let config = MetConfig::from_toml(toml).unwrap();
+        assert_eq!(
+            config.http.cors_origins,
+            vec!["https://a.example", "https://b.example"]
         );
     }
 }
