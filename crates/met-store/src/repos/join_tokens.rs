@@ -13,6 +13,38 @@ const JOIN_TOKEN_ROW: &str = r#"
     consumed_by_agent_id, consumed_at
 "#;
 
+/// Rows visible in the org admin "Join tokens" UI: tenant org, platform anchor org, or
+/// project/pipeline belonging to this org.
+const JOIN_TOKEN_VISIBLE_TO_ORG_SQL: &str = r#"
+(
+    (join_tokens.scope = 'tenant' AND join_tokens.scope_id = $1)
+    OR (
+        join_tokens.scope = 'platform'
+        AND (
+            join_tokens.org_id = $1
+            OR (
+                join_tokens.org_id IS NULL
+                AND join_tokens.created_by IN (
+                    SELECT u.id FROM users u WHERE u.org_id = $1 AND u.deleted_at IS NULL
+                )
+            )
+        )
+    )
+    OR (
+        join_tokens.scope = 'project'
+        AND join_tokens.scope_id IN (SELECT p.id FROM projects p WHERE p.org_id = $1)
+    )
+    OR (
+        join_tokens.scope = 'pipeline'
+        AND join_tokens.scope_id IN (
+            SELECT pl.id FROM pipelines pl
+            INNER JOIN projects p ON pl.project_id = p.id
+            WHERE p.org_id = $1
+        )
+    )
+)
+"#;
+
 /// Repository for join token operations.
 pub struct JoinTokenRepo<'a> {
     pool: &'a PgPool,
@@ -331,7 +363,7 @@ impl<'a> JoinTokenRepo<'a> {
         Ok(tokens)
     }
 
-    /// List tokens for an organization (by tenant scope).
+    /// List tokens for an organization (all scopes visible to that org in admin UI).
     pub async fn list_by_org(
         &self,
         org_id: OrganizationId,
@@ -341,7 +373,56 @@ impl<'a> JoinTokenRepo<'a> {
         self.list_by_org_filtered(org_id, None, limit, offset).await
     }
 
-    /// Count tenant-scoped tokens for an org with optional search on description or token hash.
+    /// `true` if admins of `org_id` may manage this token (list/get/revoke/delete/update).
+    pub async fn visible_to_org(
+        &self,
+        token_id: JoinTokenId,
+        org_id: OrganizationId,
+    ) -> Result<bool> {
+        let row: (bool,) = sqlx::query_as(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM join_tokens jt
+                WHERE jt.id = $1
+                  AND (
+                    (jt.scope = 'tenant' AND jt.scope_id = $2)
+                    OR (
+                        jt.scope = 'platform'
+                        AND (
+                            jt.org_id = $2
+                            OR (
+                                jt.org_id IS NULL
+                                AND jt.created_by IN (
+                                    SELECT u.id FROM users u
+                                    WHERE u.org_id = $2 AND u.deleted_at IS NULL
+                                )
+                            )
+                        )
+                    )
+                    OR (
+                        jt.scope = 'project'
+                        AND jt.scope_id IN (SELECT p.id FROM projects p WHERE p.org_id = $2)
+                    )
+                    OR (
+                        jt.scope = 'pipeline'
+                        AND jt.scope_id IN (
+                            SELECT pl.id FROM pipelines pl
+                            INNER JOIN projects p ON pl.project_id = p.id
+                            WHERE p.org_id = $2
+                        )
+                    )
+                  )
+            )
+            "#,
+        )
+        .bind(token_id.as_uuid())
+        .bind(org_id.as_uuid())
+        .fetch_one(self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Count join tokens visible to an org with optional search on description or token hash.
     pub async fn count_by_org_filtered(
         &self,
         org_id: OrganizationId,
@@ -352,14 +433,14 @@ impl<'a> JoinTokenRepo<'a> {
             .filter(|s| !s.is_empty())
             .map(|s| format!("%{s}%"));
 
-        let row: (i64,) = sqlx::query_as(
+        let row: (i64,) = sqlx::query_as(&format!(
             r#"
             SELECT COUNT(*)::bigint
             FROM join_tokens
-            WHERE scope = 'tenant' AND scope_id = $1
+            WHERE {JOIN_TOKEN_VISIBLE_TO_ORG_SQL}
               AND ($2::text IS NULL OR description ILIKE $2 OR token_hash ILIKE $2)
             "#,
-        )
+        ))
         .bind(org_id.as_uuid())
         .bind(pattern)
         .fetch_one(self.pool)
@@ -368,7 +449,7 @@ impl<'a> JoinTokenRepo<'a> {
         Ok(row.0)
     }
 
-    /// List tenant-scoped tokens for an org with optional search and pagination.
+    /// List join tokens visible to an org with optional search and pagination.
     pub async fn list_by_org_filtered(
         &self,
         org_id: OrganizationId,
@@ -385,7 +466,7 @@ impl<'a> JoinTokenRepo<'a> {
             r#"
             SELECT {JOIN_TOKEN_ROW}
             FROM join_tokens
-            WHERE scope = 'tenant' AND scope_id = $1
+            WHERE {JOIN_TOKEN_VISIBLE_TO_ORG_SQL}
               AND ($2::text IS NULL OR description ILIKE $2 OR token_hash ILIKE $2)
             ORDER BY created_at DESC
             LIMIT $3 OFFSET $4

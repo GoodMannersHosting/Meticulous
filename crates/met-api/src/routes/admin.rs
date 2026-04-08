@@ -2319,7 +2319,7 @@ fn normalize_join_token_limit(n: u32) -> u32 {
     }
 }
 
-/// Paginated join token list (tenant-scoped for the admin org).
+/// Paginated join token list (tenant, platform, project, and pipeline tokens visible to the admin org).
 #[derive(Debug, Serialize)]
 pub struct JoinTokenListResponse {
     /// Join tokens for this page.
@@ -2466,12 +2466,10 @@ async fn get_join_token(
     let repo = JoinTokenRepo::new(state.db());
     let token = repo.get(token_id).await?;
 
-    if token.scope == JoinTokenScope::Tenant {
-        if token.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden(
-                "cannot access tokens from other organizations",
-            ));
-        }
+    if !repo.visible_to_org(token_id, admin.org_id).await? {
+        return Err(ApiError::forbidden(
+            "cannot access tokens from other organizations",
+        ));
     }
 
     let mut items = enrich_join_tokens(&[token], state.db()).await?;
@@ -2534,8 +2532,10 @@ async fn create_join_token(
         }
     };
 
+    // Platform-scoped tokens enroll agents under the creating admin's org (same NATS/JWT layout as
+    // tenant-wide agents). Cross-tenant dispatch is not implemented; "platform" is operator/global-admin enrollment.
     let org_id_col = match scope {
-        JoinTokenScope::Tenant => Some(admin.org_id),
+        JoinTokenScope::Tenant | JoinTokenScope::Platform => Some(admin.org_id),
         _ => None,
     };
 
@@ -2649,12 +2649,10 @@ async fn update_join_token(
     let repo = JoinTokenRepo::new(state.db());
     let existing = repo.get(token_id).await?;
 
-    if existing.scope == JoinTokenScope::Tenant {
-        if existing.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden(
-                "cannot update tokens from other organizations",
-            ));
-        }
+    if !repo.visible_to_org(token_id, admin.org_id).await? {
+        return Err(ApiError::forbidden(
+            "cannot update tokens from other organizations",
+        ));
     }
 
     let updated = repo
@@ -2689,15 +2687,12 @@ async fn revoke_join_token(
     require_admin(&admin)?;
 
     let repo = JoinTokenRepo::new(state.db());
-    let token = repo.get(token_id).await?;
+    let _ = repo.get(token_id).await?;
 
-    // Verify the token belongs to this org (tenant scope check)
-    if token.scope == JoinTokenScope::Tenant {
-        if token.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden(
-                "cannot revoke tokens from other organizations",
-            ));
-        }
+    if !repo.visible_to_org(token_id, admin.org_id).await? {
+        return Err(ApiError::forbidden(
+            "cannot revoke tokens from other organizations",
+        ));
     }
 
     repo.revoke(token_id).await?;
@@ -2721,14 +2716,12 @@ async fn delete_join_token(
     require_admin(&admin)?;
 
     let repo = JoinTokenRepo::new(state.db());
-    let token = repo.get(token_id).await?;
+    let _ = repo.get(token_id).await?;
 
-    if token.scope == JoinTokenScope::Tenant {
-        if token.scope_id != Some(admin.org_id.as_uuid()) {
-            return Err(ApiError::forbidden(
-                "cannot delete tokens from other organizations",
-            ));
-        }
+    if !repo.visible_to_org(token_id, admin.org_id).await? {
+        return Err(ApiError::forbidden(
+            "cannot delete tokens from other organizations",
+        ));
     }
 
     repo.delete_by_id(token_id).await?;

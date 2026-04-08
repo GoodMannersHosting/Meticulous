@@ -201,12 +201,28 @@ impl ExecutionBackend for NativeBackend {
         // (FIFO O_RDWR avoids open deadlock but never signals EOF on read — see workflow-invocation-outputs.md.)
         #[cfg(unix)]
         let ipc_ends: Option<(std::fs::File, std::os::fd::OwnedFd)> = {
+            use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+            #[cfg(target_os = "linux")]
             use nix::fcntl::OFlag;
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
 
+            // `pipe2(..., O_CLOEXEC)` is not available on Darwin; use `pipe` + `fcntl`.
+            #[cfg(target_os = "linux")]
             let (read_pipe, write_pipe) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
                 .map_err(|e| AgentError::ProcessExecution(format!("output ipc pipe: {e}")))?;
+            #[cfg(not(target_os = "linux"))]
+            let (read_pipe, write_pipe) = {
+                let (r, w) = nix::unistd::pipe()
+                    .map_err(|e| AgentError::ProcessExecution(format!("output ipc pipe: {e}")))?;
+                fcntl(r.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| {
+                    AgentError::ProcessExecution(format!("output ipc pipe cloexec: {e}"))
+                })?;
+                fcntl(w.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| {
+                    AgentError::ProcessExecution(format!("output ipc pipe cloexec: {e}"))
+                })?;
+                (r, w)
+            };
             let r = read_pipe.as_raw_fd();
             let w = write_pipe.as_raw_fd();
             command.env("METICULOUS_OUTPUT_FD", "3");

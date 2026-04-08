@@ -6,7 +6,9 @@ use std::time::Instant;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{TimeZone, Utc};
 use met_core::hash_join_token;
-use met_core::ids::{AgentId, JobRunId, OrganizationId, ProjectId, RunId, StepId, StepRunId};
+use met_core::ids::{
+    AgentId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId,
+};
 use met_core::models::{
     Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
 };
@@ -28,7 +30,7 @@ use met_store::PgPool;
 use met_store::StoreError;
 use met_store::repos::{
     AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo,
-    PipelineRunWorkflowOutputsRepo, ProjectRepo, StepRunRepo,
+    PipelineRepo, PipelineRunWorkflowOutputsRepo, ProjectRepo, StepRunRepo, UserRepo,
     reenroll_agent_with_exhausted_join_token, register_agent_with_join_token,
 };
 use sha2::{Digest, Sha256};
@@ -311,10 +313,48 @@ impl AgentService for AgentServiceImpl {
                     })?;
                 project.org_id
             }
-            JoinTokenScope::Platform | JoinTokenScope::Pipeline => {
-                return Err(Status::invalid_argument(
-                    "only tenant-scoped or project-scoped join tokens are supported for agent registration",
-                ));
+            JoinTokenScope::Platform => {
+                if let Some(anchor) = join_record.org_id {
+                    anchor
+                } else {
+                    // Legacy rows: platform tokens created before org_id was stored.
+                    let user = UserRepo::new(&self.pool)
+                        .get(join_record.created_by)
+                        .await
+                        .map_err(|e| match e {
+                            StoreError::NotFound { .. } => Status::failed_precondition(
+                                "platform join token has no organization anchor; recreate the token",
+                            ),
+                            _ => Status::internal(e.to_string()),
+                        })?;
+                    user.org_id
+                }
+            }
+            JoinTokenScope::Pipeline => {
+                let Some(pipe_uuid) = join_record.scope_id else {
+                    return Err(Status::failed_precondition(
+                        "pipeline join token is missing pipeline scope",
+                    ));
+                };
+                let pipeline = PipelineRepo::new(&self.pool)
+                    .get(PipelineId::from_uuid(pipe_uuid))
+                    .await
+                    .map_err(|e| match e {
+                        StoreError::NotFound { .. } => Status::failed_precondition(
+                            "join token references a pipeline that does not exist",
+                        ),
+                        _ => Status::internal(e.to_string()),
+                    })?;
+                let project = ProjectRepo::new(&self.pool)
+                    .get(pipeline.project_id)
+                    .await
+                    .map_err(|e| match e {
+                        StoreError::NotFound { .. } => Status::failed_precondition(
+                            "join token references a project that does not exist",
+                        ),
+                        _ => Status::internal(e.to_string()),
+                    })?;
+                project.org_id
             }
         };
 

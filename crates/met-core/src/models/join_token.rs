@@ -14,7 +14,8 @@ use crate::ids::{AgentId, JoinTokenId, OrganizationId, PipelineId, ProjectId, Us
 )]
 #[serde(rename_all = "snake_case")]
 pub enum JoinTokenScope {
-    /// Any job across any tenant.
+    /// Operator enrollment from global admin. Agents register under the token's anchor organization
+    /// (same NATS subjects and dispatch as tenant-wide agents for that org). Cross-tenant routing is not implemented yet.
     Platform,
     /// Any job within a specific tenant.
     #[default]
