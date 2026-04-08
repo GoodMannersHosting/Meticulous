@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use met_api::{ApiDoc, config::ApiConfig, routes, state::AppState};
+use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
 use met_store::repos::AgentRepo;
 use met_store::{PoolConfig, create_pool};
@@ -85,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool_config.url = url;
     }
 
-    tracing::info!(url = %pool_config.url, "connecting to database");
+    tracing::info!(url = %database_url_for_log(&pool_config.url), "connecting to database");
     let db = create_pool(&pool_config).await?;
 
     if std::env::var("MET_API__RUN_MIGRATIONS")
@@ -130,20 +131,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let nats_ops =
-        match met_controller::nats::NatsDispatcher::connect(&met_config.nats.url, None).await {
-            Ok(n) => Some(Arc::new(n)),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "NATS ops client not connected; admin JOBS_DLQ preview disabled"
-                );
-                None
-            }
-        };
+    let nats_creds = met_config.nats.credentials_file.as_deref();
+
+    let nats_ops = match met_controller::nats::NatsDispatcher::connect(
+        &met_config.nats.url,
+        nats_creds,
+    )
+    .await
+    {
+        Ok(n) => Some(Arc::new(n)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "NATS ops client not connected; admin JOBS_DLQ preview disabled"
+            );
+            None
+        }
+    };
 
     let (engine, engine_init_error) = match met_engine::Engine::new(met_engine::EngineConfig {
         nats_url: met_config.nats.url.clone(),
+        nats_credentials_file: met_config.nats.credentials_file.clone(),
         pool: db.clone(),
         executor: Default::default(),
         scheduler: Default::default(),

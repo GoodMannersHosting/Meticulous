@@ -90,6 +90,8 @@ use met_core::ids::{OrganizationId, RunId};
 use met_parser::PipelineIR;
 use met_secrets::BuiltinStoredCrypto;
 use sqlx::PgPool;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, instrument};
 
@@ -98,6 +100,8 @@ use tracing::{info, instrument};
 pub struct EngineConfig {
     /// NATS connection URL.
     pub nats_url: String,
+    /// Path to NATS `.creds` (JWT auth); `None` for anonymous brokers (development only).
+    pub nats_credentials_file: Option<PathBuf>,
     /// Database connection pool.
     pub pool: PgPool,
     /// Executor configuration.
@@ -110,6 +114,25 @@ pub struct EngineConfig {
     pub builtin_secrets_master_key: Option<String>,
     /// Optional key id label stored with ciphertext (default `v1`).
     pub builtin_secrets_key_id: Option<String>,
+}
+
+async fn connect_nats_client(
+    url: &str,
+    creds: Option<&Path>,
+) -> std::result::Result<async_nats::Client, String> {
+    match creds {
+        Some(path) => {
+            let opts = async_nats::ConnectOptions::with_credentials_file(path)
+                .await
+                .map_err(|e| e.to_string())?;
+            opts.connect(url)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        None => async_nats::connect(url)
+            .await
+            .map_err(|e| e.to_string()),
+    }
 }
 
 /// The main pipeline execution engine.
@@ -127,7 +150,7 @@ impl Engine {
     pub async fn new(config: EngineConfig) -> Result<Self> {
         info!(nats_url = %config.nats_url, "initializing engine");
 
-        let client = async_nats::connect(&config.nats_url)
+        let client = connect_nats_client(&config.nats_url, config.nats_credentials_file.as_deref())
             .await
             .map_err(|e| EngineError::Nats(format!("Failed to connect to NATS: {e}")))?;
 
@@ -197,7 +220,27 @@ impl Engine {
         executor_config: ExecutorConfig,
         scheduler_config: SchedulerConfig,
     ) -> Result<EngineWithCache<C>> {
-        let client = async_nats::connect(nats_url)
+        Self::with_cache_and_creds(
+            nats_url,
+            None,
+            pool,
+            cache_backend,
+            executor_config,
+            scheduler_config,
+        )
+        .await
+    }
+
+    /// Like [`Self::with_cache`], but with optional NATS `.creds` for JWT clusters.
+    pub async fn with_cache_and_creds<C: CacheBackend + 'static>(
+        nats_url: &str,
+        nats_credentials_file: Option<&Path>,
+        pool: PgPool,
+        cache_backend: C,
+        executor_config: ExecutorConfig,
+        scheduler_config: SchedulerConfig,
+    ) -> Result<EngineWithCache<C>> {
+        let client = connect_nats_client(nats_url, nats_credentials_file)
             .await
             .map_err(|e| EngineError::Nats(format!("Failed to connect to NATS: {e}")))?;
 

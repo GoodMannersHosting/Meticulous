@@ -8,6 +8,7 @@ use met_controller::config::ControllerConfig;
 use met_controller::grpc::AgentServiceImpl;
 use met_controller::nats::NatsDispatcher;
 use met_controller::registry::AgentRegistry;
+use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
 use met_proto::agent::v1::agent_service_server::AgentServiceServer;
 use met_store::{PoolConfig, create_pool};
@@ -123,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool_config.url = url;
     }
 
-    info!(url = %pool_config.url, "connecting to database");
+    info!(url = %database_url_for_log(&pool_config.url), "connecting to database");
     let pool = Arc::new(create_pool(&pool_config).await?);
 
     info!(url = %ctrl.nats_url, "connecting to NATS");
