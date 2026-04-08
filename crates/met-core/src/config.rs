@@ -69,9 +69,14 @@ impl MetConfig {
             }
         }
 
-        // Add environment variables (MET_ prefix, __ for nesting)
+        // Add environment variables (MET_ prefix, __ for nesting).
+        // `MET_DATABASE__URL` lowercases to `met_database__url`. Without an explicit prefix
+        // separator, config 0.15 defaults the prefix joiner to the same as `separator` ("__"),
+        // producing a `met__` prefix pattern that never matches — and `database.url` falls back to
+        // compiled defaults (localhost). Use `prefix_separator("_")` so the pattern is `met_`.
         builder = builder.add_source(
             Environment::with_prefix("MET")
+                .prefix_separator("_")
                 .separator("__")
                 .try_parsing(true),
         );
@@ -338,5 +343,35 @@ mod tests {
         let config = MetConfig::default();
         let serialized = serde_json::to_string(&config).unwrap();
         assert!(serialized.contains("meticulous"));
+    }
+
+    #[test]
+    fn test_met_database_double_underscore_url_maps_to_nested_url() {
+        use config::Environment;
+        use std::collections::HashMap;
+
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "MET_DATABASE__URL".to_string(),
+            "postgres://u:pw@pg.example:5432/app".to_string(),
+        );
+        let config: MetConfig = Config::builder()
+            .add_source(
+                Environment::default()
+                    .prefix("MET")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true)
+                    .source(Some(env_map)),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(
+            config.database.url,
+            "postgres://u:pw@pg.example:5432/app"
+        );
     }
 }
