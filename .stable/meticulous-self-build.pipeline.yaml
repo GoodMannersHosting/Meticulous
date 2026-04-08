@@ -132,8 +132,8 @@ workflows:
     version: *docker-buildx-push-version
     depends-on: [scan-sqlx-migrate]
     inputs:
-      context_path: meticulous
-      dockerfile: Dockerfile.met-frontend
+      context_path: meticulous/frontend
+      dockerfile: Dockerfile
       image_ref: &frontend_image_ref "${REGISTRY_PREFIX}/met-frontend:${IMAGE_TAG}"
       registry_host: harbor.cloud.danmanners.com
   - name: Trivy scan met-frontend (SBOM)
