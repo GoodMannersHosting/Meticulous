@@ -25,7 +25,9 @@ RUN npm ci
 
 COPY . .
 
-ARG PUBLIC_API_URL=http://localhost:8080
+# Empty default: browser uses the page origin (same hostname as the API behind a path-based gateway).
+# Local dev: set PUBLIC_API_URL in `.env` or pass --build-arg PUBLIC_API_URL=http://localhost:8080.
+ARG PUBLIC_API_URL=
 ENV PUBLIC_API_URL=${PUBLIC_API_URL}
 
 RUN npm run build \

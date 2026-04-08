@@ -1,5 +1,5 @@
 import type { HandleClientError } from '@sveltejs/kit';
-import { PUBLIC_API_URL } from '$env/static/public';
+import { getPublicApiBase } from '$lib/public-api-base';
 
 interface TelemetryPayload {
 	type: 'client_error';
@@ -13,8 +13,11 @@ interface TelemetryPayload {
 }
 
 async function sendToTelemetry(payload: TelemetryPayload): Promise<void> {
-	const apiUrl = PUBLIC_API_URL || '';
-	
+	const apiUrl = getPublicApiBase();
+	if (!apiUrl) {
+		return;
+	}
+
 	try {
 		await fetch(`${apiUrl}/api/v1/telemetry/errors`, {
 			method: 'POST',

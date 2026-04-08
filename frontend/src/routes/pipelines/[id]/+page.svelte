@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { PUBLIC_API_URL } from '$env/static/public';
+	import { getPublicApiBase } from '$lib/public-api-base';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { auth } from '$stores';
@@ -322,10 +321,7 @@
 	];
 
 	function apiPublicOrigin(): string {
-		const base = PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
-		if (base) return base;
-		if (browser) return window.location.origin;
-		return '';
+		return getPublicApiBase();
 	}
 
 	function triggerConfigStr(t: PipelineTrigger, key: string): string | undefined {

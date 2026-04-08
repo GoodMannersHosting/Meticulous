@@ -21,6 +21,38 @@ use met_store::repos::{AuthProviderRepo, OrganizationRepo, UserRepo};
 
 /// Matches the documented bootstrap account username for default-credential UI hints.
 pub(crate) const BOOTSTRAP_CREDENTIALS_USERNAME: &str = "admin";
+
+// #region agent log
+fn agent_debug_login(
+    hypothesis_id: &str,
+    location: &'static str,
+    message: &'static str,
+    data: serde_json::Value,
+) {
+    let entry = serde_json::json!({
+        "sessionId": "1db1a7",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+    });
+    let line = format!("{}\n", entry);
+    let path = std::path::Path::new("/home/dan/code/gmh/meticulous/.cursor/debug-1db1a7.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = std::io::Write::write_all(&mut f, line.as_bytes());
+    }
+    tracing::info!(target: "meticulous_agent_debug", payload = %entry, "meticulous_agent_debug");
+}
+// #endregion
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -188,21 +220,30 @@ async fn login(
         .first()
         .ok_or_else(|| ApiError::unauthorized("no organization configured - run setup first"))?;
 
-    // Try to find user by username or email
-    let user = user_repo
+    // Try to find user by username or email (scoped to "default" org: newest by created_at).
+    let user = match user_repo
         .get_by_username(org.id, &req.username)
         .await?
-        .or_else(|| None);
-
-    let user = match user {
+    {
         Some(u) => u,
-        None => {
-            // Try by email
-            user_repo
-                .get_by_email(org.id, &req.username)
-                .await?
-                .ok_or_else(|| ApiError::unauthorized("invalid credentials"))?
-        }
+        None => match user_repo
+            .get_by_email(org.id, &req.username)
+            .await?
+        {
+            Some(u) => u,
+            None => {
+                agent_debug_login(
+                    "H1",
+                    "met-api/src/routes/auth.rs:login",
+                    "user_not_found_in_default_org",
+                    serde_json::json!({
+                        "org_id": org.id.as_uuid().to_string(),
+                        "identifier_len": req.username.len(),
+                    }),
+                );
+                return Err(ApiError::unauthorized("invalid credentials"));
+            }
+        },
     };
 
     // Check if user is active
@@ -216,8 +257,15 @@ async fn login(
         .as_ref()
         .ok_or_else(|| ApiError::unauthorized("password login not configured for this user"))?;
 
-    verify_password(&req.password, password_hash)
-        .map_err(|_| ApiError::unauthorized("invalid credentials"))?;
+    verify_password(&req.password, password_hash).map_err(|_| {
+        agent_debug_login(
+            "H3",
+            "met-api/src/routes/auth.rs:login",
+            "password_verify_failed",
+            serde_json::json!({}),
+        );
+        ApiError::unauthorized("invalid credentials")
+    })?;
 
     user_repo
         .record_last_login(user.id)

@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { PUBLIC_API_URL } from '$env/static/public';
+import { getPublicApiBase } from '$lib/public-api-base';
 import type { ApiError, ApiResponse, StoredSecret } from './types';
 
 export class ApiClientError extends Error {
@@ -33,7 +33,7 @@ class ApiClient {
 	private responseInterceptors: ResponseInterceptor[] = [];
 
 	constructor() {
-		this.baseUrl = browser ? (PUBLIC_API_URL ?? '') : '';
+		this.baseUrl = '';
 	}
 
 	setBaseUrl(url: string): void {
@@ -63,7 +63,8 @@ class ApiClient {
 	}
 
 	private buildUrl(endpoint: string, params?: Record<string, string | number | boolean | undefined>): string {
-		const url = new URL(endpoint, this.baseUrl);
+		const base = this.baseUrl.trim() || getPublicApiBase() || 'http://127.0.0.1:8080';
+		const url = new URL(endpoint, base);
 
 		if (params) {
 			Object.entries(params).forEach(([key, value]) => {

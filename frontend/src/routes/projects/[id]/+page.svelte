@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { PUBLIC_API_URL } from '$env/static/public';
+	import { getPublicApiBase } from '$lib/public-api-base';
 	import {
 		Button,
 		Card,
@@ -221,10 +220,7 @@
 	}
 
 	function apiPublicOrigin(): string {
-		const base = PUBLIC_API_URL?.replace(/\/$/, '') ?? '';
-		if (base) return base;
-		if (browser) return window.location.origin;
-		return '';
+		return getPublicApiBase();
 	}
 
 	function projectWebhookFullUrl(inboundPath: string): string {

@@ -1,5 +1,5 @@
 import type { Handle } from '@sveltejs/kit';
-import { PUBLIC_API_URL } from '$env/static/public';
+import { getPublicApiBaseFromRequestOrigin } from '$lib/public-api-base';
 
 interface MeResponse {
 	id: string;
@@ -10,8 +10,11 @@ interface MeResponse {
 	created_at: string;
 }
 
-async function validateToken(token: string, fetch: typeof globalThis.fetch): Promise<MeResponse | null> {
-	const apiUrl = PUBLIC_API_URL || 'http://localhost:8080';
+async function validateToken(
+	token: string,
+	fetch: typeof globalThis.fetch,
+	apiUrl: string
+): Promise<MeResponse | null> {
 	
 	try {
 		const response = await fetch(`${apiUrl}/auth/me`, {
@@ -36,7 +39,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (token) {
 		try {
-			const userData = await validateToken(token, event.fetch);
+			const apiBase = getPublicApiBaseFromRequestOrigin(event.url.origin);
+			const userData = await validateToken(token, event.fetch, apiBase);
 			
 			if (userData) {
 				event.locals.user = {

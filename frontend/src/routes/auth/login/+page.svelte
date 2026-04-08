@@ -3,7 +3,7 @@
 	import { Button, Input } from '$components/ui';
 	import { Loader2, LogIn, Globe, Github } from 'lucide-svelte';
 	import { onMount } from 'svelte';
-	import { PUBLIC_API_URL } from '$env/static/public';
+	import { getPublicApiBase } from '$lib/public-api-base';
 
 	interface AuthProvider {
 		id: string;
@@ -29,7 +29,7 @@
 
 	onMount(async () => {
 		try {
-			const response = await fetch(`${PUBLIC_API_URL}/auth/providers`);
+			const response = await fetch(`${getPublicApiBase()}/auth/providers`);
 			if (response.ok) {
 				const data: AuthProvidersResponse = await response.json();
 				passwordEnabled = data.password_enabled;
@@ -58,7 +58,7 @@
 
 	function loginWithProvider(provider: AuthProvider) {
 		const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback');
-		const loginUrl = `${PUBLIC_API_URL}/auth/oauth/${provider.id}/login?redirect_uri=${redirectUri}`;
+		const loginUrl = `${getPublicApiBase()}/auth/oauth/${provider.id}/login?redirect_uri=${redirectUri}`;
 		window.location.href = loginUrl;
 	}
 </script>
