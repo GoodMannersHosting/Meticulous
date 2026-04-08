@@ -5,6 +5,31 @@ import type { User } from '$api/types';
 
 export type AuthState = 'loading' | 'authenticated' | 'unauthenticated';
 
+function safeInternalRedirect(raw: string | null): string | null {
+	if (!raw || !raw.startsWith('/') || raw.startsWith('//')) {
+		return null;
+	}
+	return raw;
+}
+
+/** After login / OAuth: honor `?redirect=` on the current page when safe. */
+function gotoAfterSuccessfulAuth(user: User): void {
+	if (user.password_must_change) {
+		goto('/change-password');
+		return;
+	}
+	if (browser) {
+		const next = safeInternalRedirect(
+			new URLSearchParams(window.location.search).get('redirect'),
+		);
+		if (next) {
+			goto(next);
+			return;
+		}
+	}
+	goto('/dashboard');
+}
+
 class AuthStore {
 	#state = $state<AuthState>('loading');
 	#user = $state<User | null>(null);
@@ -81,11 +106,7 @@ class AuthStore {
 			this.#user = user;
 			this.#state = 'authenticated';
 
-			if (user.password_must_change) {
-				goto('/auth/change-password');
-			} else {
-				goto('/dashboard');
-			}
+			gotoAfterSuccessfulAuth(user);
 		} catch (err) {
 			this.#state = 'unauthenticated';
 			this.#error = err instanceof Error ? err.message : 'Login failed';
@@ -111,11 +132,7 @@ class AuthStore {
 			this.#user = me;
 			this.#state = 'authenticated';
 
-			if (me.password_must_change) {
-				goto('/auth/change-password');
-			} else {
-				goto('/dashboard');
-			}
+			gotoAfterSuccessfulAuth(me);
 		} catch (err) {
 			this.#state = 'unauthenticated';
 			this.#error = err instanceof Error ? err.message : 'Authentication failed';
@@ -136,11 +153,7 @@ class AuthStore {
 			this.#user = user;
 			this.#state = 'authenticated';
 
-			if (user.password_must_change) {
-				goto('/auth/change-password');
-			} else {
-				goto('/dashboard');
-			}
+			gotoAfterSuccessfulAuth(user);
 		} catch (err) {
 			if (browser) {
 				localStorage.removeItem('auth_token');
@@ -166,7 +179,7 @@ class AuthStore {
 			this.#state = 'unauthenticated';
 			this.#error = null;
 
-			goto('/auth/login');
+			goto('/login');
 		}
 	}
 

@@ -8,15 +8,26 @@
 
 	let { children } = $props();
 
-	const isAuthRoute = $derived($page.url.pathname.startsWith('/auth'));
+	/** Routes served without main Shell (keep off `/auth/*` so gateways can send `/auth` only to met-api). */
+	const isAuthRoute = $derived.by(() => {
+		const p = $page.url.pathname;
+		return (
+			p === '/login' ||
+			p.startsWith('/login/') ||
+			p === '/oauth/callback' ||
+			p.startsWith('/oauth/callback/') ||
+			p === '/change-password' ||
+			p.startsWith('/change-password/')
+		);
+	});
 
 	/** Keep users with a pending forced password change on the change-password screen. */
 	$effect(() => {
 		if (!browser) return;
 		if (auth.state !== 'authenticated' || !auth.user?.password_must_change) return;
 		const path = $page.url.pathname;
-		if (path === '/auth/change-password' || path.startsWith('/auth/change-password/')) return;
-		goto('/auth/change-password');
+		if (path === '/change-password' || path.startsWith('/change-password/')) return;
+		goto('/change-password');
 	});
 </script>
 

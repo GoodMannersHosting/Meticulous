@@ -641,7 +641,7 @@
 					<div>
 						<span class="text-xs font-medium text-[var(--text-secondary)]">Redirect URI:</span>
 						<code class="ml-2 rounded bg-[var(--bg-primary)] px-2 py-0.5 text-xs text-[var(--text-primary)]">
-							{window.location.origin}/auth/oauth/{selectedProvider.id}/callback
+							{window.location.origin}/auth/oauth/callback
 						</code>
 					</div>
 				</div>

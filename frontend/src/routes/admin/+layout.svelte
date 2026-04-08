@@ -10,7 +10,7 @@
 
 	$effect(() => {
 		if (!isLoading && !auth.isAuthenticated) {
-			goto('/auth/login?redirect=/admin');
+			goto('/login?redirect=/admin');
 		}
 	});
 </script>

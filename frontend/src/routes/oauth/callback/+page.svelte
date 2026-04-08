@@ -40,7 +40,7 @@
 				</p>
 
 				<div class="mt-6">
-					<Button variant="primary" href="/auth/login">
+					<Button variant="primary" href="/login">
 						Try again
 					</Button>
 				</div>

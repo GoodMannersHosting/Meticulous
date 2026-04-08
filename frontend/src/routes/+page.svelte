@@ -8,7 +8,7 @@
 		if (auth.state === 'authenticated') {
 			goto('/dashboard', { replaceState: true });
 		} else if (auth.state === 'unauthenticated') {
-			goto('/auth/login', { replaceState: true });
+			goto('/login', { replaceState: true });
 		}
 	});
 
@@ -16,7 +16,7 @@
 		if (auth.state === 'authenticated') {
 			goto('/dashboard', { replaceState: true });
 		} else if (auth.state === 'unauthenticated') {
-			goto('/auth/login', { replaceState: true });
+			goto('/login', { replaceState: true });
 		}
 	});
 </script>

@@ -14,7 +14,7 @@
 	$effect(() => {
 		if (auth.state === 'loading') return;
 		if (auth.state === 'unauthenticated') {
-			goto('/auth/login');
+			goto('/login');
 		}
 	});
 

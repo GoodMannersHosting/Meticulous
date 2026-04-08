@@ -57,7 +57,7 @@
 	}
 
 	function loginWithProvider(provider: AuthProvider) {
-		const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback');
+		const redirectUri = encodeURIComponent(window.location.origin + '/oauth/callback');
 		const loginUrl = `${getPublicApiBase()}/auth/oauth/${provider.id}/login?redirect_uri=${redirectUri}`;
 		window.location.href = loginUrl;
 	}

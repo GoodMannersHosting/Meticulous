@@ -121,7 +121,7 @@ class ApiClient {
 		if (!response.ok) {
 			if (response.status === 401 && browser) {
 				localStorage.removeItem('auth_token');
-				goto('/auth/login');
+				goto('/login');
 				throw new ApiClientError('UNAUTHORIZED', 'Session expired', 401);
 			}
 
