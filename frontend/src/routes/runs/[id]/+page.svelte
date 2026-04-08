@@ -36,7 +36,8 @@
 		LOG_STEP_FILTER_ALL,
 		LOG_STEP_FILTER_UNSCOPED
 	} from '$components/logs/LogViewer.svelte';
-	import { SbomViewer } from '$components/sbom';
+	import { SbomViewer, SbomArtifactPanel } from '$components/sbom';
+	import { catalogWorkflowRef } from '$lib/utils/catalogWorkflowRef';
 	import { RunFootprintViewer } from '$components/blast-radius';
 	import RunJobDefinitionsCompare from '$components/run-compare/RunJobDefinitionsCompare.svelte';
 	import type { RunFootprintResponse, SbomApiResponse } from '$api/types';
@@ -77,17 +78,6 @@
 	let logStepFilter = $state(LOG_STEP_FILTER_ALL);
 	let logHasUnscopedLogLines = $state(false);
 	let lastLogStepJobRunId = $state<string | null>(null);
-
-	function catalogWorkflowRef(sw: Record<string, unknown> | undefined | null): string | null {
-		if (!sw || typeof sw !== 'object') return null;
-		const scope = sw['scope'];
-		const name = sw['name'];
-		const version = sw['version'];
-		if (typeof scope === 'string' && typeof name === 'string' && typeof version === 'string') {
-			return `${scope}/${name}@${version}`;
-		}
-		return null;
-	}
 
 	/** Pipeline workflow block → catalog ref → job inside the catalog workflow; steps are listed below. */
 	function jobRunDisplay(jr: JobRun): {
@@ -1002,45 +992,18 @@
 									<StatusBadge status={baselineRun.status_display ?? baselineRun.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">baseline</span>
 								</div>
-								{#if prevSbomRes?.job_name || prevSbomRes?.step_name}
-									<p class="text-xs text-[var(--text-tertiary)]">
-										<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
-										{#if prevSbomRes?.job_name}
-											<span class="text-[var(--text-primary)]"> job {prevSbomRes.job_name}</span>
-										{/if}
-										{#if prevSbomRes?.step_name}
-											<span class="text-[var(--text-primary)]"> · step {prevSbomRes.step_name}</span>
-										{/if}
-									</p>
-								{/if}
 								{#if prevSbomError}
 									<Alert variant="error" title="Baseline SBOM">{prevSbomError}</Alert>
-								{:else if prevSbomRes?.sbom}
-									<SbomViewer
-										rawDocument={prevSbomRes.sbom}
-										apiFormat={prevSbomRes.format}
-										runId={prevSbomRes.run_id}
-									/>
-								{:else if prevSbomRes?.status === 'artifact_registered'}
-									<div class="space-y-2 text-sm text-[var(--text-secondary)]">
-										{#if prevSbomRes?.job_name || prevSbomRes?.step_name}
-											<p class="text-xs text-[var(--text-tertiary)]">
-												<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
-												{#if prevSbomRes?.job_name}
-													<span class="text-[var(--text-primary)]"> job {prevSbomRes.job_name}</span>
-												{/if}
-												{#if prevSbomRes?.step_name}
-													<span class="text-[var(--text-primary)]"> · step {prevSbomRes.step_name}</span>
-												{/if}
-											</p>
-										{/if}
-										<p class="font-medium text-[var(--text-primary)]">
-											SBOM artifact linked, preview not loaded
-										</p>
-										<p class="text-xs text-[var(--text-tertiary)]">
-											Download from artifacts or use inline metadata for preview.
-										</p>
-									</div>
+								{:else if prevSbomRes}
+									{#if prevSbomRes.artifacts.length === 0}
+										<SbomViewer empty />
+									{:else}
+										<div class="space-y-3">
+											{#each prevSbomRes.artifacts as artifact (artifact.artifact_id)}
+												<SbomArtifactPanel {artifact} runId={prevSbomRes.run_id} />
+											{/each}
+										</div>
+									{/if}
 								{:else}
 									<SbomViewer empty />
 								{/if}
@@ -1051,48 +1014,16 @@
 									<StatusBadge status={run.status_display ?? run.status} size="sm" />
 									<span class="text-[var(--text-tertiary)]">this run</span>
 								</div>
-								{#if sbomRes?.job_name || sbomRes?.step_name}
-									<p class="text-xs text-[var(--text-tertiary)]">
-										<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
-										{#if sbomRes?.job_name}
-											<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
-										{/if}
-										{#if sbomRes?.step_name}
-											<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
-										{/if}
-									</p>
-								{/if}
-								{#if sbomRes?.sbom}
-									<SbomViewer
-										rawDocument={sbomRes.sbom}
-										apiFormat={sbomRes.format}
-										runId={sbomRes.run_id}
-									/>
-								{:else if sbomRes?.status === 'artifact_registered'}
-									<div class="space-y-2 p-1 text-sm text-[var(--text-secondary)]">
-										{#if sbomRes?.job_name || sbomRes?.step_name}
-											<p class="text-xs text-[var(--text-tertiary)]">
-												<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
-												{#if sbomRes?.job_name}
-													<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
-												{/if}
-												{#if sbomRes?.step_name}
-													<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
-												{/if}
-											</p>
-										{/if}
-										<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
-										<p>
-											The run has an artifact whose name or path looks like an SBOM (e.g.
-											<span class="font-mono text-xs">sbom.spdx.json</span>), but the API does not yet stream the blob
-											into this view. Download it from the run&apos;s artifact list, or store the document under
-											<span class="font-mono text-xs">metadata.sbom_json</span> on the artifact row for an inline preview.
-										</p>
-										<p class="text-xs text-[var(--text-tertiary)]">
-											Trivy: <span class="font-mono">trivy fs --format spdx-json --output sbom.spdx.json .</span> then
-											upload <span class="font-mono">sbom.spdx.json</span> as a run artifact.
-										</p>
-									</div>
+								{#if sbomRes}
+									{#if sbomRes.artifacts.length === 0}
+										<SbomViewer empty />
+									{:else}
+										<div class="space-y-3">
+											{#each sbomRes.artifacts as artifact (artifact.artifact_id)}
+												<SbomArtifactPanel {artifact} runId={sbomRes.run_id} />
+											{/each}
+										</div>
+									{/if}
 								{:else}
 									<SbomViewer empty />
 								{/if}
@@ -1118,49 +1049,16 @@
 					<Alert variant="error" title="SBOM" dismissible ondismiss={() => (sbomError = null)}>
 						{sbomError}
 					</Alert>
-				{:else if sbomRes?.sbom}
-					{#if sbomRes.job_name || sbomRes.step_name}
-						<p class="mb-3 text-xs text-[var(--text-tertiary)]">
-							<span class="font-medium text-[var(--text-secondary)]">SBOM from</span>
-							{#if sbomRes.job_name}
-								<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
-							{/if}
-							{#if sbomRes.step_name}
-								<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
-							{/if}
-						</p>
+				{:else if sbomRes}
+					{#if sbomRes.artifacts.length === 0}
+						<SbomViewer empty />
+					{:else}
+						<div class="space-y-3">
+							{#each sbomRes.artifacts as artifact (artifact.artifact_id)}
+								<SbomArtifactPanel {artifact} runId={sbomRes.run_id} />
+							{/each}
+						</div>
 					{/if}
-					<SbomViewer
-						rawDocument={sbomRes.sbom}
-						apiFormat={sbomRes.format}
-						runId={sbomRes.run_id}
-					/>
-				{:else if sbomRes?.status === 'artifact_registered'}
-					<div class="space-y-2 p-4 text-sm text-[var(--text-secondary)]">
-						{#if sbomRes.job_name || sbomRes.step_name}
-							<p class="text-xs text-[var(--text-tertiary)]">
-								<span class="font-medium text-[var(--text-secondary)]">SBOM artifact from</span>
-								{#if sbomRes.job_name}
-									<span class="text-[var(--text-primary)]"> job {sbomRes.job_name}</span>
-								{/if}
-								{#if sbomRes.step_name}
-									<span class="text-[var(--text-primary)]"> · step {sbomRes.step_name}</span>
-								{/if}
-							</p>
-						{/if}
-						<p class="font-medium text-[var(--text-primary)]">SBOM artifact linked, preview not loaded</p>
-						<p>
-							The run has an artifact whose name or path looks like an SBOM (e.g.
-							<span class="font-mono text-xs">sbom.spdx.json</span>), but the API does not yet stream the blob
-							into this view. Download it from the run&apos;s artifact list, or store the document under
-							<span class="font-mono text-xs">metadata.sbom_json</span> on the artifact row for an inline preview.
-						</p>
-						<p class="text-xs text-[var(--text-tertiary)]">
-							Trivy: <span class="font-mono">trivy fs --format spdx-json --output sbom.spdx.json .</span> then
-							upload <span class="font-mono">sbom.spdx.json</span> as a run artifact. Object-store layout (when
-							enabled) follows <span class="font-mono">runs/&lt;run_id&gt;/sbom/spdx.json</span>.
-						</p>
-					</div>
 				{:else}
 					<SbomViewer empty />
 				{/if}

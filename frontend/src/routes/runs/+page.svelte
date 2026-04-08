@@ -8,6 +8,7 @@
 	import {
 		runNumberHtml,
 		runPipelineLinkHtml,
+		runProjectLinkHtml,
 		runStatusBadgeHtml,
 		effectiveRunStatusForBadge,
 		runBranchColumnHtml,
@@ -18,6 +19,8 @@
 	import { RefreshCw, Play, ChevronLeft, ChevronRight, FolderOpen } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 
+	const ALL_PROJECTS = '__all_projects__';
+
 	/** Sentinel value for “all pipelines in the current project” (must match nothing that is a UUID). */
 	const ALL_PIPELINES_IN_PROJECT = '__all_pipelines__';
 
@@ -27,7 +30,7 @@
 	let initialLoading = $state(true);
 	let runsLoading = $state(false);
 	let error = $state<string | null>(null);
-	let selectedProjectId = $state<string>('');
+	let selectedProjectId = $state<string>(ALL_PROJECTS);
 	let selectedPipelineId = $state<string>('');
 	let statusFilter = $state<string>('');
 	let runSortKey = $state<string | null>(null);
@@ -61,13 +64,9 @@
 		try {
 			const projectsResponse = await apiMethods.projects.list();
 			projects = projectsResponse.data;
-
-			if (projects.length > 0) {
-				selectedProjectId = projects[0].id;
-				const pipelinesResponse = await apiMethods.pipelines.list({ project_id: selectedProjectId });
-				pipelines = pipelinesResponse.data;
-				selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
-			}
+			selectedProjectId = ALL_PROJECTS;
+			selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
+			pipelines = [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load data';
 		} finally {
@@ -76,9 +75,9 @@
 	}
 
 	async function loadPipelines() {
-		if (!selectedProjectId) {
+		if (!selectedProjectId || selectedProjectId === ALL_PROJECTS) {
 			pipelines = [];
-			selectedPipelineId = '';
+			selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
 			return;
 		}
 		selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
@@ -91,16 +90,19 @@
 	}
 
 	$effect(() => {
-		if (selectedProjectId) {
-			loadPipelines();
+		if (!selectedProjectId || selectedProjectId === ALL_PROJECTS) {
+			pipelines = [];
+			selectedPipelineId = ALL_PIPELINES_IN_PROJECT;
+			return;
 		}
+		void loadPipelines();
 	});
 
 	$effect(() => {
 		const pipelineSelection = selectedPipelineId;
 		void statusFilter;
 		void selectedProjectId;
-		if (!selectedProjectId || !pipelineSelection) {
+		if (!pipelineSelection) {
 			runs = [];
 			runsHasMore = false;
 			return;
@@ -114,14 +116,22 @@
 			runSortKey = null;
 			runSortDirection = null;
 		}
+		if (!viewingAllProjects() && runSortKey === 'project_name') {
+			runSortKey = null;
+			runSortDirection = null;
+		}
 	});
 
 	function viewingAllPipelinesInProject(): boolean {
 		return selectedPipelineId === ALL_PIPELINES_IN_PROJECT;
 	}
 
+	function viewingAllProjects(): boolean {
+		return selectedProjectId === ALL_PROJECTS;
+	}
+
 	async function fetchRuns(opts?: { offset?: number }) {
-		if (!selectedProjectId || !selectedPipelineId) {
+		if (!selectedPipelineId) {
 			runs = [];
 			return;
 		}
@@ -130,19 +140,25 @@
 		error = null;
 		try {
 			const listParams =
-				viewingAllPipelinesInProject()
+				selectedProjectId === ALL_PROJECTS
 					? {
-							project_id: selectedProjectId,
 							status: statusFilter || undefined,
 							per_page: Number(runsPerPage),
 							cursor: offset > 0 ? String(offset) : undefined
 						}
-					: {
-							pipeline_id: selectedPipelineId,
-							status: statusFilter || undefined,
-							per_page: Number(runsPerPage),
-							cursor: offset > 0 ? String(offset) : undefined
-						};
+					: viewingAllPipelinesInProject()
+						? {
+								project_id: selectedProjectId,
+								status: statusFilter || undefined,
+								per_page: Number(runsPerPage),
+								cursor: offset > 0 ? String(offset) : undefined
+							}
+						: {
+								pipeline_id: selectedPipelineId,
+								status: statusFilter || undefined,
+								per_page: Number(runsPerPage),
+								cursor: offset > 0 ? String(offset) : undefined
+							};
 			const response = await apiMethods.runs.list(listParams);
 			runs = response.data;
 			runsHasMore = response.pagination.has_more;
@@ -174,14 +190,19 @@
 		goto(`/runs/${run.id}`);
 	}
 
-	const projectOptions = $derived(
-		projects.map((p) => ({ value: p.id, label: p.name }))
-	);
-
-	const pipelineOptions = $derived([
-		{ value: ALL_PIPELINES_IN_PROJECT, label: 'All pipelines in project' },
-		...pipelines.map((p) => ({ value: p.id, label: p.name }))
+	const projectOptions = $derived([
+		{ value: ALL_PROJECTS, label: 'All Projects' },
+		...projects.map((p) => ({ value: p.id, label: p.name }))
 	]);
+
+	const pipelineOptions = $derived(
+		viewingAllProjects()
+			? [{ value: ALL_PIPELINES_IN_PROJECT, label: 'All pipelines' }]
+			: [
+					{ value: ALL_PIPELINES_IN_PROJECT, label: 'All pipelines in project' },
+					...pipelines.map((p) => ({ value: p.id, label: p.name }))
+				]
+	);
 
 	const sortedRuns = $derived(sortRunList(runs, runSortKey, runSortDirection));
 
@@ -193,6 +214,13 @@
 	});
 
 	const runColumns = $derived.by((): Column<Run>[] => {
+		const projectCol: Column<Run> = {
+			key: 'project_name',
+			label: 'Project',
+			width: '160px',
+			sortable: true,
+			render: (v, row) => runProjectLinkHtml(v, row)
+		};
 		const pipelineCol: Column<Run> = {
 			key: 'pipeline_name',
 			label: 'Pipeline',
@@ -208,6 +236,7 @@
 				sortable: true,
 				render: (value, row) => runNumberHtml(value, row)
 			},
+			...(viewingAllProjects() ? [projectCol] : []),
 			...(viewingAllPipelinesInProject() ? [pipelineCol] : []),
 			{
 				key: 'status',
@@ -272,7 +301,7 @@
 			variant="ghost"
 			size="sm"
 			onclick={() => fetchRuns({ offset: runsListOffset })}
-			disabled={!selectedProjectId || !selectedPipelineId || runsLoading}
+			disabled={!selectedPipelineId || runsLoading}
 		>
 			<RefreshCw class="h-4 w-4" />
 			Refresh
@@ -280,11 +309,13 @@
 	</div>
 
 	<div class="flex flex-wrap gap-4">
-		<div class="w-48">
+		<div class="w-56 min-w-[12rem]">
 			<Select
 				options={projectOptions}
 				bind:value={selectedProjectId}
 				placeholder="Select project..."
+				searchable
+				searchPlaceholder="Search projects…"
 			/>
 		</div>
 		<div class="w-48">
@@ -292,6 +323,7 @@
 				options={pipelineOptions}
 				bind:value={selectedPipelineId}
 				placeholder="Select pipeline..."
+				disabled={viewingAllProjects()}
 			/>
 		</div>
 		<div class="w-40">
@@ -328,22 +360,22 @@
 				{/each}
 			</div>
 		</Card>
-	{:else if !selectedProjectId || !selectedPipelineId}
-		<Card>
-			<EmptyState
-				title="Select a project"
-				description="Choose a project to view runs. You can narrow by pipeline or show all pipelines in the project."
-			/>
-		</Card>
 	{:else if runs.length === 0 && runsListOffset === 0 && !runsLoading}
 		<Card>
 			<EmptyState
 				title="No runs yet"
-				description={viewingAllPipelinesInProject()
-					? 'This project has no recorded runs yet.'
-					: "This pipeline hasn't been triggered yet."}
+				description={viewingAllProjects()
+					? 'No runs recorded yet across your projects.'
+					: viewingAllPipelinesInProject()
+						? 'This project has no recorded runs yet.'
+						: "This pipeline hasn't been triggered yet."}
 			>
-				{#if viewingAllPipelinesInProject()}
+				{#if viewingAllProjects()}
+					<Button variant="primary" href="/projects">
+						<FolderOpen class="h-4 w-4" />
+						Browse projects
+					</Button>
+				{:else if viewingAllPipelinesInProject()}
 					<Button variant="primary" href="/projects/{selectedProjectId}">
 						<FolderOpen class="h-4 w-4" />
 						Go to project

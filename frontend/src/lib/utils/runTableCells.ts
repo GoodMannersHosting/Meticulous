@@ -25,6 +25,17 @@ export function runPipelineLinkHtml(_value: unknown, row: Run): string {
 	return `<a href="${href}" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline dark:text-primary-400" onclick="event.stopPropagation()">${escapeHtml(name)}</a>`;
 }
 
+/** Link to project detail (org-wide run lists). */
+export function runProjectLinkHtml(_value: unknown, row: Run): string {
+	const name = row.project_name;
+	const id = row.project_id;
+	if (!name || !id) {
+		return '<span class="text-[var(--text-tertiary)]">—</span>';
+	}
+	const href = `/projects/${encodeURIComponent(id)}`;
+	return `<a href="${href}" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline dark:text-primary-400" onclick="event.stopPropagation()">${escapeHtml(name)}</a>`;
+}
+
 const STATUS_BADGE_CLASSES: Record<RunStatus, string> = {
 	pending: 'bg-secondary-100 dark:bg-secondary-800 text-secondary-700 dark:text-secondary-300',
 	queued: 'bg-secondary-100 dark:bg-secondary-800 text-secondary-700 dark:text-secondary-300',

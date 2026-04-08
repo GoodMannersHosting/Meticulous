@@ -95,6 +95,12 @@ pub struct RunResponse {
     /// Present when listing runs by `project_id` (all pipelines in a project).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_name: Option<String>,
+    /// Present when listing runs across multiple projects (no `project_id` query param).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
     /// Run number of `parent_run_id` when set (for display without a second fetch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_number: Option<i64>,
@@ -111,6 +117,8 @@ impl From<Run> for RunResponse {
             run,
             duration_ms,
             pipeline_name: None,
+            project_id: None,
+            project_name: None,
             parent_run_number: None,
             status_display: None,
         }
@@ -145,7 +153,7 @@ async fn enrich_run_responses_status_display(
     path = "/api/v1/runs",
     params(
         ("pipeline_id" = Option<String>, Query, description = "Filter by pipeline ID (mutually exclusive with `project_id`)"),
-        ("project_id" = Option<String>, Query, description = "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`)"),
+        ("project_id" = Option<String>, Query, description = "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`). Omit both `pipeline_id` and `project_id` to list runs across all accessible projects in the organization."),
         ("status" = Option<String>, Query, description = "Filter by run status"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor; for runs this is the row offset as a decimal string (e.g. next page after 20 rows is `cursor=20`)"),
         ("limit" = Option<u32>, Query, description = "Items per page (alias: `per_page`; default and max come from API `http.pagination_*` config)"),
@@ -235,9 +243,31 @@ async fn list_runs(
                 })
                 .collect()
         }
-        _ => {
+        (None, None) => {
+            let rows = match &user.project_ids {
+                None => {
+                    repo.list_by_organization(user.org_id, status_filter, limit, offset)
+                        .await?
+                }
+                Some(ids) if ids.is_empty() => vec![],
+                Some(ids) => {
+                    repo.list_by_project_ids(ids.as_slice(), status_filter, limit, offset)
+                        .await?
+                }
+            };
+            rows.into_iter()
+                .map(|row| {
+                    let mut resp = RunResponse::from(row.run);
+                    resp.pipeline_name = Some(row.pipeline_name);
+                    resp.project_name = Some(row.project_name);
+                    resp.project_id = Some(row.project_id);
+                    resp
+                })
+                .collect()
+        }
+        (Some(_), Some(_)) => {
             return Err(ApiError::bad_request(
-                "`pipeline_id` or `project_id` query parameter is required",
+                "provide only one of `pipeline_id` or `project_id`",
             ));
         }
     };
@@ -326,6 +356,8 @@ async fn get_run(
         run,
         duration_ms,
         pipeline_name: None,
+        project_id: None,
+        project_name: None,
         parent_run_number,
         status_display: None,
     }];
@@ -1143,7 +1175,8 @@ fn build_dag_nodes_from_definition(
 
 const FOOTPRINT_MAX_DIRS: usize = 120;
 const FOOTPRINT_MAX_ENTRIES_PER_DIR: usize = 48;
-const FOOTPRINT_MAX_NETWORK: i64 = 500;
+/// Cap rows returned for Blast Radius (see `network_connections_total_count` when truncated).
+const FOOTPRINT_MAX_NETWORK: i64 = 5000;
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FootprintBinaryRow {
@@ -1191,6 +1224,9 @@ pub struct RunFootprintResponse {
     pub run_id: RunId,
     pub executed_binaries: Vec<FootprintBinaryRow>,
     pub network_connections: Vec<FootprintNetworkRow>,
+    /// Total rows in `run_network_connections` for this run (may exceed `network_connections.len()`).
+    pub network_connections_total_count: i64,
+    pub network_connections_truncated: bool,
     pub filesystem_by_directory: Vec<FootprintDirectoryGroup>,
     pub filesystem_directories_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1338,9 +1374,10 @@ async fn get_run_footprint(
         })
         .collect();
 
-    let net_rows = RunNetworkConnectionRepo::new(state.db())
-        .list_for_run(id, FOOTPRINT_MAX_NETWORK)
-        .await?;
+    let net_repo = RunNetworkConnectionRepo::new(state.db());
+    let net_total = net_repo.count_for_run(id).await?;
+    let net_rows = net_repo.list_for_run(id, FOOTPRINT_MAX_NETWORK).await?;
+    let net_truncated = net_total > FOOTPRINT_MAX_NETWORK;
 
     let network_connections: Vec<FootprintNetworkRow> = net_rows
         .into_iter()
@@ -1366,6 +1403,8 @@ async fn get_run_footprint(
         run_id: id,
         executed_binaries,
         network_connections,
+        network_connections_total_count: net_total,
+        network_connections_truncated: net_truncated,
         filesystem_by_directory,
         filesystem_directories_truncated,
         filesystem_more_directory_count,

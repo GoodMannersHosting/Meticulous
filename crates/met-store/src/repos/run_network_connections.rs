@@ -29,6 +29,22 @@ impl<'a> RunNetworkConnectionRepo<'a> {
         Self { pool }
     }
 
+    pub async fn count_for_run(&self, run_id: RunId) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM run_network_connections
+            WHERE run_id = $1
+            "#,
+        )
+        .bind(run_id.as_uuid())
+        .fetch_one(self.pool)
+        .await?;
+        Ok(n)
+    }
+
+    /// Rows for footprint UI: stable **job** ordering so a global `LIMIT` does not silently drop
+    /// entire later pipeline stages when an early job has many connections.
     pub async fn list_for_run(
         &self,
         run_id: RunId,
@@ -49,7 +65,12 @@ impl<'a> RunNetworkConnectionRepo<'a> {
             FROM run_network_connections n
             LEFT JOIN job_runs jr ON jr.id = n.job_run_id
             WHERE n.run_id = $1
-            ORDER BY n.connected_at ASC
+            ORDER BY
+                jr.job_name NULLS LAST,
+                n.job_run_id NULLS LAST,
+                n.connected_at ASC,
+                n.dst_ip,
+                n.dst_port
             LIMIT $2
             "#,
         )

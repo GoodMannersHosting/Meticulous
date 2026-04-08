@@ -19,6 +19,15 @@ pub struct RunWithPipelineName {
     pub pipeline_name: String,
 }
 
+/// Run row for org-wide (or multi-project) lists, including project and pipeline labels.
+#[derive(Debug, Clone)]
+pub struct RunWithPipelineAndProjectName {
+    pub run: Run,
+    pub pipeline_name: String,
+    pub project_name: String,
+    pub project_id: ProjectId,
+}
+
 #[derive(sqlx::FromRow)]
 struct RunProjectListRow {
     id: RunId,
@@ -35,6 +44,51 @@ struct RunProjectListRow {
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     pipeline_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct RunOrgListRow {
+    id: RunId,
+    pipeline_id: PipelineId,
+    parent_run_id: Option<RunId>,
+    trigger_id: Option<TriggerId>,
+    status: RunStatus,
+    run_number: i64,
+    commit_sha: Option<String>,
+    branch: Option<String>,
+    webhook_remote_addr: Option<String>,
+    triggered_by: String,
+    created_at: DateTime<Utc>,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+    pipeline_name: String,
+    project_name: String,
+    project_id: ProjectId,
+}
+
+impl From<RunOrgListRow> for RunWithPipelineAndProjectName {
+    fn from(row: RunOrgListRow) -> Self {
+        Self {
+            pipeline_name: row.pipeline_name,
+            project_name: row.project_name,
+            project_id: row.project_id,
+            run: Run {
+                id: row.id,
+                pipeline_id: row.pipeline_id,
+                parent_run_id: row.parent_run_id,
+                trigger_id: row.trigger_id,
+                status: row.status,
+                run_number: row.run_number,
+                commit_sha: row.commit_sha,
+                branch: row.branch,
+                webhook_remote_addr: row.webhook_remote_addr,
+                triggered_by: row.triggered_by,
+                created_at: row.created_at,
+                started_at: row.started_at,
+                finished_at: row.finished_at,
+            },
+        }
+    }
 }
 
 impl From<RunProjectListRow> for RunWithPipelineName {
@@ -285,6 +339,122 @@ impl<'a> RunRepo<'a> {
         };
 
         Ok(rows.into_iter().map(RunWithPipelineName::from).collect())
+    }
+
+    /// List runs across all non-deleted projects in an organization.
+    pub async fn list_by_organization(
+        &self,
+        org_id: OrganizationId,
+        status: Option<RunStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RunWithPipelineAndProjectName>> {
+        let rows = if let Some(st) = status {
+            sqlx::query_as::<_, RunOrgListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name, pr.name AS project_name, pr.id AS project_id
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE pr.org_id = $1
+                  AND pr.deleted_at IS NULL
+                  AND r.status = $2
+                ORDER BY r.created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(org_id.as_uuid())
+            .bind(st)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, RunOrgListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name, pr.name AS project_name, pr.id AS project_id
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE pr.org_id = $1
+                  AND pr.deleted_at IS NULL
+                ORDER BY r.created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(org_id.as_uuid())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        };
+
+        Ok(rows.into_iter().map(RunWithPipelineAndProjectName::from).collect())
+    }
+
+    /// List runs for any pipeline whose project is in `project_ids`.
+    pub async fn list_by_project_ids(
+        &self,
+        project_ids: &[ProjectId],
+        status: Option<RunStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RunWithPipelineAndProjectName>> {
+        if project_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ids: Vec<Uuid> = project_ids.iter().map(|p| p.as_uuid()).collect();
+
+        let rows = if let Some(st) = status {
+            sqlx::query_as::<_, RunOrgListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name, pr.name AS project_name, pr.id AS project_id
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE p.project_id = ANY($1)
+                  AND pr.deleted_at IS NULL
+                  AND r.status = $2
+                ORDER BY r.created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(&ids[..])
+            .bind(st)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, RunOrgListRow>(
+                r#"
+                SELECT r.id, r.pipeline_id, r.parent_run_id, r.trigger_id, r.status, r.run_number, r.commit_sha, r.branch,
+                       r.webhook_remote_addr, r.triggered_by, r.created_at, r.started_at, r.finished_at,
+                       p.name AS pipeline_name, pr.name AS project_name, pr.id AS project_id
+                FROM runs r
+                INNER JOIN pipelines p ON p.id = r.pipeline_id
+                INNER JOIN projects pr ON pr.id = p.project_id
+                WHERE p.project_id = ANY($1)
+                  AND pr.deleted_at IS NULL
+                ORDER BY r.created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(&ids[..])
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool)
+            .await?
+        };
+
+        Ok(rows.into_iter().map(RunWithPipelineAndProjectName::from).collect())
     }
 
     /// Update run status.

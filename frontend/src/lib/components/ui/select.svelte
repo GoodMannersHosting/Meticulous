@@ -18,12 +18,16 @@
 		id?: string;
 		class?: string;
 		onchange?: (value: string) => void;
+		/** Filter options by label (local search in the dropdown). */
+		searchable?: boolean;
+		searchPlaceholder?: string;
 	}
 </script>
 
 <script lang="ts">
 	import { Select } from 'bits-ui';
 	import { Check, ChevronDown } from 'lucide-svelte';
+	import Input from './input.svelte';
 
 	let {
 		options,
@@ -35,10 +39,23 @@
 		name,
 		id,
 		class: className = '',
-		onchange
+		onchange,
+		searchable = false,
+		searchPlaceholder = 'Search…'
 	}: SelectProps = $props();
 
+	let searchFilter = $state('');
+
 	const selectedOption = $derived(options.find((opt) => opt.value === value));
+
+	const filteredOptions = $derived.by(() => {
+		if (!searchable) return options;
+		const q = searchFilter.trim().toLowerCase();
+		if (!q) return options;
+		return options.filter(
+			(opt) => opt.value === value || opt.label.toLowerCase().includes(q)
+		);
+	});
 
 	const sizeClasses: Record<SelectSize, string> = {
 		sm: 'h-8 px-3 text-sm',
@@ -48,7 +65,18 @@
 </script>
 
 <div class="w-full {className}">
-	<Select.Root type="single" {disabled} value={value} onValueChange={(v) => { if (v) { value = v; onchange?.(v); } }}>
+	<Select.Root
+		type="single"
+		{disabled}
+		value={value === '' ? undefined : value}
+		onValueChange={(v) => {
+			value = v ?? '';
+			onchange?.(value);
+		}}
+		onOpenChange={(open) => {
+			if (!open) searchFilter = '';
+		}}
+	>
 		<Select.Trigger
 			class="
 				inline-flex w-full items-center justify-between rounded-lg border bg-white
@@ -77,8 +105,18 @@
 				class="z-50 min-w-[8rem] overflow-hidden rounded-lg border border-secondary-200 bg-white shadow-lg dark:border-secondary-700 dark:bg-secondary-900"
 				sideOffset={4}
 			>
-				<Select.Viewport class="p-1">
-					{#each options as option (option.value)}
+				{#if searchable}
+					<div class="border-b border-secondary-200 p-2 dark:border-secondary-700">
+						<Input
+							type="text"
+							size="sm"
+							placeholder={searchPlaceholder}
+							bind:value={searchFilter}
+						/>
+					</div>
+				{/if}
+				<Select.Viewport class="max-h-60 overflow-y-auto p-1">
+					{#each filteredOptions as option (option.value)}
 						<Select.Item
 							value={option.value}
 							disabled={option.disabled}

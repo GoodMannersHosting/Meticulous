@@ -23,6 +23,8 @@ function compareRuns(a: Run, b: Run, key: string): number {
 			return Number(a.run_number) - Number(b.run_number);
 		case 'pipeline_name':
 			return (a.pipeline_name ?? '').toLowerCase().localeCompare((b.pipeline_name ?? '').toLowerCase());
+		case 'project_name':
+			return (a.project_name ?? '').toLowerCase().localeCompare((b.project_name ?? '').toLowerCase());
 		case 'status': {
 			const ra = statusRank(a.status as RunStatus);
 			const rb = statusRank(b.status as RunStatus);

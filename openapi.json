@@ -1812,6 +1812,375 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "list_project_webhooks",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook registrations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectWebhookRegistrationResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/webhooks/{registration_id}": {
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "patch_project_webhook",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchProjectWebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectWebhookRegistrationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/webhooks/{registration_id}/clear-inbound-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "clear_project_webhook_inbound_secret",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectWebhookRegistrationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/webhooks/{registration_id}/rotate-inbound-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "rotate_project_webhook_inbound_secret",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New secret (shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateInboundSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot rotate (e.g. open/generic none)"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "list_webhook_targets",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Targets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookTargetResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "create_webhook_target",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTargetResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/webhooks/{registration_id}/targets/{target_id}": {
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "delete_webhook_target",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "path",
+            "description": "Target ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "update_webhook_target",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registration_id",
+            "in": "path",
+            "description": "Webhook registration ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "path",
+            "description": "Target ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTargetResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/workflows": {
       "get": {
         "tags": [
@@ -1976,6 +2345,36 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/workflows/catalog/upstream-ref-search": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "catalog_upstream_ref_search_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogUpstreamRefSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Branches, tags, optional commits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogUpstreamRefSearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "tags": [
@@ -1995,7 +2394,7 @@
           {
             "name": "project_id",
             "in": "query",
-            "description": "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`)",
+            "description": "List runs for all pipelines in this project (mutually exclusive with `pipeline_id`). Omit both `pipeline_id` and `project_id` to list runs across all accessible projects in the organization.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3103,6 +3502,9 @@
           },
           "400": {
             "description": "Bad request"
+          },
+          "404": {
+            "description": "Not found"
           }
         }
       }
@@ -3149,6 +3551,9 @@
           },
           "403": {
             "description": "Invalid signature"
+          },
+          "404": {
+            "description": "Not found"
           }
         }
       }
@@ -3192,6 +3597,12 @@
           },
           "400": {
             "description": "Bad request"
+          },
+          "403": {
+            "description": "Invalid token"
+          },
+          "404": {
+            "description": "Not found"
           }
         }
       }
@@ -3286,6 +3697,36 @@
           },
           "403": {
             "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/catalog/upstream-ref-search": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "catalog_upstream_ref_search_organization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogUpstreamRefSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Branches, tags, optional commits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogUpstreamRefSearchResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4085,6 +4526,99 @@
           }
         }
       },
+      "CatalogCommitPreview": {
+        "type": "object",
+        "required": [
+          "sha",
+          "title"
+        ],
+        "properties": {
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CatalogRefItem": {
+        "type": "object",
+        "required": [
+          "name",
+          "commit_sha"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CatalogUpstreamRefSearchRequest": {
+        "type": "object",
+        "required": [
+          "repository",
+          "credentials_path"
+        ],
+        "properties": {
+          "commits_for_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When set, include recent commits on this ref (branch name, tag, or SHA)."
+          },
+          "credentials_path": {
+            "type": "string"
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Case-insensitive filter on branch name, tag name, and (when loading commits) subject line or SHA prefix."
+          },
+          "repository": {
+            "type": "string",
+            "description": "GitHub repository as `owner/name` or URL."
+          }
+        }
+      },
+      "CatalogUpstreamRefSearchResponse": {
+        "type": "object",
+        "required": [
+          "branches",
+          "tags"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogRefItem"
+            }
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCommitPreview"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogRefItem"
+            }
+          }
+        }
+      },
       "CatalogVersionsPage": {
         "type": "object",
         "required": [
@@ -4451,6 +4985,21 @@
           }
         }
       },
+      "CreateWebhookTargetRequest": {
+        "type": "object",
+        "required": [
+          "pipeline_id"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter_config": {},
+          "pipeline_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateWorkflowRequest": {
         "type": "object",
         "required": [
@@ -4508,8 +5057,11 @@
             "type": "string"
           },
           "job_run_id": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Latest job run for this node (when the run has been materialized), for step drill-down in the UI."
           },
           "status": {
             "type": "string"
@@ -4960,10 +5512,6 @@
           "timestamp"
         ],
         "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64"
-          },
           "job_run_id": {
             "type": "string"
           },
@@ -4975,6 +5523,11 @@
           },
           "run_id": {
             "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic per job run (stable key for clients / virtualization)."
           },
           "step_run_id": {
             "type": [
@@ -5423,6 +5976,42 @@
           }
         }
       },
+      "PatchProjectWebhookRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omit to leave unchanged. Empty string clears the description."
+          },
+          "generic_inbound_auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `provider: generic` only. When enabling HMAC or query auth from `none`, a new signing secret is generated and returned once."
+          },
+          "generic_query_param_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For generic `query` auth: parameter name (letters, digits, `-`, `_`; must start with a letter). Ignored when effective auth is not `query`."
+          },
+          "target_pipeline_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "When set, replaces pipeline targets with this exact list (pipelines must belong to the project)."
+          }
+        }
+      },
       "PipelineResponse": {
         "allOf": [
           {
@@ -5436,6 +6025,90 @@
             "type": "object"
           }
         ]
+      },
+      "ProjectWebhookRegistrationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "events",
+          "active",
+          "payload_mapping",
+          "created_at",
+          "inbound_path",
+          "inbound_secret_configured"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "generic_inbound_auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `generic`: `none`, `hmac`, or `query`."
+          },
+          "generic_query_param_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When auth is `query`: parameter name callers must append to the URL."
+          },
+          "id": {
+            "type": "string"
+          },
+          "inbound_path": {
+            "type": "string",
+            "description": "Relative inbound URL (prepend public API origin), includes org id and provider when needed."
+          },
+          "inbound_secret_configured": {
+            "type": "boolean",
+            "description": "Whether inbound signing material is stored (`secret_hash` non-empty)."
+          },
+          "payload_mapping": {
+            "type": "object"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "signing_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when a new verifier was generated (e.g. enabling auth from `none`). Same semantics as create."
+          }
+        }
       },
       "ProjectWorkflowsAvailableResponse": {
         "type": "object",
@@ -5581,6 +6254,18 @@
           }
         }
       },
+      "RotateInboundSecretResponse": {
+        "type": "object",
+        "required": [
+          "signing_secret"
+        ],
+        "properties": {
+          "signing_secret": {
+            "type": "string",
+            "description": "Value to configure in your caller (HMAC key material / query value), same as at create time. Shown once."
+          }
+        }
+      },
       "RotateStoredSecretRequest": {
         "type": "object",
         "required": [
@@ -5616,6 +6301,8 @@
           "run_id",
           "executed_binaries",
           "network_connections",
+          "network_connections_total_count",
+          "network_connections_truncated",
           "filesystem_by_directory",
           "filesystem_directories_truncated"
         ],
@@ -5648,6 +6335,14 @@
             "items": {
               "$ref": "#/components/schemas/FootprintNetworkRow"
             }
+          },
+          "network_connections_total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total rows in `run_network_connections` for this run (may exceed `network_connections.len()`)."
+          },
+          "network_connections_truncated": {
+            "type": "boolean"
           },
           "run_id": {
             "type": "string"
@@ -5684,6 +6379,19 @@
                 ],
                 "description": "Present when listing runs by `project_id` (all pipelines in a project)."
               },
+              "project_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Present when listing runs across multiple projects (no `project_id` query param)."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "status_display": {
                 "type": [
                   "string",
@@ -5695,14 +6403,26 @@
           }
         ]
       },
-      "SbomResponse": {
+      "SbomArtifactEntry": {
         "type": "object",
         "required": [
-          "run_id",
+          "artifact_id",
           "format",
-          "status"
+          "status",
+          "artifact_name",
+          "artifact_path"
         ],
         "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_name": {
+            "type": "string"
+          },
+          "artifact_path": {
+            "type": "string",
+            "description": "Stored object path / key for the artifact."
+          },
           "format": {
             "type": "string"
           },
@@ -5713,10 +6433,10 @@
             ],
             "description": "Job that produced the SBOM artifact (from `artifacts.job_run_id`)."
           },
-          "run_id": {
-            "type": "string"
-          },
           "sbom": {},
+          "source_workflow": {
+            "description": "Resolved reusable workflow (`job_runs.source_workflow`) when present."
+          },
           "status": {
             "type": "string"
           },
@@ -5726,6 +6446,29 @@
               "null"
             ],
             "description": "Best-effort step hint from artifact `metadata` (`step_name` or `step`)."
+          }
+        }
+      },
+      "SbomResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SbomArtifactEntry"
+            }
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`not_generated` when there are no SBOM-like artifacts; otherwise `ok`."
           }
         }
       },
@@ -5836,10 +6579,16 @@
       "SetupScmWebhookRequest": {
         "type": "object",
         "required": [
-          "provider",
-          "repository_url"
+          "provider"
         ],
         "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional label shown in the project webhooks list."
+          },
           "events": {
             "type": [
               "array",
@@ -5849,11 +6598,38 @@
               "type": "string"
             }
           },
+          "generic_inbound_auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `provider: generic`: `none` (no verification), `hmac` (default, `X-Hub-Signature-256`), or `query` (secret in URL)."
+          },
+          "generic_query_param_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `generic_inbound_auth: query`: query parameter name (e.g. `token`). Value must equal the signing secret."
+          },
+          "payload_mapping": {
+            "description": "For `provider: generic`: optional [`WebhookConfig`] JSON (no `secret`); controls JSON→variable mapping."
+          },
           "provider": {
             "type": "string"
           },
           "repository_url": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stored for compatibility; not written to the database today."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SetupScmWebhookTargetInput"
+            }
           }
         }
       },
@@ -5875,10 +6651,29 @@
           "provider": {
             "type": "string"
           },
+          "signing_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `generic` with `hmac` or `query` auth: shared secret (hex). Shown once. Omitted for `generic_inbound_auth: none`."
+          },
           "webhook_id": {
             "type": "string"
           },
           "webhook_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupScmWebhookTargetInput": {
+        "type": "object",
+        "required": [
+          "pipeline_id"
+        ],
+        "properties": {
+          "filter_config": {},
+          "pipeline_id": {
             "type": "string"
           }
         }
@@ -6153,11 +6948,23 @@
         "properties": {
           "config": {
             "type": "object",
-            "description": "Webhook configuration without `secret`; use `secret_configured` to see if HMAC is required."
+            "description": "Webhook configuration without `secret`; use `secret_configured` for whether a shared secret is set."
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "created_by_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by_username": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "description": {
             "type": [
@@ -6177,6 +6984,20 @@
           },
           "id": {
             "type": "string"
+          },
+          "inbound_auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Webhook only: effective inbound mode `none`, `hmac`, or `query`."
+          },
+          "inbound_query_param": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Webhook + `query` mode: query parameter name (secret must match its value)."
           },
           "kind": {
             "type": "string"
@@ -6331,7 +7152,7 @@
         "properties": {
           "config_patch": {
             "type": "object",
-            "description": "Merged into existing JSON config (objects merge recursively)."
+            "description": "Merged into existing JSON config (objects merge recursively).\nFor webhook triggers: `\"inbound_auth\"` (`none` | `hmac` | `query`), `\"inbound_query_param\"` (for `query`),\n`\"secret\"` (non-empty or `null` to clear). Patches merge into existing config JSON."
           },
           "description": {
             "type": [
@@ -6368,6 +7189,18 @@
               "null"
             ]
           }
+        }
+      },
+      "UpdateWebhookTargetRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "filter_config": {}
         }
       },
       "UserResponse": {
@@ -6497,6 +7330,9 @@
           "accepted": {
             "type": "boolean"
           },
+          "duplicate": {
+            "type": "boolean"
+          },
           "message": {
             "type": "string"
           },
@@ -6505,6 +7341,46 @@
               "string",
               "null"
             ]
+          },
+          "run_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "targets_matched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      },
+      "WebhookTargetResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "pipeline_id",
+          "enabled",
+          "filter_config"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter_config": {},
+          "id": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "type": "string"
           }
         }
       },

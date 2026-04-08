@@ -27,6 +27,8 @@
 		apiFormat?: string;
 		/** Run id for default export filename. */
 		runId?: string;
+		/** Optional filename segment when multiple SBOMs exist (e.g. artifact name). */
+		exportArtifactSlug?: string;
 		/** When true, show a neutral empty state (no mock data). */
 		empty?: boolean;
 		class?: string;
@@ -46,6 +48,7 @@
 		rawDocument,
 		apiFormat,
 		runId,
+		exportArtifactSlug,
 		empty = false,
 		class: className = ''
 	}: SbomViewerProps = $props();
@@ -68,7 +71,7 @@
 	function downloadRawDocument() {
 		if (!browser || !rawDocument) return;
 		const kind = exportKindForFile();
-		const filename = sbomExportFilename(kind, runId);
+		const filename = sbomExportFilename(kind, runId, exportArtifactSlug);
 		const blob = new Blob([JSON.stringify(rawDocument, null, 2)], {
 			type: 'application/json'
 		});
@@ -317,7 +320,7 @@
 			</div>
 			<Button variant="outline" size="sm" onclick={downloadRawDocument}>
 				<Download class="h-4 w-4" />
-				Export {sbomExportFilename(exportKindForFile(), runId)}
+				Export {sbomExportFilename(exportKindForFile(), runId, exportArtifactSlug)}
 			</Button>
 		</div>
 

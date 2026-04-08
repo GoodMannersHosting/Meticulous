@@ -7,7 +7,7 @@ use crate::extractors::pagination::PaginationMeta;
 use crate::routes::{
     admin_workflows::{AdminWorkflowDeleteResponse, AdminWorkflowOpResponse},
     agents::{AgentActionResponse, AgentResponse},
-    artifacts::{ArtifactResponse, AttestationResponse, SbomResponse},
+    artifacts::{ArtifactResponse, AttestationResponse, SbomArtifactEntry, SbomResponse},
     auth::{
         AdminResetPasswordRequest, AdminResetPasswordResponse, AuthProvidersResponse,
         ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutResponse,
@@ -270,7 +270,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             WorkflowDiagnosticItem,
             AdminWorkflowOpResponse, AdminWorkflowDeleteResponse,
             // Artifacts
-            ArtifactResponse, SbomResponse, AttestationResponse,
+            ArtifactResponse, SbomArtifactEntry, SbomResponse, AttestationResponse,
             // Debug
             CreateDebugSessionRequest, DebugSessionResponse, DebugSecretResponse,
         )

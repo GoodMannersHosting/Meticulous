@@ -148,9 +148,9 @@ async fn get_artifact(
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct SbomResponse {
+pub struct SbomArtifactEntry {
     #[schema(value_type = String)]
-    pub run_id: RunId,
+    pub artifact_id: ArtifactId,
     pub format: String,
     pub status: String,
     pub sbom: Option<serde_json::Value>,
@@ -160,14 +160,32 @@ pub struct SbomResponse {
     /// Best-effort step hint from artifact `metadata` (`step_name` or `step`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_name: Option<String>,
+    pub artifact_name: String,
+    /// Stored object path / key for the artifact.
+    pub artifact_path: String,
+    /// Resolved reusable workflow (`job_runs.source_workflow`) when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_workflow: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SbomResponse {
+    #[schema(value_type = String)]
+    pub run_id: RunId,
+    /// `not_generated` when there are no SBOM-like artifacts; otherwise `ok`.
+    pub status: String,
+    pub artifacts: Vec<SbomArtifactEntry>,
 }
 
 #[derive(Debug, Clone, FromRow)]
 struct ArtifactSbomProbeRow {
+    id: Uuid,
     name: String,
     job_name: String,
     storage_path: String,
     content_type: Option<String>,
+    #[sqlx(json)]
+    source_workflow: Option<serde_json::Value>,
     #[sqlx(json)]
     metadata: serde_json::Value,
 }
@@ -221,6 +239,21 @@ fn inline_sbom_from_metadata(meta: &serde_json::Value) -> Option<serde_json::Val
     None
 }
 
+fn sbom_format_hint_from_artifact(name: &str, storage_path: &str) -> String {
+    let s = format!(
+        "{} {}",
+        name.to_lowercase(),
+        storage_path.to_lowercase()
+    );
+    if s.contains("cyclonedx") || s.contains(".cdx") {
+        return "cyclonedx".to_string();
+    }
+    if s.contains("spdx") {
+        return "spdx".to_string();
+    }
+    "json".to_string()
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/runs/{run_id}/sbom",
@@ -241,10 +274,12 @@ async fn get_run_sbom(
     let rows = sqlx::query_as::<_, ArtifactSbomProbeRow>(
         r#"
         SELECT
+            a.id,
             a.name,
             jr.job_name,
             a.storage_path,
             a.content_type,
+            jr.source_workflow,
             COALESCE(a.metadata, '{}'::jsonb) AS metadata
         FROM artifacts a
         JOIN job_runs jr ON jr.id = a.job_run_id
@@ -257,48 +292,51 @@ async fn get_run_sbom(
     .await
     .map_err(StoreError::from)?;
 
-    let mut saw_sbom_artifact = false;
-    let mut registered_job: Option<String> = None;
-    let mut registered_step: Option<String> = None;
-    for row in &rows {
+    let mut artifacts: Vec<SbomArtifactEntry> = Vec::new();
+    for row in rows {
         if !artifact_might_be_sbom(&row.name, &row.storage_path, row.content_type.as_deref()) {
             continue;
         }
-        saw_sbom_artifact = true;
         let step_hint = step_hint_from_artifact_metadata(&row.metadata);
+        let format_hint = sbom_format_hint_from_artifact(&row.name, &row.storage_path);
         if let Some(doc) = inline_sbom_from_metadata(&row.metadata) {
             let format = sbom_format_from_document(&doc).to_string();
-            return Ok(Json(SbomResponse {
-                run_id,
+            artifacts.push(SbomArtifactEntry {
+                artifact_id: row.id.into(),
                 format,
                 status: "inline".to_string(),
                 sbom: Some(doc),
                 job_name: Some(row.job_name.clone()),
                 step_name: step_hint,
-            }));
+                artifact_name: row.name.clone(),
+                artifact_path: row.storage_path.clone(),
+                source_workflow: row.source_workflow.clone(),
+            });
+        } else {
+            artifacts.push(SbomArtifactEntry {
+                artifact_id: row.id.into(),
+                format: format_hint,
+                status: "artifact_registered".to_string(),
+                sbom: None,
+                job_name: Some(row.job_name.clone()),
+                step_name: step_hint,
+                artifact_name: row.name.clone(),
+                artifact_path: row.storage_path.clone(),
+                source_workflow: row.source_workflow.clone(),
+            });
         }
-        registered_job = Some(row.job_name.clone());
-        registered_step = step_hint;
     }
 
-    if saw_sbom_artifact {
-        return Ok(Json(SbomResponse {
-            run_id,
-            format: "spdx".to_string(),
-            status: "artifact_registered".to_string(),
-            sbom: None,
-            job_name: registered_job,
-            step_name: registered_step,
-        }));
-    }
+    let status = if artifacts.is_empty() {
+        "not_generated".to_string()
+    } else {
+        "ok".to_string()
+    };
 
     Ok(Json(SbomResponse {
         run_id,
-        format: "spdx".to_string(),
-        status: "not_generated".to_string(),
-        sbom: None,
-        job_name: None,
-        step_name: None,
+        status,
+        artifacts,
     }))
 }
 

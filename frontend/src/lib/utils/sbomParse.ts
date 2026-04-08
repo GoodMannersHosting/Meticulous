@@ -206,9 +206,26 @@ export function parseSbomDocument(doc: Record<string, unknown>): ParsedSbom {
 	};
 }
 
+function slugifyExportSegment(s: string): string {
+	const t = s
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 48);
+	return t || 'sbom-artifact';
+}
+
 /** Default download filename for an SBOM blob. */
-export function sbomExportFilename(kind: SbomDocumentKind, runId?: string): string {
-	const prefix = runId?.trim() ? `sbom-${runId.trim()}` : 'sbom';
+export function sbomExportFilename(
+	kind: SbomDocumentKind,
+	runId?: string,
+	artifactSlug?: string
+): string {
+	const base = runId?.trim() ? `sbom-${runId.trim()}` : 'sbom';
+	const prefix = artifactSlug?.trim()
+		? `${base}-${slugifyExportSegment(artifactSlug)}`
+		: base;
 	if (kind === 'cyclonedx') return `${prefix}.cdx.json`;
 	if (kind === 'spdx') return `${prefix}.spdx.json`;
 	return `${prefix}.json`;

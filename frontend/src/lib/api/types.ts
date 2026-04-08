@@ -391,6 +391,9 @@ export interface Run {
 	parent_run_number?: number | null;
 	/** Set when listing runs by project (all pipelines). */
 	pipeline_name?: string;
+	/** Set when listing runs across projects (no `project_id` filter). */
+	project_id?: string;
+	project_name?: string;
 	trigger_id?: string;
 	status: RunStatus;
 	run_number: number;
@@ -429,16 +432,26 @@ export interface RunDagResponse {
 	nodes: RunDagNode[];
 }
 
-/** GET /api/v1/runs/:run_id/sbom */
-export interface SbomApiResponse {
-	run_id: string;
+/** One SBOM artifact linked to a job/step (GET /api/v1/runs/:run_id/sbom). */
+export interface SbomArtifactApi {
+	artifact_id: string;
 	format: string;
 	status: string;
 	sbom: Record<string, unknown> | null;
-	/** Job that uploaded the SBOM artifact (when known). */
 	job_name?: string | null;
-	/** Step hint from artifact metadata when present. */
 	step_name?: string | null;
+	artifact_name: string;
+	artifact_path: string;
+	/** Resolved catalog workflow ref JSON when the job used a reusable workflow. */
+	source_workflow?: Record<string, unknown> | null;
+}
+
+/** GET /api/v1/runs/:run_id/sbom */
+export interface SbomApiResponse {
+	run_id: string;
+	/** `not_generated` when there are no SBOM-like artifacts; otherwise `ok`. */
+	status: string;
+	artifacts: SbomArtifactApi[];
 }
 
 /** GET /api/v1/runs/:id/footprint — execution surface for Blast Radius tab */
@@ -478,6 +491,9 @@ export interface RunFootprintResponse {
 	run_id: string;
 	executed_binaries: FootprintBinaryRow[];
 	network_connections: FootprintNetworkRow[];
+	/** Total network rows stored for this run (may exceed `network_connections.length`). */
+	network_connections_total_count: number;
+	network_connections_truncated: boolean;
 	filesystem_by_directory: FootprintDirectoryGroup[];
 	filesystem_directories_truncated: boolean;
 	filesystem_more_directory_count?: number | null;
