@@ -7,6 +7,14 @@ use sqlx::PgPool;
 
 use crate::error::{Result, StoreError};
 
+/// Group membership summary for a user within an organization (auth / profile).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UserGroupInfoRow {
+    pub group_id: GroupId,
+    pub name: String,
+    pub role: GroupRole,
+}
+
 /// Repository for group operations.
 pub struct GroupRepo<'a> {
     pool: &'a PgPool,
@@ -269,6 +277,29 @@ impl<'a> GroupRepo<'a> {
         .await?;
 
         Ok(memberships)
+    }
+
+    /// Groups in an organization the user belongs to (for profile / auth me).
+    pub async fn list_groups_for_user_in_org(
+        &self,
+        org_id: OrganizationId,
+        user_id: UserId,
+    ) -> Result<Vec<UserGroupInfoRow>> {
+        let rows = sqlx::query_as::<_, UserGroupInfoRow>(
+            r#"
+            SELECT g.id as group_id, g.name, gm.role
+            FROM group_memberships gm
+            INNER JOIN groups g ON g.id = gm.group_id
+            WHERE gm.user_id = $1 AND g.org_id = $2
+            ORDER BY g.name ASC
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(org_id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     /// Count members in a group.

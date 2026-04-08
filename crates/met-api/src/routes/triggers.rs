@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 use crate::{
     error::{ApiError, ApiResult},
     extractors::Auth,
+    project_access::effective_project_role_in_user_org,
     state::AppState,
 };
 
@@ -183,9 +184,7 @@ async fn list_triggers(
 ) -> ApiResult<Json<Vec<TriggerPublicResponse>>> {
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(pipeline_id).await?;
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
-    }
+    effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
     let project = ProjectRepo::new(state.db())
         .get(pipeline.project_id)
         .await?;
@@ -227,8 +226,11 @@ async fn create_trigger(
 
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(pipeline_id).await?;
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_manage_triggers() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to create triggers",
+        ));
     }
     let project = ProjectRepo::new(state.db())
         .get(pipeline.project_id)
@@ -304,8 +306,11 @@ async fn update_trigger(
     let repo = TriggerRepo::new(state.db());
     let prior = repo.get_for_org(user.org_id, trigger_id).await?;
     let pipeline = PipelineRepo::new(state.db()).get(prior.pipeline_id).await?;
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_manage_triggers() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to update triggers",
+        ));
     }
 
     if let Some(ref p) = body.config_patch {
@@ -373,8 +378,11 @@ async fn delete_trigger(
     let repo = TriggerRepo::new(state.db());
     let prior = repo.get_for_org(user.org_id, trigger_id).await?;
     let pipeline = PipelineRepo::new(state.db()).get(prior.pipeline_id).await?;
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_manage_triggers() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to delete triggers",
+        ));
     }
     let managed: WebhookConfig = serde_json::from_value(prior.config.clone()).unwrap_or_default();
     if managed.managed_by.as_deref() == Some("repo") {

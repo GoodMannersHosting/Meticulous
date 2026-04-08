@@ -47,6 +47,9 @@ pub struct Pipeline {
     pub scm_revision: Option<String>,
     /// Whether the pipeline is enabled.
     pub enabled: bool,
+    /// When the pipeline was archived (soft).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
     /// When the pipeline was created.
     pub created_at: DateTime<Utc>,
     /// When the pipeline was last updated.
@@ -78,6 +81,7 @@ impl Pipeline {
             scm_credentials_secret_path: None,
             scm_revision: None,
             enabled: true,
+            archived_at: None,
             created_at: now,
             updated_at: now,
         }

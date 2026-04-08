@@ -28,6 +28,9 @@ pub struct User {
     /// Whether the user is an org admin.
     #[serde(default)]
     pub is_admin: bool,
+    /// API-only principal: no interactive password/OAuth login.
+    #[serde(default)]
+    pub service_account: bool,
     /// When true, password login is allowed but API access is limited until the password is changed.
     #[serde(default)]
     pub password_must_change: bool,
@@ -64,6 +67,7 @@ impl User {
             password_hash: None,
             is_active: true,
             is_admin: false,
+            service_account: false,
             password_must_change: false,
             external_id: None,
             created_at: now,

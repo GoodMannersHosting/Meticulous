@@ -47,6 +47,10 @@ pub struct ApiConfig {
     pub pagination_default_limit: u32,
     /// Maximum list page size (client requests are clamped to this).
     pub pagination_max_limit: u32,
+
+    /// Emit `Strict-Transport-Security` on responses (enable behind HTTPS / TLS-terminating proxies).
+    #[serde(default)]
+    pub enable_hsts: bool,
 }
 
 impl Default for ApiConfig {
@@ -65,6 +69,7 @@ impl Default for ApiConfig {
             max_concurrent_engine_runs: 8,
             pagination_default_limit: 10_000,
             pagination_max_limit: 10_000,
+            enable_hsts: false,
         }
     }
 }
@@ -82,6 +87,7 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             max_concurrent_engine_runs: 8,
             pagination_default_limit: http.pagination_default_limit,
             pagination_max_limit: http.pagination_max_limit,
+            enable_hsts: false,
             ..Default::default()
         }
     }

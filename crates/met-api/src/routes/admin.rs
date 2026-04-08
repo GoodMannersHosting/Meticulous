@@ -6,28 +6,36 @@
 //! - Role management (assign/revoke)
 //! - Project admin operations (schedule deletion, force delete)
 
-use crate::auth::hash_token;
+use crate::auth::{hash_password, hash_token};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, post},
 };
 use chrono::{Duration, Utc};
-use met_core::ids::{AuthProviderId, GroupId, JoinTokenId, OidcGroupMappingId, ProjectId, UserId};
+use met_core::ids::{
+    AuthProviderId, GroupId, JoinTokenId, OidcGroupMappingId, PipelineId, ProjectId, UserId,
+};
 use met_core::models::{
     AuthProvider, CreateAuthProvider, CreateGroup, CreateOidcGroupMapping, Group, GroupMembership,
     GroupRole, JoinToken, JoinTokenDescriptionHistory, JoinTokenScope, OidcGroupMapping,
     PermissionRole, UpdateAuthProvider, User, UserRole, generate_join_token,
 };
 use met_store::repos::{
-    AuthProviderRepo, GroupRepo, JobRunRepo, JoinTokenRepo, ProjectRepo, RoleRepo, UserRepo,
+    ApiTokenRepo, AuthProviderRepo, GroupRepo, JobRunRepo, JoinTokenRepo, OrgPolicyPatch,
+    OrgPolicyRepo, PipelineRepo, ProjectRepo, RoleRepo, UserRepo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
     extractors::{Auth, PaginatedResponse, Pagination},
+    routes::auth::{AdminResetPasswordRequest, AdminResetPasswordResponse},
+    routes::tokens::{
+        CreateTokenRequest, CreateTokenResponseBody, TokenResponse, create_api_token_for_user,
+    },
     state::AppState,
 };
 
@@ -37,87 +45,102 @@ pub fn router() -> Router<AppState> {
         .merge(crate::routes::admin_workflows::router())
         .merge(crate::routes::meticulous_apps::admin_router())
         // User management
-        .route("/admin/users", get(list_users))
-        .route("/admin/users/{id}", get(get_user).patch(update_user))
-        .route("/admin/users/{id}/lock", post(lock_user))
-        .route("/admin/users/{id}/unlock", post(unlock_user))
-        .route("/admin/users/{id}/delete", post(delete_user))
-        // Group management
-        .route("/admin/groups", get(list_groups).post(create_group))
+        .route("/users", get(list_users).post(create_service_account_user))
+        .route("/users/{id}", get(get_user).patch(update_user))
+        .route("/users/{id}/lock", post(lock_user))
+        .route("/users/{id}/unlock", post(unlock_user))
+        .route("/users/{id}/reset-password", post(admin_reset_password))
         .route(
-            "/admin/groups/{id}",
+            "/users/{id}/tokens",
+            post(admin_create_service_account_token),
+        )
+        .route("/users/{id}/delete", post(delete_user))
+        // Group management
+        .route("/groups", get(list_groups).post(create_group))
+        .route(
+            "/groups/{id}",
             get(get_group).patch(update_group).delete(delete_group),
         )
         .route(
-            "/admin/groups/{id}/members",
+            "/groups/{id}/members",
             get(list_group_members).post(add_group_member),
         )
         .route(
-            "/admin/groups/{id}/members/{user_id}",
+            "/groups/{id}/members/{user_id}",
             delete(remove_group_member).patch(update_group_member),
         )
         // Role management
-        .route("/admin/roles", get(list_roles))
+        .route("/roles", get(list_roles))
         .route(
-            "/admin/users/{id}/roles",
+            "/users/{id}/roles",
             get(get_user_roles).post(assign_role),
         )
-        .route("/admin/users/{id}/roles/{role}", delete(revoke_role))
+        .route("/users/{id}/roles/{role}", delete(revoke_role))
         // Project admin operations
         .route(
-            "/admin/projects/{id}/schedule-deletion",
+            "/projects/{id}/schedule-deletion",
             post(schedule_project_deletion),
         )
         .route(
-            "/admin/projects/{id}/cancel-deletion",
+            "/projects/{id}/cancel-deletion",
             post(cancel_project_deletion),
         )
         .route(
-            "/admin/projects/{id}/force-delete",
+            "/projects/{id}/force-delete",
             post(force_delete_project),
+        )
+        .route("/archive", get(list_org_archive))
+        .route("/projects/{id}/unarchive", post(admin_unarchive_project))
+        .route("/pipelines/{id}/unarchive", post(admin_unarchive_pipeline))
+        .route("/pipelines/{id}/purge", post(admin_purge_archived_pipeline))
+        .route("/policy", get(get_admin_org_policy).patch(patch_admin_org_policy))
+        .route("/tokens", get(list_admin_org_api_tokens))
+        .route(
+            "/projects/{id}/members",
+            get(list_project_members).post(add_project_member),
         )
         // Auth provider management
         .route(
-            "/admin/auth-providers",
+            "/auth-providers",
             get(list_auth_providers).post(create_auth_provider),
         )
         .route(
-            "/admin/auth-providers/{id}",
+            "/auth-providers/{id}",
             get(get_auth_provider)
                 .patch(update_auth_provider)
                 .delete(delete_auth_provider),
         )
         .route(
-            "/admin/auth-providers/{id}/enable",
+            "/auth-providers/{id}/enable",
             post(enable_auth_provider),
         )
         .route(
-            "/admin/auth-providers/{id}/disable",
+            "/auth-providers/{id}/disable",
             post(disable_auth_provider),
         )
         // OIDC group mapping management
         .route(
-            "/admin/auth-providers/{id}/group-mappings",
+            "/auth-providers/{id}/group-mappings",
             get(list_group_mappings).post(create_group_mapping),
         )
         .route(
-            "/admin/auth-providers/{provider_id}/group-mappings/{mapping_id}",
+            "/auth-providers/{provider_id}/group-mappings/{mapping_id}",
             delete(delete_group_mapping),
         )
         // Join token management
         .route(
-            "/admin/join-tokens",
+            "/join-tokens",
             get(list_join_tokens).post(create_join_token),
         )
-        .route("/admin/join-tokens/{id}/revoke", post(revoke_join_token))
+        .route("/join-tokens/{id}/revoke", post(revoke_join_token))
         .route(
-            "/admin/join-tokens/{id}",
+            "/join-tokens/{id}",
             get(get_join_token)
                 .patch(update_join_token)
                 .delete(delete_join_token),
         )
-        .route("/admin/ops/jobs-dlq", get(list_jobs_dlq))
-        .route("/admin/ops/job-queue", get(list_job_queue))
+        .route("/ops/jobs-dlq", get(list_jobs_dlq))
+        .route("/ops/job-queue", get(list_job_queue))
 }
 
 // ============================================================================
@@ -245,6 +268,8 @@ pub struct UserResponse {
     pub display_name: Option<String>,
     pub is_active: bool,
     pub is_admin: bool,
+    #[serde(default)]
+    pub service_account: bool,
     pub password_must_change: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_login_at: Option<String>,
@@ -261,6 +286,7 @@ impl From<&User> for UserResponse {
             display_name: u.display_name.clone(),
             is_active: u.is_active,
             is_admin: u.is_admin,
+            service_account: u.service_account,
             password_must_change: u.password_must_change,
             last_login_at: u.last_login_at.map(|t| t.to_rfc3339()),
             created_at: u.created_at.to_rfc3339(),
@@ -287,6 +313,434 @@ async fn list_users(
     );
 
     Ok(Json(response))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminCreateServiceAccountRequest {
+    pub username: String,
+    pub email: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub is_admin: bool,
+}
+
+#[instrument(skip(state, req))]
+async fn create_service_account_user(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Json(req): Json<AdminCreateServiceAccountRequest>,
+) -> ApiResult<Json<UserResponse>> {
+    require_admin(&admin)?;
+
+    let username = req.username.trim();
+    let email = req.email.trim();
+    if username.is_empty() || email.is_empty() {
+        return Err(ApiError::bad_request("username and email are required"));
+    }
+
+    let repo = UserRepo::new(state.db());
+    if repo
+        .get_by_username(admin.org_id, username)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::bad_request("username already exists"));
+    }
+    if repo.get_by_email(admin.org_id, email).await?.is_some() {
+        return Err(ApiError::bad_request("email already exists"));
+    }
+
+    let user = repo
+        .create(
+            admin.org_id,
+            username,
+            email,
+            req.display_name.as_deref(),
+            None,
+            req.is_admin,
+            true,
+            false,
+        )
+        .await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        new_user_id = %user.id,
+        "service account user created"
+    );
+
+    Ok(Json(UserResponse::from(&user)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrgPolicyApiResponse {
+    pub max_api_token_ttl_days: i32,
+    pub user_rl_primary_period_secs: i32,
+    pub user_rl_primary_max: i32,
+    pub user_rl_secondary_period_secs: i32,
+    pub user_rl_secondary_max: i32,
+    pub app_rl_primary_period_secs: i32,
+    pub app_rl_primary_max: i32,
+    pub app_rl_secondary_period_secs: i32,
+    pub app_rl_secondary_max: i32,
+}
+
+impl From<met_store::repos::OrgPolicy> for OrgPolicyApiResponse {
+    fn from(p: met_store::repos::OrgPolicy) -> Self {
+        Self {
+            max_api_token_ttl_days: p.max_api_token_ttl_days,
+            user_rl_primary_period_secs: p.user_rl_primary_period_secs,
+            user_rl_primary_max: p.user_rl_primary_max,
+            user_rl_secondary_period_secs: p.user_rl_secondary_period_secs,
+            user_rl_secondary_max: p.user_rl_secondary_max,
+            app_rl_primary_period_secs: p.app_rl_primary_period_secs,
+            app_rl_primary_max: p.app_rl_primary_max,
+            app_rl_secondary_period_secs: p.app_rl_secondary_period_secs,
+            app_rl_secondary_max: p.app_rl_secondary_max,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchOrgPolicyRequest {
+    pub max_api_token_ttl_days: Option<i32>,
+    pub user_rl_primary_period_secs: Option<i32>,
+    pub user_rl_primary_max: Option<i32>,
+    pub user_rl_secondary_period_secs: Option<i32>,
+    pub user_rl_secondary_max: Option<i32>,
+    pub app_rl_primary_period_secs: Option<i32>,
+    pub app_rl_primary_max: Option<i32>,
+    pub app_rl_secondary_period_secs: Option<i32>,
+    pub app_rl_secondary_max: Option<i32>,
+}
+
+#[instrument(skip(state))]
+async fn get_admin_org_policy(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+) -> ApiResult<Json<OrgPolicyApiResponse>> {
+    require_admin(&admin)?;
+    let p = OrgPolicyRepo::new(state.db())
+        .get(admin.org_id)
+        .await?;
+    Ok(Json(OrgPolicyApiResponse::from(p)))
+}
+
+#[instrument(skip(state, req))]
+async fn patch_admin_org_policy(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Json(req): Json<PatchOrgPolicyRequest>,
+) -> ApiResult<Json<OrgPolicyApiResponse>> {
+    require_admin(&admin)?;
+    let patch = OrgPolicyPatch {
+        max_api_token_ttl_days: req.max_api_token_ttl_days,
+        user_rl_primary_period_secs: req.user_rl_primary_period_secs,
+        user_rl_primary_max: req.user_rl_primary_max,
+        user_rl_secondary_period_secs: req.user_rl_secondary_period_secs,
+        user_rl_secondary_max: req.user_rl_secondary_max,
+        app_rl_primary_period_secs: req.app_rl_primary_period_secs,
+        app_rl_primary_max: req.app_rl_primary_max,
+        app_rl_secondary_period_secs: req.app_rl_secondary_period_secs,
+        app_rl_secondary_max: req.app_rl_secondary_max,
+    };
+    let p = OrgPolicyRepo::new(state.db())
+        .upsert(admin.org_id, &patch)
+        .await?;
+    Ok(Json(OrgPolicyApiResponse::from(p)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminOrgTokenRow {
+    pub token: TokenResponse,
+    pub owner_user_id: String,
+    pub owner_email: String,
+}
+
+#[instrument(skip(state))]
+async fn list_admin_org_api_tokens(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    pagination: Pagination,
+) -> ApiResult<Json<Vec<AdminOrgTokenRow>>> {
+    require_admin(&admin)?;
+    let repo = ApiTokenRepo::new(state.db());
+    let tokens = repo
+        .list_for_org(admin.org_id, pagination.sql_limit(), 0)
+        .await?;
+    let users = UserRepo::new(state.db());
+    let mut out = Vec::with_capacity(tokens.len());
+    for t in tokens {
+        let owner = users.get(t.user_id).await?;
+        out.push(AdminOrgTokenRow {
+            token: TokenResponse::from(&t),
+            owner_user_id: t.user_id.to_string(),
+            owner_email: owner.email,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ArchiveListResponse {
+    pub projects: Vec<serde_json::Value>,
+    pub pipelines: Vec<serde_json::Value>,
+}
+
+#[instrument(skip(state))]
+async fn list_org_archive(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+) -> ApiResult<Json<ArchiveListResponse>> {
+    require_admin(&admin)?;
+    let prepo = ProjectRepo::new(state.db());
+    let projects = prepo.list_archived(admin.org_id, 500, 0).await?;
+    let pipes = PipelineRepo::new(state.db())
+        .list_archived_for_org(admin.org_id)
+        .await?;
+    let projects_json = projects
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id.to_string(),
+                "name": p.name,
+                "slug": p.slug,
+                "archived_at": p.archived_at.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+    let pipelines_json = pipes
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id.to_string(),
+                "project_id": p.project_id.to_string(),
+                "name": p.name,
+                "slug": p.slug,
+                "archived_at": p.archived_at.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+    Ok(Json(ArchiveListResponse {
+        projects: projects_json,
+        pipelines: pipelines_json,
+    }))
+}
+
+#[instrument(skip(state))]
+async fn admin_unarchive_project(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(project_id): Path<ProjectId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+    let repo = ProjectRepo::new(state.db());
+    let p = repo.get_including_deleted(project_id).await?;
+    if p.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot modify projects in other organizations",
+        ));
+    }
+    repo.unarchive(project_id).await?;
+    PipelineRepo::new(state.db())
+        .unarchive_all_in_project(project_id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "project unarchived" })))
+}
+
+#[instrument(skip(state))]
+async fn admin_unarchive_pipeline(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(pipeline_id): Path<PipelineId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+    let prepo = PipelineRepo::new(state.db());
+    let pipe = prepo.get(pipeline_id).await?;
+    let proj = ProjectRepo::new(state.db()).get(pipe.project_id).await?;
+    if proj.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot modify pipelines in other organizations",
+        ));
+    }
+    prepo.unarchive(pipeline_id).await?;
+    Ok(Json(serde_json::json!({ "message": "pipeline unarchived" })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddProjectMemberRequest {
+    /// Legacy: prefer `principal_id` + `principal_type` for new clients.
+    #[serde(default)]
+    pub user_id: Option<UserId>,
+    /// `user` (default) or `group`.
+    #[serde(default)]
+    pub principal_type: Option<String>,
+    #[serde(default)]
+    pub principal_id: Option<Uuid>,
+    /// One of: `admin`, `developer`, `readonly`.
+    pub role: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ProjectMemberRow {
+    principal_type: String,
+    principal_id: Uuid,
+    role: String,
+    display_name: Option<String>,
+}
+
+#[instrument(skip(state))]
+async fn list_project_members(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(project_id): Path<ProjectId>,
+) -> ApiResult<Json<Vec<ProjectMemberRow>>> {
+    require_admin(&admin)?;
+    let proj = ProjectRepo::new(state.db()).get(project_id).await?;
+    if proj.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot access projects in other organizations",
+        ));
+    }
+    let rows: Vec<ProjectMemberRow> = sqlx::query_as(
+        r#"
+        SELECT pm.principal_type::text AS principal_type,
+               pm.principal_id,
+               pm.role::text AS role,
+               CASE
+                 WHEN pm.principal_type = 'user' THEN u.email
+                 ELSE g.name
+               END AS display_name
+        FROM project_members pm
+        LEFT JOIN users u ON pm.principal_type = 'user' AND u.id = pm.principal_id
+        LEFT JOIN groups g ON pm.principal_type = 'group' AND g.id = pm.principal_id
+        WHERE pm.project_id = $1
+        ORDER BY pm.principal_type::text, display_name NULLS LAST
+        "#,
+    )
+    .bind(project_id.as_uuid())
+    .fetch_all(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+    Ok(Json(rows))
+}
+
+enum ProjectPrincipalTarget {
+    User(UserId),
+    Group(GroupId),
+}
+
+fn resolve_add_project_member_principal(req: &AddProjectMemberRequest) -> ApiResult<ProjectPrincipalTarget> {
+    let pt = req
+        .principal_type
+        .as_deref()
+        .unwrap_or("user")
+        .trim()
+        .to_lowercase();
+    match pt.as_str() {
+        "user" => {
+            let uid = if let Some(pid) = req.principal_id {
+                UserId::from_uuid(pid)
+            } else if let Some(u) = req.user_id {
+                u
+            } else {
+                return Err(ApiError::bad_request(
+                    "user principal requires `user_id` or `principal_id`",
+                ));
+            };
+            Ok(ProjectPrincipalTarget::User(uid))
+        }
+        "group" => {
+            let gid = req.principal_id.ok_or_else(|| {
+                ApiError::bad_request("group principal requires `principal_id`")
+            })?;
+            Ok(ProjectPrincipalTarget::Group(GroupId::from_uuid(gid)))
+        }
+        _ => Err(ApiError::bad_request("principal_type must be user or group")),
+    }
+}
+
+#[instrument(skip(state, req))]
+async fn add_project_member(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<AddProjectMemberRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+    let proj = ProjectRepo::new(state.db()).get(project_id).await?;
+    if proj.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot modify projects in other organizations",
+        ));
+    }
+    let target = resolve_add_project_member_principal(&req)?;
+    match target {
+        ProjectPrincipalTarget::User(uid) => {
+            let urow = UserRepo::new(state.db()).get(uid).await?;
+            if urow.org_id != admin.org_id {
+                return Err(ApiError::bad_request("user is not in this organization"));
+            }
+        }
+        ProjectPrincipalTarget::Group(gid) => {
+            let grow = GroupRepo::new(state.db()).get(gid).await?;
+            if grow.org_id != admin.org_id {
+                return Err(ApiError::bad_request("group is not in this organization"));
+            }
+        }
+    }
+    let role = req.role.trim().to_lowercase();
+    if !matches!(role.as_str(), "admin" | "developer" | "readonly") {
+        return Err(ApiError::bad_request(
+            "role must be admin, developer, or readonly",
+        ));
+    }
+    let (ptype, pid) = match target {
+        ProjectPrincipalTarget::User(u) => ("user", u.as_uuid()),
+        ProjectPrincipalTarget::Group(g) => ("group", g.as_uuid()),
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO project_members (project_id, principal_type, principal_id, role)
+        VALUES ($1, $2::project_principal_type, $3, $4::project_role)
+        ON CONFLICT (project_id, principal_type, principal_id)
+        DO UPDATE SET role = EXCLUDED.role
+        "#,
+    )
+    .bind(project_id.as_uuid())
+    .bind(ptype)
+    .bind(pid)
+    .bind(&role)
+    .execute(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+    Ok(Json(serde_json::json!({ "message": "project member saved" })))
+}
+
+#[instrument(skip(state))]
+async fn admin_purge_archived_pipeline(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(pipeline_id): Path<PipelineId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+    let prepo = PipelineRepo::new(state.db());
+    let pipe = prepo.get(pipeline_id).await?;
+    if pipe.archived_at.is_none() {
+        return Err(ApiError::bad_request(
+            "pipeline must be archived before purge",
+        ));
+    }
+    let proj = ProjectRepo::new(state.db()).get(pipe.project_id).await?;
+    if proj.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot delete pipelines in other organizations",
+        ));
+    }
+    prepo.delete(pipeline_id).await?;
+    Ok(Json(serde_json::json!({ "message": "pipeline purged" })))
 }
 
 #[instrument(skip(state))]
@@ -513,6 +967,100 @@ async fn delete_user(
     );
 
     Ok(Json(serde_json::json!({ "message": "user deleted" })))
+}
+
+/// Admin endpoint to reset a user's password.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/users/{id}/reset-password",
+    params(("id" = String, Path, description = "User ID")),
+    request_body = AdminResetPasswordRequest,
+    responses(
+        (status = 200, description = "Password reset", body = AdminResetPasswordResponse),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Admin access required"),
+    ),
+    tag = "admin",
+)]
+#[instrument(skip(state, req))]
+pub async fn admin_reset_password(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(user_id): Path<UserId>,
+    Json(req): Json<AdminResetPasswordRequest>,
+) -> ApiResult<Json<AdminResetPasswordResponse>> {
+    require_admin(&admin)?;
+
+    if !state.config.auth.password_enabled {
+        return Err(ApiError::forbidden("password authentication is disabled"));
+    }
+
+    let user_repo = UserRepo::new(state.db());
+    let min_length = state.config.auth.min_password_length;
+    if req.new_password.len() < min_length {
+        return Err(ApiError::bad_request(format!(
+            "password must be at least {} characters",
+            min_length
+        )));
+    }
+
+    let target_user = user_repo.get(user_id).await?;
+
+    if target_user.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot reset password for users in other organizations",
+        ));
+    }
+
+    let new_hash = hash_password(&req.new_password)
+        .map_err(|e| ApiError::internal(format!("failed to hash password: {e}")))?;
+
+    user_repo.update_password(user_id, &new_hash).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        target_user_id = %user_id,
+        "admin reset user password"
+    );
+
+    Ok(Json(AdminResetPasswordResponse {
+        message: "password reset successfully".to_string(),
+    }))
+}
+
+#[instrument(skip(state, req))]
+async fn admin_create_service_account_token(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(user_id): Path<UserId>,
+    Json(req): Json<CreateTokenRequest>,
+) -> ApiResult<Json<CreateTokenResponseBody>> {
+    require_admin(&admin)?;
+    let target = UserRepo::new(state.db()).get(user_id).await?;
+    if target.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot create tokens for users in other organizations",
+        ));
+    }
+    if !target.service_account {
+        return Err(ApiError::bad_request(
+            "admin-created API tokens are limited to service account users",
+        ));
+    }
+    let body = create_api_token_for_user(
+        &state,
+        admin.org_id,
+        user_id,
+        req,
+        false, /* service accounts may hold more than two tokens when provisioned by admin */
+    )
+    .await?;
+    tracing::info!(
+        admin_id = %admin.user_id,
+        target_user_id = %user_id,
+        "admin created API token for service account"
+    );
+    Ok(Json(body))
 }
 
 // ============================================================================
@@ -931,6 +1479,15 @@ async fn list_roles(
                 .map(|s| (*s).to_string())
                 .collect(),
         },
+        RoleInfo {
+            name: "security_auditor".to_string(),
+            description: "Org-wide blast-radius search and security reads".to_string(),
+            permissions: PermissionRole::SecurityAuditor
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        },
     ];
 
     Ok(Json(roles))
@@ -1002,6 +1559,7 @@ async fn assign_role(
         "admin" => PermissionRole::Admin,
         "auditor" => PermissionRole::Auditor,
         "security_lead" => PermissionRole::SecurityLead,
+        "security_auditor" => PermissionRole::SecurityAuditor,
         "user" => PermissionRole::User,
         _ => return Err(ApiError::bad_request("invalid role")),
     };
@@ -1039,6 +1597,7 @@ async fn revoke_role(
         "admin" => PermissionRole::Admin,
         "auditor" => PermissionRole::Auditor,
         "security_lead" => PermissionRole::SecurityLead,
+        "security_auditor" => PermissionRole::SecurityAuditor,
         "user" => PermissionRole::User,
         _ => return Err(ApiError::bad_request("invalid role")),
     };
@@ -1154,6 +1713,12 @@ async fn force_delete_project(
     if project.org_id != admin.org_id {
         return Err(ApiError::forbidden(
             "cannot delete projects in other organizations",
+        ));
+    }
+
+    if project.archived_at.is_none() {
+        return Err(ApiError::bad_request(
+            "project must be archived before permanent delete (use Admin → Archive)",
         ));
     }
 

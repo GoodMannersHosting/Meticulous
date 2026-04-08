@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button, Card, Input, Tabs, Alert, Badge, Avatar } from '$components/ui';
 	import { auth, theme } from '$stores';
-	import { User, Bell, Palette, Key, Shield, Building, Camera } from 'lucide-svelte';
+	import { User, Bell, Palette, Camera, Users } from 'lucide-svelte';
 
 	let activeTab = $state('profile');
 	let saving = $state(false);
@@ -40,6 +40,11 @@
 		<h1 class="text-2xl font-bold text-[var(--text-primary)]">Settings</h1>
 		<p class="mt-1 text-[var(--text-secondary)]">
 			Manage your account settings and preferences.
+		</p>
+		<p class="mt-2 text-sm">
+			<a href="/settings/security" class="text-primary-600 hover:underline dark:text-primary-400">
+				API tokens and security settings
+			</a>
 		</p>
 	</div>
 
@@ -122,6 +127,34 @@
 						</Button>
 					</div>
 				</form>
+
+				<div class="border-t border-[var(--border-primary)] pt-6">
+					<div class="flex items-start gap-3">
+						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--bg-tertiary)]">
+							<Users class="h-5 w-5 text-[var(--text-secondary)]" />
+						</div>
+						<div class="min-w-0 flex-1">
+							<h3 class="text-lg font-medium text-[var(--text-primary)]">Groups</h3>
+							<p class="mt-1 text-sm text-[var(--text-secondary)]">
+								Organization groups you belong to and your role in each.
+							</p>
+							{#if auth.user?.groups && auth.user.groups.length > 0}
+								<ul class="mt-4 divide-y divide-[var(--border-secondary)] rounded-lg border border-[var(--border-primary)]">
+									{#each auth.user.groups as g (g.id)}
+										<li class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+											<span class="font-medium text-[var(--text-primary)]">{g.name}</span>
+											<Badge variant="outline" size="sm">{g.role}</Badge>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="mt-3 text-sm text-[var(--text-tertiary)]">
+									You are not in any groups, or group data is not available yet.
+								</p>
+							{/if}
+						</div>
+					</div>
+				</div>
 			</div>
 		</Card>
 	{:else if activeTab === 'notifications'}

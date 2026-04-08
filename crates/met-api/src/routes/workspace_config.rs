@@ -225,6 +225,10 @@ async fn resolve_project_pipeline_filters(
         }
     }
 
+    if let (Some(pipe), Some(proj)) = (pipeline_id, project_id) {
+        crate::project_access::ensure_api_token_pipeline_scope(user, pipe, proj)?;
+    }
+
     Ok((project_id, pipeline_id))
 }
 

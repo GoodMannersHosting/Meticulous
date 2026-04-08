@@ -20,7 +20,8 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
-    extractors::{Auth, CurrentUser},
+    extractors::{Auth, CurrentUser, SessionOrAppAuth},
+    project_access::effective_project_role_session_or_app_in_user_org,
     state::AppState,
 };
 
@@ -138,13 +139,11 @@ fn dedupe_latest(rows: Vec<BuiltinSecretMetaRow>) -> Vec<BuiltinSecretMetaRow> {
 #[instrument(skip(state))]
 async fn list_stored_secrets(
     State(state): State<AppState>,
-    Auth(user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path(project_id): Path<ProjectId>,
     Query(q): Query<ListStoredQuery>,
 ) -> ApiResult<Json<Vec<StoredSecretResponse>>> {
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
-    }
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, project_id).await?;
 
     let org_id = ProjectRepo::new(state.db())
         .get(project_id)

@@ -319,10 +319,17 @@ async fn oauth_callback(
                 name.as_deref(),
                 None, // No password for OAuth users
                 false,
+                false, // service_account
                 false,
             )
             .await?
     };
+
+    if user.service_account {
+        return Err(ApiError::forbidden(
+            "service accounts cannot sign in with interactive OAuth",
+        ));
+    }
 
     // Sync OIDC group memberships if any groups were returned
     if !oidc_groups.is_empty() {

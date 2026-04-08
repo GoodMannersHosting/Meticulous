@@ -38,6 +38,19 @@
 	let confirmAction = $state<(() => Promise<void>) | null>(null);
 	let confirmLoading = $state(false);
 
+	let showServiceAccountTokenModal = $state(false);
+	let saTokenCreating = $state(false);
+	let saTokenError = $state<string | null>(null);
+	let saTokenPlain = $state<string | null>(null);
+	let saTokenForm = $state({
+		name: '',
+		description: '',
+		scopes: ['read'] as string[],
+		expiresIn: '365' as string,
+		projectIdsRaw: '',
+		pipelineIdsRaw: ''
+	});
+
 	function openConfirmModal(options: {
 		title: string;
 		message: string;
@@ -248,6 +261,66 @@
 	);
 
 	const isSelf = $derived(!!user && !!auth.user && user.id === auth.user.id);
+
+	const saScopeOptions = [
+		{ value: 'read', label: 'Read' },
+		{ value: 'write', label: 'Write' },
+		{ value: 'admin', label: 'Admin' }
+	];
+
+	function toggleSaScope(scope: string) {
+		if (saTokenForm.scopes.includes(scope)) {
+			saTokenForm.scopes = saTokenForm.scopes.filter((s) => s !== scope);
+		} else {
+			saTokenForm.scopes = [...saTokenForm.scopes, scope];
+		}
+	}
+
+	function parseUuidList(raw: string): string[] {
+		return raw
+			.split(/[\s,]+/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+
+	async function submitServiceAccountToken() {
+		if (!user?.service_account || !user || !saTokenForm.name.trim() || saTokenForm.scopes.length === 0) return;
+		saTokenCreating = true;
+		saTokenError = null;
+		try {
+			const project_ids_raw = parseUuidList(saTokenForm.projectIdsRaw);
+			const pipeline_ids_raw = parseUuidList(saTokenForm.pipelineIdsRaw);
+			const expires_in_days =
+				saTokenForm.expiresIn === 'never' ? null : parseInt(saTokenForm.expiresIn, 10);
+			const res = await apiMethods.admin.users.createToken(user.id, {
+				name: saTokenForm.name.trim(),
+				description: saTokenForm.description.trim() || undefined,
+				scopes: saTokenForm.scopes,
+				expires_in_days,
+				...(project_ids_raw.length > 0 ? { project_ids: project_ids_raw } : {}),
+				...(pipeline_ids_raw.length > 0 ? { pipeline_ids: pipeline_ids_raw } : {})
+			});
+			saTokenPlain = res.plain_token;
+			saTokenForm = {
+				name: '',
+				description: '',
+				scopes: ['read'],
+				expiresIn: '365',
+				projectIdsRaw: '',
+				pipelineIdsRaw: ''
+			};
+		} catch (e) {
+			saTokenError = e instanceof Error ? e.message : 'Failed to create token';
+		} finally {
+			saTokenCreating = false;
+		}
+	}
+
+	function closeServiceAccountTokenModal() {
+		showServiceAccountTokenModal = false;
+		saTokenError = null;
+		saTokenPlain = null;
+	}
 </script>
 
 <div class="space-y-6">
@@ -432,6 +505,32 @@
 					</div>
 				</div>
 
+				{#if user.service_account}
+					<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6">
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<div>
+								<h3 class="text-base font-semibold text-[var(--text-primary)]">Service account API tokens</h3>
+								<p class="mt-1 text-sm text-[var(--text-secondary)]">
+									Create a token on behalf of this service account. The plain value is shown only once.
+									Service accounts are not subject to the two-active-token cap when provisioned by an admin.
+								</p>
+							</div>
+							<button
+								type="button"
+								onclick={() => {
+									saTokenPlain = null;
+									saTokenError = null;
+									showServiceAccountTokenModal = true;
+								}}
+								class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700"
+							>
+								<Key class="h-4 w-4" />
+								Create token
+							</button>
+						</div>
+					</div>
+				{/if}
+
 				<!-- Groups Section -->
 				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6">
 					<h3 class="text-base font-semibold text-[var(--text-primary)]">Group Memberships</h3>
@@ -569,6 +668,141 @@
 					{resetPasswordLoading ? 'Resetting...' : 'Reset Password'}
 				</button>
 			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Service account token -->
+{#if showServiceAccountTokenModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
+			<div class="flex items-center justify-between gap-2">
+				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Create API token</h3>
+				<button
+					type="button"
+					onclick={closeServiceAccountTokenModal}
+					class="rounded p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+				>
+					<X class="h-5 w-5" />
+				</button>
+			</div>
+			{#if saTokenPlain}
+				<p class="mt-3 text-sm text-amber-700 dark:text-amber-400">
+					Copy this token now; you will not be able to see it again.
+				</p>
+				<div class="mt-3 break-all rounded-lg bg-[var(--bg-tertiary)] p-3 font-mono text-sm text-[var(--text-primary)]">
+					{saTokenPlain}
+				</div>
+				<div class="mt-4 flex justify-end">
+					<button
+						type="button"
+						onclick={closeServiceAccountTokenModal}
+						class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+					>
+						Done
+					</button>
+				</div>
+			{:else}
+				<p class="mt-2 text-sm text-[var(--text-secondary)]">
+					Token is created for <strong>{user?.display_name || user?.username}</strong>
+				</p>
+				{#if saTokenError}
+					<div class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
+						{saTokenError}
+					</div>
+				{/if}
+				<div class="mt-4 space-y-4">
+					<div>
+						<label for="sa-tok-name" class="block text-sm font-medium text-[var(--text-primary)]">Name</label>
+						<input
+							id="sa-tok-name"
+							bind:value={saTokenForm.name}
+							class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+						/>
+					</div>
+					<div>
+						<label for="sa-tok-desc" class="block text-sm font-medium text-[var(--text-primary)]">Description (optional)</label>
+						<input
+							id="sa-tok-desc"
+							bind:value={saTokenForm.description}
+							class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+						/>
+					</div>
+					<div>
+						<span class="block text-sm font-medium text-[var(--text-primary)]">Scopes</span>
+						<div class="mt-2 space-y-2">
+							{#each saScopeOptions as opt (opt.value)}
+								<label class="flex items-center gap-2 text-sm">
+									<input
+										type="checkbox"
+										class="h-4 w-4 rounded border-secondary-300"
+										checked={saTokenForm.scopes.includes(opt.value)}
+										onchange={() => toggleSaScope(opt.value)}
+									/>
+									{opt.label}
+								</label>
+							{/each}
+						</div>
+					</div>
+					<div>
+						<label for="sa-tok-exp" class="block text-sm font-medium text-[var(--text-primary)]">Expiration</label>
+						<select
+							id="sa-tok-exp"
+							bind:value={saTokenForm.expiresIn}
+							class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+						>
+							<option value="30">30 days</option>
+							<option value="90">90 days</option>
+							<option value="365">1 year</option>
+							<option value="never">Never</option>
+						</select>
+					</div>
+					<div>
+						<label for="sa-tok-proj" class="block text-sm font-medium text-[var(--text-primary)]"
+							>Project IDs (optional)</label
+						>
+						<p class="mt-0.5 text-xs text-[var(--text-tertiary)]">Comma or space separated UUIDs. Empty = all projects.</p>
+						<textarea
+							id="sa-tok-proj"
+							rows="2"
+							bind:value={saTokenForm.projectIdsRaw}
+							class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-xs"
+						></textarea>
+					</div>
+					<div>
+						<label for="sa-tok-pipe" class="block text-sm font-medium text-[var(--text-primary)]"
+							>Pipeline IDs (optional)</label
+						>
+						<p class="mt-0.5 text-xs text-[var(--text-tertiary)]">
+							Further restrict to pipelines. Empty = all pipelines in allowed projects.
+						</p>
+						<textarea
+							id="sa-tok-pipe"
+							rows="2"
+							bind:value={saTokenForm.pipelineIdsRaw}
+							class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-xs"
+						></textarea>
+					</div>
+				</div>
+				<div class="mt-6 flex justify-end gap-3">
+					<button
+						type="button"
+						onclick={closeServiceAccountTokenModal}
+						disabled={saTokenCreating}
+						class="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm font-medium hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						onclick={submitServiceAccountToken}
+						disabled={saTokenCreating || !saTokenForm.name.trim() || saTokenForm.scopes.length === 0}
+						class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+					>
+						{saTokenCreating ? 'Creating…' : 'Create token'}
+					</button>
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}

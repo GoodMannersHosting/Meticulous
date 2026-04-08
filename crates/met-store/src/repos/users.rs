@@ -28,6 +28,7 @@ impl<'a> UserRepo<'a> {
         display_name: Option<&str>,
         password_hash: Option<&str>,
         is_admin: bool,
+        service_account: bool,
         password_must_change: bool,
     ) -> Result<User> {
         let id = UserId::new();
@@ -35,9 +36,9 @@ impl<'a> UserRepo<'a> {
 
         let user = sqlx::query_as::<_, User>(
             r#"
-            INSERT INTO users (id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $9)
-            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            INSERT INTO users (id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $10)
+            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             "#,
         )
         .bind(id.as_uuid())
@@ -47,6 +48,7 @@ impl<'a> UserRepo<'a> {
         .bind(display_name)
         .bind(password_hash)
         .bind(is_admin)
+        .bind(service_account)
         .bind(password_must_change)
         .bind(now)
         .fetch_one(self.pool)
@@ -59,7 +61,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get(&self, id: UserId) -> Result<User> {
         sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             FROM users
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -78,7 +80,7 @@ impl<'a> UserRepo<'a> {
     ) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             FROM users
             WHERE org_id = $1 AND username = $2 AND deleted_at IS NULL
             "#,
@@ -95,7 +97,7 @@ impl<'a> UserRepo<'a> {
     pub async fn get_by_email(&self, org_id: OrganizationId, email: &str) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             FROM users
             WHERE org_id = $1 AND email = $2 AND deleted_at IS NULL
             "#,
@@ -116,7 +118,7 @@ impl<'a> UserRepo<'a> {
     ) -> Result<Option<User>> {
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             FROM users
             WHERE org_id = $1 AND email = $2
             "#,
@@ -143,7 +145,7 @@ impl<'a> UserRepo<'a> {
                 is_admin = false,
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            RETURNING id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             "#,
         )
         .bind(id.as_uuid())
@@ -173,7 +175,7 @@ impl<'a> UserRepo<'a> {
     pub async fn list(&self, org_id: OrganizationId, limit: i64, offset: i64) -> Result<Vec<User>> {
         let users = sqlx::query_as::<_, User>(
             r#"
-            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
+            SELECT id, org_id, username, email, display_name, password_hash, is_active, is_admin, service_account, password_must_change, external_id, created_at, updated_at, last_login_at, deleted_at
             FROM users
             WHERE org_id = $1 AND deleted_at IS NULL
             ORDER BY created_at DESC

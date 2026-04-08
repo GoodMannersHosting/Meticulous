@@ -121,7 +121,7 @@
 				limit: perPage
 			};
 			if (searchQ) params.q = searchQ;
-			const response = await api.get<JoinTokenListResponse>('/admin/join-tokens', { params });
+			const response = await api.get<JoinTokenListResponse>('/api/v1/admin/join-tokens', { params });
 			tokens = response.data ?? [];
 			listPagination = response.pagination;
 		} catch (e) {
@@ -141,7 +141,7 @@
 		creating = true;
 		error = null;
 		try {
-			const response = await api.post<{ token: JoinToken; plain_token: string }>('/admin/join-tokens', {
+			const response = await api.post<{ token: JoinToken; plain_token: string }>('/api/v1/admin/join-tokens', {
 				description: desc,
 				scope: newToken.scope,
 				expires_in_days: newToken.expiresInDays === 'never' ? null : parseInt(newToken.expiresInDays),
@@ -176,7 +176,7 @@
 		revoking = true;
 		error = null;
 		try {
-			await api.post(`/admin/join-tokens/${id}/revoke`);
+			await api.post(`/api/v1/admin/join-tokens/${id}/revoke`);
 			tokens = tokens.map(t => (t.id === id ? { ...t, revoked: true } : t));
 			tokenToRevoke = null;
 		} catch (e) {
@@ -201,7 +201,7 @@
 		deleting = true;
 		error = null;
 		try {
-			await api.delete(`/admin/join-tokens/${id}`);
+			await api.delete(`/api/v1/admin/join-tokens/${id}`);
 			tokenToDelete = null;
 			await loadTokens();
 		} catch (e) {
@@ -234,7 +234,7 @@
 		savingDescription = true;
 		error = null;
 		try {
-			const updated = await api.patch<JoinToken>(`/admin/join-tokens/${editModalToken.id}`, {
+			const updated = await api.patch<JoinToken>(`/api/v1/admin/join-tokens/${editModalToken.id}`, {
 				description: desc
 			});
 			tokens = tokens.map(t => (t.id === updated.id ? updated : t));
@@ -254,7 +254,7 @@
 		historyLoading = true;
 		error = null;
 		try {
-			historyDetail = await api.get<JoinToken>(`/admin/join-tokens/${tokenId}`);
+			historyDetail = await api.get<JoinToken>(`/api/v1/admin/join-tokens/${tokenId}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load token history';
 			console.error('Failed to load join token:', e);

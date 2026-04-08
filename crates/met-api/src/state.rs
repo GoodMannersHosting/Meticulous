@@ -4,6 +4,7 @@
 //! shared resources like database pools, configuration, and service clients.
 
 use crate::config::ApiConfig;
+use crate::middleware::CredentialRateLimiter;
 use met_controller::nats::NatsDispatcher;
 use met_engine::Engine;
 use met_secrets::BuiltinStoredCrypto;
@@ -36,6 +37,9 @@ pub struct AppState {
 
     /// Second NATS connection for admin/ops (e.g. JOBS_DLQ preview). Does not receive advisories.
     pub nats_ops: Option<Arc<NatsDispatcher>>,
+
+    /// Per-credential dual-window rate limits (user JWT/API token vs app JWT), from org policy.
+    pub credential_rate_limit: Option<Arc<CredentialRateLimiter>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -43,6 +47,7 @@ impl std::fmt::Debug for AppState {
         f.debug_struct("AppState")
             .field("engine_initialized", &self.engine.is_some())
             .field("nats_ops", &self.nats_ops.is_some())
+            .field("credential_rate_limit", &self.credential_rate_limit.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -67,6 +72,7 @@ impl AppState {
             engine_init_error,
             engine_run_semaphore: Arc::new(Semaphore::new(permits)),
             nats_ops,
+            credential_rate_limit: Some(Arc::new(CredentialRateLimiter::new())),
         }
     }
 

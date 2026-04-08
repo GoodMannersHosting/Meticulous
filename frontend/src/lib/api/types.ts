@@ -35,6 +35,10 @@ export interface User {
 	created_at: string;
 	/** When true, the user must change password before using the app (from /auth/me). */
 	password_must_change?: boolean;
+	/** From /auth/me when backed by users.service_account. */
+	service_account?: boolean;
+	/** Group memberships from `/auth/me`. */
+	groups?: { id: string; name: string; role: string }[];
 }
 
 export interface AuthTokens {
@@ -726,6 +730,8 @@ export interface AdminUser {
 	display_name?: string;
 	is_active: boolean;
 	is_admin: boolean;
+	/** API-only principal; interactive login is blocked server-side. */
+	service_account?: boolean;
 	password_must_change: boolean;
 	/** ISO 8601; absent or null if the user has never logged in interactively. */
 	last_login_at?: string | null;

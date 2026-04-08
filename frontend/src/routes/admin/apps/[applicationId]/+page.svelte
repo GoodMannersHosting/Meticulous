@@ -30,6 +30,7 @@
 	let permAgentsDelete = $state(false);
 	let installing = $state(false);
 	let actionError = $state<string | null>(null);
+	let togglingEnabled = $state(false);
 
 	async function reload() {
 		if (!applicationId) return;
@@ -110,6 +111,19 @@
 		void navigator.clipboard.writeText(text);
 	}
 
+	async function toggleAppEnabled() {
+		if (!applicationId || !app) return;
+		togglingEnabled = true;
+		actionError = null;
+		try {
+			app = await apiMethods.admin.meticulousApps.patch(applicationId, { enabled: !app.enabled });
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : 'Update failed';
+		} finally {
+			togglingEnabled = false;
+		}
+	}
+
 	/** Prefer display name over raw `project_id` (UUID); fallback keeps support visible if the project list is incomplete. */
 	function installationProjectLabel(projectId: string): string {
 		const p = projects.find((x) => x.id === projectId);
@@ -131,6 +145,20 @@
 			{#if app.description}
 				<p class="mt-1 text-sm text-[var(--text-secondary)]">{app.description}</p>
 			{/if}
+			<div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
+				<span class="text-[var(--text-secondary)]">
+					Status:
+					<strong class="text-[var(--text-primary)]">{app.enabled ? 'Enabled' : 'Disabled'}</strong>
+				</span>
+				<button
+					type="button"
+					class="rounded-lg border border-[var(--border-primary)] px-3 py-1 text-xs font-medium hover:bg-[var(--bg-hover)] disabled:opacity-50"
+					disabled={togglingEnabled}
+					onclick={() => void toggleAppEnabled()}
+				>
+					{togglingEnabled ? 'Updating…' : app.enabled ? 'Disable app' : 'Enable app'}
+				</button>
+			</div>
 			<div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
 				<span class="text-[var(--text-secondary)]">Application id</span>
 				<code class="rounded-md bg-[var(--bg-primary)] px-2 py-0.5 text-xs">{app.application_id}</code>

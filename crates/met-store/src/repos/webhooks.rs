@@ -582,6 +582,32 @@ impl<'a> WebhookRepo<'a> {
         Ok(())
     }
 
+    /// Delete a webhook registration and cascaded targets/deliveries.
+    pub async fn delete_registration(
+        &self,
+        project_id: ProjectId,
+        registration_id: TriggerId,
+    ) -> Result<()> {
+        let r = sqlx::query(
+            r#"
+            DELETE FROM webhook_registrations
+            WHERE id = $1 AND project_id = $2
+            "#,
+        )
+        .bind(registration_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found(
+                "webhook_registration",
+                registration_id,
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn list_targets(
         &self,
         registration_id: TriggerId,

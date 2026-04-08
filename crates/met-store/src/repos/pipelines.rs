@@ -1,7 +1,7 @@
 //! Pipeline repository.
 
 use chrono::Utc;
-use met_core::ids::{PipelineId, ProjectId};
+use met_core::ids::{OrganizationId, PipelineId, ProjectId};
 use met_core::models::{CreatePipeline, Pipeline, UpdatePipeline};
 use sqlx::PgPool;
 
@@ -29,12 +29,12 @@ impl<'a> PipelineRepo<'a> {
             INSERT INTO pipelines (
                 id, project_id, name, slug, description, definition, definition_path,
                 scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                enabled, created_at, updated_at
+                enabled, archived_at, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, NULL, $14, $14)
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, created_at, updated_at
+                      enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -63,7 +63,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, created_at, updated_at
+                   enabled, archived_at, created_at, updated_at
             FROM pipelines
             WHERE id = $1
             "#,
@@ -80,7 +80,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, created_at, updated_at
+                   enabled, archived_at, created_at, updated_at
             FROM pipelines
             WHERE project_id = $1 AND slug = $2
             "#,
@@ -103,9 +103,9 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, created_at, updated_at
+                   enabled, archived_at, created_at, updated_at
             FROM pipelines
-            WHERE project_id = $1
+            WHERE project_id = $1 AND archived_at IS NULL
             ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
             "#,
@@ -163,7 +163,7 @@ impl<'a> PipelineRepo<'a> {
             WHERE id = $1
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, created_at, updated_at
+                      enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -208,7 +208,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT COUNT(*)
             FROM pipelines
-            WHERE project_id = $1
+            WHERE project_id = $1 AND archived_at IS NULL
             "#,
         )
         .bind(project_id.as_uuid())
@@ -216,5 +216,91 @@ impl<'a> PipelineRepo<'a> {
         .await?;
 
         Ok(count)
+    }
+
+    /// Archive every non-archived pipeline in a project (e.g. when the project is archived).
+    pub async fn archive_all_in_project(&self, project_id: ProjectId) -> Result<u64> {
+        let res = sqlx::query(
+            r#"
+            UPDATE pipelines
+            SET archived_at = NOW(), updated_at = NOW()
+            WHERE project_id = $1 AND archived_at IS NULL
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        Ok(res.rows_affected())
+    }
+
+    /// Unarchive all archived pipelines belonging to a project (e.g. after admin restores the project).
+    pub async fn unarchive_all_in_project(&self, project_id: ProjectId) -> Result<u64> {
+        let res = sqlx::query(
+            r#"
+            UPDATE pipelines
+            SET archived_at = NULL, updated_at = NOW()
+            WHERE project_id = $1 AND archived_at IS NOT NULL
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        Ok(res.rows_affected())
+    }
+
+    /// Move pipeline to archived state (still in DB; hidden from normal lists).
+    pub async fn archive(&self, id: PipelineId) -> Result<Pipeline> {
+        sqlx::query_as::<_, Pipeline>(
+            r#"
+            UPDATE pipelines
+            SET archived_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NULL
+            RETURNING id, project_id, name, slug, description, definition, definition_path,
+                      scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                      enabled, archived_at, created_at, updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("pipeline", id))
+    }
+
+    pub async fn unarchive(&self, id: PipelineId) -> Result<Pipeline> {
+        sqlx::query_as::<_, Pipeline>(
+            r#"
+            UPDATE pipelines
+            SET archived_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NOT NULL
+            RETURNING id, project_id, name, slug, description, definition, definition_path,
+                      scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
+                      enabled, archived_at, created_at, updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("pipeline", id))
+    }
+
+    /// Archived pipelines in an organization (across projects).
+    pub async fn list_archived_for_org(&self, org_id: OrganizationId) -> Result<Vec<Pipeline>> {
+        sqlx::query_as::<_, Pipeline>(
+            r#"
+            SELECT p.id, p.project_id, p.name, p.slug, p.description, p.definition, p.definition_path,
+                   p.scm_provider, p.scm_repository, p.scm_ref, p.scm_path, p.scm_credentials_secret_path, p.scm_revision,
+                   p.enabled, p.archived_at, p.created_at, p.updated_at
+            FROM pipelines p
+            INNER JOIN projects pr ON pr.id = p.project_id
+            WHERE pr.org_id = $1 AND p.archived_at IS NOT NULL AND pr.deleted_at IS NULL
+            ORDER BY p.archived_at DESC
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .fetch_all(self.pool)
+        .await
+        .map_err(Into::into)
     }
 }

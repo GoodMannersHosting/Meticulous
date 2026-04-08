@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["full"] }
 # Web
 axum = { version = "0.8" }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["compression-gzip", "cors", "propagate-header", "request-id", "trace"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "cors", "propagate-header", "request-id", "set-header", "trace"] }
 
 # Database
 # default-features = false: disable sqlx bundles we do not use (e.g. sqlite). `sqlx-macros` still pulls dev-only driver deps for expand-time metadata.

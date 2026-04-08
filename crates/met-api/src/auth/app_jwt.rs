@@ -5,9 +5,9 @@ use crate::error::ApiError;
 use base64::Engine;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use met_controller::nats::subjects;
-use met_core::ids::{AppInstallationId, MeticulousAppId, ProjectId};
+use met_core::ids::{AppInstallationId, MeticulousAppId, OrganizationId, ProjectId};
 use met_store::PgPool;
-use met_store::repos::MeticulousAppRepo;
+use met_store::repos::{MeticulousAppRepo, ProjectRepo};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -20,6 +20,7 @@ pub struct AppInstallationPrincipal {
     pub app_id: MeticulousAppId,
     pub installation_id: AppInstallationId,
     pub project_id: ProjectId,
+    pub org_id: OrganizationId,
     /// Permission allowlist from the installation row (source of truth).
     pub permissions: Vec<String>,
 }
@@ -274,11 +275,23 @@ pub async fn verify_app_installation_jwt(
         ));
     }
 
+    if !app.enabled {
+        return Err(ApiError::unauthorized(
+            "meticulous application is disabled",
+        ));
+    }
+
+    let project = ProjectRepo::new(db)
+        .get(inst.project_id)
+        .await
+        .map_err(|_| ApiError::unauthorized("project not found"))?;
+
     Ok(AppInstallationPrincipal {
         application_id: app.application_id.clone(),
         app_id: inst.app_id,
         installation_id: inst.id,
         project_id: inst.project_id,
+        org_id: project.org_id,
         permissions: inst.permissions.clone(),
     })
 }

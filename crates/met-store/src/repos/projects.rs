@@ -1,7 +1,7 @@
 //! Project repository.
 
 use chrono::{Duration, Utc};
-use met_core::ids::{OrganizationId, ProjectId};
+use met_core::ids::{OrganizationId, ProjectId, UserId};
 use met_core::models::{CreateProject, OwnerType, Project, UpdateProject};
 use sqlx::PgPool;
 
@@ -102,12 +102,65 @@ impl<'a> ProjectRepo<'a> {
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
-            WHERE org_id = $1 AND deleted_at IS NULL
+            WHERE org_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
             ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
             "#,
         )
         .bind(org_id.as_uuid())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(projects)
+    }
+
+    /// Projects visible to a user when [`project_members`](crate::repos::project_members) restricts access.
+    ///
+    /// If a project has **no** `project_members` rows, every org member keeps legacy Developer-level visibility.
+    /// If it has rows, only principals listed there may see the project.
+    pub async fn list_by_org_for_user(
+        &self,
+        org_id: OrganizationId,
+        user_id: UserId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Project>> {
+        let projects = sqlx::query_as::<_, Project>(
+            r#"
+            SELECT p.id, p.org_id, p.name, p.slug, p.description, p.owner_type, p.owner_id,
+                   p.created_at, p.updated_at, p.deleted_at, p.archived_at, p.scheduled_deletion_at
+            FROM projects p
+            WHERE p.org_id = $1
+              AND p.deleted_at IS NULL
+              AND p.archived_at IS NULL
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM project_members pm
+                  WHERE pm.project_id = p.id
+                )
+                OR EXISTS (
+                  SELECT 1 FROM project_members pm
+                  WHERE pm.project_id = p.id
+                    AND pm.principal_type = 'user'
+                    AND pm.principal_id = $2
+                )
+                OR EXISTS (
+                  SELECT 1 FROM project_members pm
+                  INNER JOIN group_memberships gm
+                    ON gm.group_id = pm.principal_id
+                  WHERE pm.project_id = p.id
+                    AND pm.principal_type = 'group'
+                    AND gm.user_id = $2
+                )
+              )
+            ORDER BY p.created_at DESC
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(user_id.as_uuid())
         .bind(limit)
         .bind(offset)
         .fetch_all(self.pool)

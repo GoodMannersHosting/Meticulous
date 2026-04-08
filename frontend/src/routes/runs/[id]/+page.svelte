@@ -2,6 +2,8 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
+	import { breadcrumbTrail } from '$lib/stores/breadcrumb-trail';
 	import { Button, Card, Badge, Tabs, Alert, StatusBadge, CopyButton, Select } from '$components/ui';
 	import { Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
@@ -176,6 +178,19 @@
 			const runId = $page.params.id!;
 			run = await apiMethods.runs.get(runId);
 			pipeline = await apiMethods.pipelines.get(run.pipeline_id);
+			try {
+				const proj = await apiMethods.projects.get(pipeline.project_id);
+				breadcrumbTrail.set([
+					{ label: proj.name, href: `/projects/${proj.id}` },
+					{ label: pipeline.name, href: `/pipelines/${pipeline.id}` },
+					{ label: `Run #${run.run_number}`, href: `/runs/${run.id}` }
+				]);
+			} catch {
+				breadcrumbTrail.set([
+					{ label: pipeline.name, href: `/pipelines/${pipeline.id}` },
+					{ label: `Run #${run.run_number}`, href: `/runs/${run.id}` }
+				]);
+			}
 			jobRuns = await apiMethods.runs.jobs(runId);
 
 			if (jobRuns.length === 0) {
@@ -187,6 +202,7 @@
 				selectedJobRunId = jobRuns[0].id;
 			}
 		} catch (e) {
+			breadcrumbTrail.set(null);
 			error = e instanceof Error ? e.message : 'Failed to load run';
 		} finally {
 			loading = false;
@@ -539,7 +555,11 @@
 
 <div class="flex min-h-0 flex-1 flex-col gap-6">
 	<div class="flex shrink-0 items-start gap-4">
-		<Button variant="ghost" size="sm" href="/runs">
+		<Button
+			variant="ghost"
+			size="sm"
+			href={pipeline ? `/pipelines/${pipeline.id}` : '/runs'}
+		>
 			<ArrowLeft class="h-4 w-4" />
 		</Button>
 

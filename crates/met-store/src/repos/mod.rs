@@ -19,9 +19,11 @@ mod jobs;
 mod join_tokens;
 mod log_cache;
 mod meticulous_apps;
+mod org_policy;
 mod organizations;
 mod pipeline_run_workflow_outputs;
 mod pipelines;
+mod project_members;
 mod projects;
 mod roles;
 mod run_binary_executions;
@@ -47,17 +49,19 @@ pub use builtin_secrets::{
 pub use cache_entries::CacheEntryRepo;
 pub use dashboard::{DashboardRecentRunRow, DashboardStats, org_dashboard_stats, org_recent_runs};
 pub use definition_snapshots::DefinitionSnapshotRepo;
-pub use groups::GroupRepo;
+pub use groups::{GroupRepo, UserGroupInfoRow};
 pub use job_assignments::JobAssignmentRepo;
 pub use jobs::{JobDagNode, JobRepo};
 pub use join_tokens::JoinTokenRepo;
 pub use log_cache::{
     LazyCacheLine, LogArchiveRow, LogCacheEntry, LogCacheRepo, project_run_for_job_run,
 };
-pub use meticulous_apps::MeticulousAppRepo;
+pub use meticulous_apps::{MeticulousAppInstallationSummary, MeticulousAppRepo};
+pub use org_policy::{OrgPolicy, OrgPolicyPatch, OrgPolicyRepo};
 pub use organizations::OrganizationRepo;
 pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipelines::PipelineRepo;
+pub use project_members::{ProjectAccessRepo, ProjectRole};
 pub use projects::ProjectRepo;
 pub use roles::RoleRepo;
 pub use run_binary_executions::{

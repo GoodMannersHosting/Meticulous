@@ -18,6 +18,13 @@
 	let resetPasswordLoading = $state(false);
 	let resetPasswordError = $state<string | null>(null);
 
+	let showServiceAccountModal = $state(false);
+	let saUsername = $state('');
+	let saEmail = $state('');
+	let saDisplayName = $state('');
+	let saSubmitting = $state(false);
+	let saError = $state<string | null>(null);
+
 	// Confirmation modal state
 	let showConfirmModal = $state(false);
 	let confirmTitle = $state('');
@@ -192,6 +199,27 @@
 	function goToUser(userId: string) {
 		goto(`/admin/users/${userId}`);
 	}
+
+	async function submitServiceAccount() {
+		saSubmitting = true;
+		saError = null;
+		try {
+			await apiMethods.admin.users.createServiceAccount({
+				username: saUsername.trim(),
+				email: saEmail.trim(),
+				...(saDisplayName.trim() ? { display_name: saDisplayName.trim() } : {})
+			});
+			showServiceAccountModal = false;
+			saUsername = '';
+			saEmail = '';
+			saDisplayName = '';
+			await loadUsers();
+		} catch (e) {
+			saError = e instanceof Error ? e.message : 'Failed to create service account';
+		} finally {
+			saSubmitting = false;
+		}
+	}
 </script>
 
 <div class="space-y-6">
@@ -203,10 +231,13 @@
 		<button
 			type="button"
 			class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
-			disabled
+			onclick={() => {
+				showServiceAccountModal = true;
+				saError = null;
+			}}
 		>
 			<Plus class="h-4 w-4" />
-			Add User
+			Service account
 		</button>
 	</div>
 
@@ -290,6 +321,9 @@
 										: 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}"
 									title={user.is_admin ? 'Click to remove admin' : 'Click to make admin'}
 								>
+									{#if user.service_account}
+										<span class="text-[var(--text-tertiary)]" title="Service account">SA</span>
+									{/if}
 									{#if user.is_admin}
 										<ShieldCheck class="h-3 w-3" />
 										Admin
@@ -438,6 +472,69 @@
 					class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
 				>
 					{resetPasswordLoading ? 'Resetting...' : 'Reset Password'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if showServiceAccountModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
+			<h3 class="text-lg font-semibold text-[var(--text-primary)]">Create service account</h3>
+			<p class="mt-2 text-sm text-[var(--text-secondary)]">
+				API-only user: password login and interactive SSO completion are blocked. Use organization-scoped API tokens
+				for this principal.
+			</p>
+			{#if saError}
+				<div
+					class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400"
+				>
+					{saError}
+				</div>
+			{/if}
+			<div class="mt-4 space-y-3">
+				<div>
+					<label for="sa-user" class="text-sm font-medium text-[var(--text-primary)]">Username</label>
+					<input
+						id="sa-user"
+						bind:value={saUsername}
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+					/>
+				</div>
+				<div>
+					<label for="sa-email" class="text-sm font-medium text-[var(--text-primary)]">Email</label>
+					<input
+						id="sa-email"
+						type="email"
+						bind:value={saEmail}
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+					/>
+				</div>
+				<div>
+					<label for="sa-disp" class="text-sm font-medium text-[var(--text-primary)]">Display name (optional)</label>
+					<input
+						id="sa-disp"
+						bind:value={saDisplayName}
+						class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm"
+					/>
+				</div>
+			</div>
+			<div class="mt-6 flex justify-end gap-3">
+				<button
+					type="button"
+					class="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
+					onclick={() => (showServiceAccountModal = false)}
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="rounded-lg bg-primary-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+					disabled={saSubmitting || !saUsername.trim() || !saEmail.trim()}
+					onclick={() => void submitServiceAccount()}
+				>
+					{saSubmitting ? 'Creating…' : 'Create'}
 				</button>
 			</div>
 		</div>

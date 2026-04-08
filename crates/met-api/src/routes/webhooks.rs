@@ -21,10 +21,11 @@ use crate::{
     error::{ApiError, ApiResult},
     extractors::{Auth, CurrentUser},
     pipeline_execution,
+    project_access::effective_project_role_in_user_org,
     state::AppState,
 };
 use met_store::repos::{
-    CreateWebhookTarget, PipelineRepo, ProjectRepo, UpdateWebhookTarget, WebhookDeliveryClaim,
+    CreateWebhookTarget, PipelineRepo, UpdateWebhookTarget, WebhookDeliveryClaim,
     WebhookRegistrationContext, WebhookRegistrationSummary, WebhookRegistrationTarget, WebhookRepo,
     get_trigger_for_webhook_dispatch,
 };
@@ -82,7 +83,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/projects/{project_id}/webhooks/{registration_id}",
-            patch(patch_project_webhook),
+            patch(patch_project_webhook).delete(delete_project_webhook_registration),
         )
         .route(
             "/projects/{project_id}/webhooks/{registration_id}/targets",
@@ -185,13 +186,19 @@ async fn require_project_in_user_org(
     user: &CurrentUser,
     project_id: ProjectId,
 ) -> ApiResult<()> {
-    let project = ProjectRepo::new(pool).get(project_id).await?;
-    if project.org_id != user.org_id {
-        return Err(ApiError::not_found("Project not found"));
-    }
-    if !user.can_access_project(project_id) {
+    effective_project_role_in_user_org(pool, user, project_id).await?;
+    Ok(())
+}
+
+async fn require_project_webhook_admin(
+    pool: &sqlx::PgPool,
+    user: &CurrentUser,
+    project_id: ProjectId,
+) -> ApiResult<()> {
+    let role = effective_project_role_in_user_org(pool, user, project_id).await?;
+    if !role.can_manage_triggers() {
         return Err(ApiError::forbidden(
-            "You do not have access to this project",
+            "project administrator role is required for this webhook operation",
         ));
     }
     Ok(())
@@ -1408,7 +1415,7 @@ async fn setup_scm_webhook(
     Path(project_id): Path<ProjectId>,
     Json(req): Json<SetupScmWebhookRequest>,
 ) -> ApiResult<Json<SetupScmWebhookResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
 
     let provider = req.provider.to_lowercase();
     let (events, payload_mapping): (Vec<String>, serde_json::Value) = if provider == "generic" {
@@ -1591,7 +1598,7 @@ async fn patch_project_webhook(
     Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
     Json(body): Json<PatchProjectWebhookRequest>,
 ) -> ApiResult<Json<ProjectWebhookRegistrationResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
@@ -1721,6 +1728,32 @@ async fn patch_project_webhook(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{project_id}/webhooks/{registration_id}",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("registration_id" = String, Path, description = "Webhook registration ID"),
+    ),
+    responses(
+        (status = 204, description = "Registration removed"),
+        (status = 404, description = "Not found"),
+    ),
+    tag = "webhooks",
+)]
+#[instrument(skip(state))]
+async fn delete_project_webhook_registration(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
+) -> ApiResult<()> {
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
+    WebhookRepo::new(state.db())
+        .delete_registration(project_id, registration_id)
+        .await?;
+    Ok(())
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/projects/{project_id}/webhooks/{registration_id}/rotate-inbound-secret",
     params(
@@ -1739,7 +1772,7 @@ async fn rotate_project_webhook_inbound_secret(
     Auth(user): Auth,
     Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
 ) -> ApiResult<Json<RotateInboundSecretResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
@@ -1780,7 +1813,7 @@ async fn clear_project_webhook_inbound_secret(
     Auth(user): Auth,
     Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
 ) -> ApiResult<Json<ProjectWebhookRegistrationResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
@@ -1848,7 +1881,7 @@ async fn create_webhook_target(
     Path((project_id, registration_id)): Path<(ProjectId, TriggerId)>,
     Json(req): Json<CreateWebhookTargetRequest>,
 ) -> ApiResult<Json<WebhookTargetResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
@@ -1895,7 +1928,7 @@ async fn update_webhook_target(
     Path((project_id, registration_id, target_id)): Path<(ProjectId, TriggerId, Uuid)>,
     Json(req): Json<UpdateWebhookTargetRequest>,
 ) -> ApiResult<Json<WebhookTargetResponse>> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;
@@ -1930,7 +1963,7 @@ async fn delete_webhook_target(
     Auth(user): Auth,
     Path((project_id, registration_id, target_id)): Path<(ProjectId, TriggerId, Uuid)>,
 ) -> ApiResult<()> {
-    require_project_in_user_org(state.db(), &user, project_id).await?;
+    require_project_webhook_admin(state.db(), &user, project_id).await?;
     let repo = WebhookRepo::new(state.db());
     repo.assert_registration_in_project(project_id, registration_id)
         .await?;

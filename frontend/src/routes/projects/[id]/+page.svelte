@@ -25,6 +25,10 @@
 		ProjectWebhookRegistration,
 		WebhookRegistrationTargetRow
 	} from '$api/types';
+	import type {
+		MeticulousAppCatalogEntry,
+		ProjectMeticulousInstallationRow
+	} from '$lib/api/client';
 	import { formatRelativeTime } from '$utils/format';
 	import {
 		ArrowLeft,
@@ -40,7 +44,9 @@
 		History,
 		Layers,
 		ExternalLink,
-		Webhook
+		Webhook,
+		Puzzle,
+		Archive
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -110,6 +116,10 @@
 	let settingsSaving = $state(false);
 	let settingsError = $state<string | null>(null);
 
+	let showArchiveProjectDialog = $state(false);
+	let archiveProjectLoading = $state(false);
+	let archiveProjectError = $state<string | null>(null);
+
 	let projectWebhooks = $state<ProjectWebhookRegistration[]>([]);
 	let pwLoading = $state(false);
 	let pwError = $state<string | null>(null);
@@ -132,9 +142,21 @@
 	let epwQueryParam = $state('token');
 	let pwEditLoading = $state(false);
 	let pwRotatingId = $state<string | null>(null);
+	let pwDeletingRegistrationId = $state<string | null>(null);
 	let showClearPwInboundDialog = $state(false);
 	let clearPwTarget = $state<ProjectWebhookRegistration | null>(null);
 	let clearPwLoading = $state(false);
+
+	let appCatalog = $state<MeticulousAppCatalogEntry[]>([]);
+	let appInstallations = $state<ProjectMeticulousInstallationRow[]>([]);
+	let appsLoading = $state(false);
+	let appsError = $state<string | null>(null);
+	let installApplicationId = $state('');
+	let permRead = $state(true);
+	let permJoinCreate = $state(false);
+	let permJoinRevoke = $state(false);
+	let permAgentsDelete = $state(false);
+	let installAppLoading = $state(false);
 
 	const kindOptions = [
 		{ value: 'kv', label: 'Key / value (kv)' },
@@ -151,6 +173,7 @@
 		{ id: 'runs', label: 'Recent Runs', icon: Play },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
+		{ id: 'apps', label: 'Meticulous Apps', icon: Puzzle },
 		{ id: 'settings', label: 'Settings', icon: Settings }
 	];
 
@@ -165,6 +188,54 @@
 		settingsDescription = project.description ?? '';
 		settingsError = null;
 	});
+
+	$effect(() => {
+		if (activeTab !== 'apps' || !project?.id || loading) return;
+		loadMeticulousAppsTab();
+	});
+
+	async function loadMeticulousAppsTab() {
+		if (!project?.id) return;
+		appsLoading = true;
+		appsError = null;
+		try {
+			const [catalog, installations] = await Promise.all([
+				apiMethods.projects.availableMeticulousApps(project.id),
+				apiMethods.projects.listMeticulousInstallations(project.id)
+			]);
+			appCatalog = catalog;
+			appInstallations = installations;
+			if (!installApplicationId && catalog.length > 0) {
+				installApplicationId = catalog[0].application_id;
+			}
+		} catch (e) {
+			appsError = e instanceof Error ? e.message : 'Failed to load Meticulous Apps';
+		} finally {
+			appsLoading = false;
+		}
+	}
+
+	async function installMeticulousAppOnProject() {
+		if (!project?.id || !installApplicationId.trim()) return;
+		const permissions: string[] = [];
+		if (permRead) permissions.push('read');
+		if (permJoinCreate) permissions.push('join_tokens:create');
+		if (permJoinRevoke) permissions.push('join_tokens:revoke');
+		if (permAgentsDelete) permissions.push('agents:delete');
+		installAppLoading = true;
+		appsError = null;
+		try {
+			await apiMethods.projects.installMeticulousApp(project.id, {
+				application_id: installApplicationId.trim(),
+				permissions: permissions.length > 0 ? permissions : ['read']
+			});
+			await loadMeticulousAppsTab();
+		} catch (e) {
+			appsError = e instanceof Error ? e.message : 'Install failed';
+		} finally {
+			installAppLoading = false;
+		}
+	}
 
 	async function loadProject() {
 		loading = true;
@@ -390,6 +461,29 @@
 		}
 	}
 
+	async function deleteProjectWebhookRegistration(registrationId: string) {
+		if (!project) return;
+		if (
+			!confirm(
+				'Delete this webhook registration and all pipeline targets? SCM registrations may be restricted by the server.'
+			)
+		)
+			return;
+		pwDeletingRegistrationId = registrationId;
+		pwError = null;
+		try {
+			await apiMethods.projectWebhooks.deleteRegistration(project.id, registrationId);
+			if (pwTargetsRegistrationId === registrationId) {
+				pwTargetsRegistrationId = null;
+			}
+			await loadProjectWebhooks();
+		} catch (e) {
+			pwError = e instanceof Error ? e.message : 'Failed to delete registration';
+		} finally {
+			pwDeletingRegistrationId = null;
+		}
+	}
+
 	async function removePwTarget(registrationId: string, targetId: string) {
 		if (!project) return;
 		try {
@@ -455,6 +549,21 @@
 			settingsError = e instanceof Error ? e.message : 'Failed to save project';
 		} finally {
 			settingsSaving = false;
+		}
+	}
+
+	async function confirmArchiveProject() {
+		if (!project) return;
+		archiveProjectLoading = true;
+		archiveProjectError = null;
+		try {
+			await apiMethods.projects.archive(project.id);
+			showArchiveProjectDialog = false;
+			goto('/projects');
+		} catch (e) {
+			archiveProjectError = e instanceof Error ? e.message : 'Failed to archive project';
+		} finally {
+			archiveProjectLoading = false;
 		}
 	}
 
@@ -1026,6 +1135,20 @@
 										>
 											{pwTargetsRegistrationId === wh.id ? 'Hide targets' : 'Pipelines'}
 										</Button>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-error-600 dark:text-error-400"
+											disabled={pwDeletingRegistrationId === wh.id}
+											title="Delete entire registration"
+											onclick={(e) => {
+												e.stopPropagation();
+												void deleteProjectWebhookRegistration(wh.id);
+											}}
+										>
+											<Trash2 class="h-4 w-4" />
+											Remove
+										</Button>
 									</div>
 								</div>
 								{#if pwTargetsRegistrationId === wh.id}
@@ -1449,6 +1572,155 @@
 					description="Runs will appear here when you trigger a pipeline."
 				/>
 			</Card>
+		{:else if activeTab === 'apps'}
+			<div class="space-y-6">
+				<Card>
+					<div class="flex flex-wrap items-start justify-between gap-4">
+						<div>
+							<h3 class="text-lg font-medium text-[var(--text-primary)]">Meticulous Apps</h3>
+							<p class="mt-1 text-sm text-[var(--text-secondary)]">
+								Install machine identities on this project for integration APIs and read-only automation.
+								Apps must be registered in your organization first (<a
+									class="text-primary-600 underline"
+									href="/admin/apps">Admin → Apps</a
+								>).
+							</p>
+						</div>
+						<Button variant="outline" size="sm" onclick={loadMeticulousAppsTab} loading={appsLoading}>
+							<RefreshCw class="h-4 w-4" />
+							Refresh
+						</Button>
+					</div>
+					{#if appsError}
+						<div class="mt-4">
+							<Alert variant="error" title="Apps" dismissible ondismiss={() => (appsError = null)}>
+								{appsError}
+							</Alert>
+						</div>
+					{/if}
+				</Card>
+
+				<Card>
+					<h4 class="text-sm font-medium text-[var(--text-primary)]">Installations</h4>
+					{#if appsLoading && appInstallations.length === 0}
+						<div class="mt-4"><Skeleton class="h-24 w-full" /></div>
+					{:else if appInstallations.length === 0}
+						<p class="mt-3 text-sm text-[var(--text-secondary)]">No apps installed on this project yet.</p>
+					{:else}
+						<div class="mt-4 overflow-x-auto">
+							<table class="w-full text-left text-sm">
+								<thead>
+									<tr class="border-b border-[var(--border-primary)] text-[var(--text-secondary)]">
+										<th class="py-2 pr-4 font-medium">Application</th>
+										<th class="py-2 pr-4 font-medium">Installation</th>
+										<th class="py-2 pr-4 font-medium">Permissions</th>
+										<th class="py-2 font-medium">Status</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each appInstallations as row}
+										<tr class="border-b border-[var(--border-secondary)]">
+											<td class="py-2 pr-4">
+												<div class="font-medium text-[var(--text-primary)]">{row.app_name}</div>
+												<div class="font-mono text-xs text-[var(--text-secondary)]">
+													{row.application_id}
+												</div>
+											</td>
+											<td class="py-2 pr-4 font-mono text-xs">{row.installation_id}</td>
+											<td class="py-2 pr-4 text-xs text-[var(--text-secondary)]">
+												{row.permissions.join(', ') || '—'}
+											</td>
+											<td class="py-2">
+												{#if row.revoked_at}
+													<Badge variant="secondary">Revoked</Badge>
+												{:else}
+													<Badge variant="success">Active</Badge>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+				</Card>
+
+				<Card>
+					<h4 class="text-sm font-medium text-[var(--text-primary)]">Install app</h4>
+					<p class="mt-1 text-sm text-[var(--text-secondary)]">
+						Requires project administrator access. Permissions are enforced on integration and read API routes.
+					</p>
+					{#if appCatalog.length === 0 && !appsLoading}
+						<p class="mt-4 text-sm text-[var(--text-secondary)]">
+							No enabled apps are available from your organization. Ask an org admin to register one, or create an
+							app in Admin → Apps.
+						</p>
+					{:else}
+						<div class="mt-4 grid max-w-xl gap-4">
+							<div>
+								<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="app-pick"
+									>Application</label
+								>
+								<Select
+									id="app-pick"
+									options={appCatalog.map((a) => ({
+										value: a.application_id,
+										label: `${a.name} (${a.application_id})`
+									}))}
+									bind:value={installApplicationId}
+								/>
+							</div>
+							<div class="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+								<p class="text-xs font-medium text-[var(--text-primary)]">Permissions</p>
+								<label class="flex cursor-pointer items-start gap-2 text-sm">
+									<input type="checkbox" class="mt-0.5" bind:checked={permRead} />
+									<span>
+										<code class="rounded bg-[var(--bg-secondary)] px-1 font-mono text-xs">read</code>
+										— project read APIs (pipelines, runs, variables, secrets metadata, etc.)
+									</span>
+								</label>
+								<label class="flex cursor-pointer items-start gap-2 text-sm">
+									<input type="checkbox" class="mt-0.5" bind:checked={permJoinCreate} />
+									<span>
+										<code class="rounded bg-[var(--bg-secondary)] px-1 font-mono text-xs"
+											>join_tokens:create</code
+										>
+										— integration API to mint join tokens
+									</span>
+								</label>
+								<label class="flex cursor-pointer items-start gap-2 text-sm">
+									<input type="checkbox" class="mt-0.5" bind:checked={permJoinRevoke} />
+									<span>
+										<code class="rounded bg-[var(--bg-secondary)] px-1 font-mono text-xs"
+											>join_tokens:revoke</code
+										>
+									</span>
+								</label>
+								<label class="flex cursor-pointer items-start gap-2 text-sm">
+									<input type="checkbox" class="mt-0.5" bind:checked={permAgentsDelete} />
+									<span>
+										<code class="rounded bg-[var(--bg-secondary)] px-1 font-mono text-xs"
+											>agents:delete</code
+										>
+										— integration API for agent cleanup
+									</span>
+								</label>
+							</div>
+							<div>
+								<Button
+									variant="primary"
+									onclick={installMeticulousAppOnProject}
+									loading={installAppLoading}
+									disabled={!installApplicationId.trim() || appCatalog.length === 0}
+								>
+									<Plus class="h-4 w-4" />
+									Install
+								</Button>
+							</div>
+						</div>
+					{/if}
+				</Card>
+			</div>
 		{:else if activeTab === 'settings'}
 			<Card>
 				<div class="space-y-6">
@@ -1509,17 +1781,29 @@
 
 					<div class="border-t border-[var(--border-primary)] pt-6">
 						<h4 class="text-sm font-medium text-[var(--text-primary)]">Danger Zone</h4>
-						<div class="mt-4 rounded-lg border border-error-200 p-4 dark:border-error-800">
-							<div class="flex items-center justify-between">
+						<div class="mt-4 rounded-lg border border-amber-200 p-4 dark:border-amber-900/60">
+							<div class="flex items-center justify-between gap-4">
 								<div>
-									<p class="font-medium text-error-700 dark:text-error-400">Delete Project</p>
+									<p class="font-medium text-amber-900 dark:text-amber-200">Archive project</p>
 									<p class="mt-1 text-sm text-[var(--text-secondary)]">
-										Once deleted, all pipelines and runs will be permanently removed.
+										Hides this project from the main project list, archives all pipelines in it, and disables
+										normal use. Only an organization admin can unarchive or permanently delete it from
+										<a href="/admin/archive" class="text-primary-600 hover:underline dark:text-primary-400"
+											>Admin → Archive</a
+										>.
 									</p>
 								</div>
-								<Button variant="destructive" size="sm">
-									<Trash2 class="h-4 w-4" />
-									Delete
+								<Button
+									variant="outline"
+									size="sm"
+									class="shrink-0 border-amber-300 text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-950/40"
+									onclick={() => {
+										archiveProjectError = null;
+										showArchiveProjectDialog = true;
+									}}
+								>
+									<Archive class="h-4 w-4" />
+									Archive
 								</Button>
 							</div>
 						</div>
@@ -1529,6 +1813,34 @@
 		{/if}
 	{/if}
 </div>
+
+<Dialog bind:open={showArchiveProjectDialog} title="Archive this project?">
+	<div class="space-y-4">
+		<p class="text-sm text-[var(--text-secondary)]">
+			Archive <span class="font-medium text-[var(--text-primary)]">{project?.name ?? 'this project'}</span>?
+			All pipelines in this project will be archived with it. Permanent removal is only available to organization
+			admins under Admin → Archive.
+		</p>
+		{#if archiveProjectError}
+			<Alert variant="error">{archiveProjectError}</Alert>
+		{/if}
+		<div class="flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showArchiveProjectDialog = false;
+					archiveProjectError = null;
+				}}
+				disabled={archiveProjectLoading}
+			>
+				Cancel
+			</Button>
+			<Button variant="primary" onclick={confirmArchiveProject} loading={archiveProjectLoading}>
+				Archive project
+			</Button>
+		</div>
+	</div>
+</Dialog>
 
 <Dialog bind:open={showCreateSecret} title="Add stored secret">
 	<div class="space-y-4">

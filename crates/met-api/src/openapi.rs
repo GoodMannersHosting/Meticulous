@@ -11,7 +11,7 @@ use crate::routes::{
     auth::{
         AdminResetPasswordRequest, AdminResetPasswordResponse, AuthProvidersResponse,
         ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutResponse,
-        MeResponse, PublicAuthProvider, SetupRequest, SetupResponse, SetupStatusResponse,
+        MeGroup, MeResponse, PublicAuthProvider, SetupRequest, SetupResponse, SetupStatusResponse,
         UserResponse,
     },
     dashboard::{DashboardStatsResponse, RecentRunResponse},
@@ -83,6 +83,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         (name = "triggers", description = "Pipeline trigger configuration"),
         (name = "artifacts", description = "Build artifact management"),
         (name = "debug", description = "Debug session management"),
+        (name = "admin", description = "Organization admin (users, groups, integrations)"),
     ),
     paths(
         // Health
@@ -96,7 +97,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::auth::setup_status,
         crate::routes::auth::setup,
         crate::routes::auth::change_password,
-        crate::routes::auth::admin_reset_password,
+        crate::routes::admin::admin_reset_password,
         // Organizations
         crate::routes::orgs::list_orgs,
         crate::routes::orgs::create_org,
@@ -108,7 +109,6 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::projects::create_project,
         crate::routes::projects::get_project,
         crate::routes::projects::update_project,
-        crate::routes::projects::delete_project,
         // Pipelines
         crate::routes::pipelines::list_pipelines,
         crate::routes::pipelines::create_pipeline,
@@ -149,6 +149,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         // Tokens
         crate::routes::tokens::list_tokens,
         crate::routes::tokens::create_token,
+        crate::routes::tokens::delete_token,
         crate::routes::tokens::revoke_token,
         // Secrets
         crate::routes::secrets::list_secrets,
@@ -222,7 +223,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             // Auth
             PublicAuthProvider, AuthProvidersResponse,
             LoginRequest, LoginResponse,
-            UserResponse, MeResponse,
+            UserResponse, MeGroup, MeResponse,
             LogoutResponse,
             SetupStatusResponse, SetupRequest, SetupResponse,
             ChangePasswordRequest, ChangePasswordResponse,

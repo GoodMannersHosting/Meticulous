@@ -17,7 +17,11 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, PaginatedResponse, Pagination},
+    extractors::{Auth, PaginatedResponse, Pagination, SessionOrAppAuth},
+    project_access::{
+        caller_org_id, effective_project_role_in_user_org,
+        effective_project_role_session_or_app_in_user_org,
+    },
     state::AppState,
 };
 
@@ -93,13 +97,11 @@ impl From<SecretRow> for SecretResponse {
 #[instrument(skip(state))]
 async fn list_secrets(
     State(state): State<AppState>,
-    Auth(user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path(project_id): Path<ProjectId>,
     pagination: Pagination,
 ) -> ApiResult<Json<PaginatedResponse<SecretResponse>>> {
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
-    }
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, project_id).await?;
 
     let rows = sqlx::query_as::<_, SecretRow>(
         r#"
@@ -111,7 +113,7 @@ async fn list_secrets(
         "#,
     )
     .bind(project_id.as_uuid())
-    .bind(user.org_id.as_uuid())
+    .bind(caller_org_id(&caller).as_uuid())
     .bind(pagination.sql_limit())
     .fetch_all(state.db())
     .await
@@ -160,8 +162,11 @@ async fn create_secret(
     Path(project_id): Path<ProjectId>,
     Json(req): Json<CreateSecretRequest>,
 ) -> ApiResult<Json<SecretResponse>> {
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, project_id).await?;
+    if !role.can_write_secrets() {
+        return Err(ApiError::forbidden(
+            "developer or administrator project role is required to create secrets",
+        ));
     }
 
     if req.name.is_empty() {
@@ -250,6 +255,14 @@ async fn update_secret(
         ));
     }
 
+    let project_id = ProjectId::from_uuid(existing.project_id);
+    let role = effective_project_role_in_user_org(state.db(), &user, project_id).await?;
+    if !role.can_write_secrets() {
+        return Err(ApiError::forbidden(
+            "developer or administrator project role is required to update secrets",
+        ));
+    }
+
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.or(existing.description);
     let provider = req.provider.unwrap_or(existing.provider);
@@ -310,6 +323,14 @@ async fn delete_secret(
     if existing.org_id != user.org_id.as_uuid() {
         return Err(ApiError::forbidden(
             "cannot delete secrets in other organizations",
+        ));
+    }
+
+    let project_id = ProjectId::from_uuid(existing.project_id);
+    let role = effective_project_role_in_user_org(state.db(), &user, project_id).await?;
+    if !role.can_write_secrets() {
+        return Err(ApiError::forbidden(
+            "developer or administrator project role is required to delete secrets",
         ));
     }
 

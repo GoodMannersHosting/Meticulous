@@ -1,5 +1,15 @@
 <script lang="ts">
-	import { Users, UserCog, Key, Server, ListOrdered, ChevronRight, AppWindow } from 'lucide-svelte';
+	import {
+		Users,
+		UserCog,
+		Key,
+		Server,
+		ListOrdered,
+		ChevronRight,
+		AppWindow,
+		Shield,
+		Archive
+	} from 'lucide-svelte';
 
 	interface AdminLink {
 		title: string;
@@ -26,6 +36,18 @@
 			description: 'Configure OIDC, GitHub, and other auth providers',
 			href: '/admin/auth',
 			icon: Key
+		},
+		{
+			title: 'Policy & tokens',
+			description: 'Organization API token caps, rate limits, and token inventory',
+			href: '/admin/policy',
+			icon: Shield
+		},
+		{
+			title: 'Archive',
+			description: 'Unarchive archived work or permanently delete projects and pipelines',
+			href: '/admin/archive',
+			icon: Archive
 		},
 		{
 			title: 'Meticulous Apps',

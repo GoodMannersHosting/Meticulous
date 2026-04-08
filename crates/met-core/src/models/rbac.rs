@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::user::GroupRole;
 use crate::ids::{
-    ApiTokenId, AuthProviderId, GroupId, OidcGroupMappingId, OrganizationId, ProjectId, UserId,
+    ApiTokenId, AuthProviderId, GroupId, OidcGroupMappingId, OrganizationId, PipelineId, ProjectId,
+    UserId,
 };
 
 /// Permission roles available in the system.
@@ -23,6 +24,8 @@ pub enum PermissionRole {
     Auditor,
     /// User management, token revocation, and audit logs.
     SecurityLead,
+    /// Org-wide security search (blast radius); platform admins use `*`.
+    SecurityAuditor,
     /// Standard read/write for assigned projects.
     User,
 }
@@ -35,6 +38,7 @@ impl PermissionRole {
             Self::Admin => vec!["*"],
             Self::Auditor => vec!["read:*", "audit:read"],
             Self::SecurityLead => vec!["user:read", "user:write", "token:revoke", "audit:read"],
+            Self::SecurityAuditor => vec!["security:blast-radius:org", "read:*"],
             Self::User => vec!["pipeline:read", "run:read", "run:write", "agent:read"],
         }
     }
@@ -78,6 +82,9 @@ pub struct ApiToken {
     /// Projects this token can access (None = all projects).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_ids: Option<Vec<ProjectId>>,
+    /// Pipelines this token can access (None = all pipelines within allowed projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_ids: Option<Vec<PipelineId>>,
     /// When the token expires.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
@@ -87,6 +94,9 @@ pub struct ApiToken {
     /// When the token was revoked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<DateTime<Utc>>,
+    /// When the token was deactivated (reactivatable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deactivated_at: Option<DateTime<Utc>>,
     /// When the token was created.
     pub created_at: DateTime<Utc>,
 }
@@ -96,6 +106,9 @@ impl ApiToken {
     #[must_use]
     pub fn is_valid(&self) -> bool {
         if self.revoked_at.is_some() {
+            return false;
+        }
+        if self.deactivated_at.is_some() {
             return false;
         }
         if let Some(expires_at) = self.expires_at {
@@ -113,6 +126,14 @@ impl ApiToken {
             .as_ref()
             .map_or(true, |ids| ids.contains(&project_id))
     }
+
+    /// Check pipeline access (call after project allowlist is satisfied).
+    #[must_use]
+    pub fn can_access_pipeline(&self, pipeline_id: PipelineId) -> bool {
+        self.pipeline_ids
+            .as_ref()
+            .map_or(true, |ids| ids.contains(&pipeline_id))
+    }
 }
 
 /// Input for creating an API token.
@@ -129,6 +150,9 @@ pub struct CreateApiToken {
     /// Project IDs (None = all projects).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_ids: Option<Vec<ProjectId>>,
+    /// Pipeline IDs (None = all pipelines in allowed projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_ids: Option<Vec<PipelineId>>,
     /// Expiration in seconds from now.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<i64>,

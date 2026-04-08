@@ -12,46 +12,14 @@ use crate::extractors::Auth;
 use crate::state::AppState;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::State,
     routing::{get, post},
 };
-use met_core::ids::UserId;
-use met_core::models::{CreateOrganization, User};
-use met_store::repos::{AuthProviderRepo, OrganizationRepo, UserRepo};
+use met_core::models::{CreateOrganization, GroupRole, User};
+use met_store::repos::{AuthProviderRepo, GroupRepo, OrganizationRepo, UserRepo};
 
 /// Matches the documented bootstrap account username for default-credential UI hints.
 pub(crate) const BOOTSTRAP_CREDENTIALS_USERNAME: &str = "admin";
-
-// #region agent log
-fn agent_debug_login(
-    hypothesis_id: &str,
-    location: &'static str,
-    message: &'static str,
-    data: serde_json::Value,
-) {
-    let entry = serde_json::json!({
-        "sessionId": "1db1a7",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-    });
-    let line = format!("{}\n", entry);
-    let path = std::path::Path::new("/home/dan/code/gmh/meticulous/.cursor/debug-1db1a7.log");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = std::io::Write::write_all(&mut f, line.as_bytes());
-    }
-    tracing::info!(target: "meticulous_agent_debug", payload = %entry, "meticulous_agent_debug");
-}
-// #endregion
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -66,10 +34,6 @@ pub fn router() -> Router<AppState> {
         .route("/auth/change-password", post(change_password))
         .route("/auth/setup", get(setup_status))
         .route("/auth/setup", post(setup))
-        .route(
-            "/admin/users/{id}/reset-password",
-            post(admin_reset_password),
-        )
 }
 
 /// Public auth provider info (for login page).
@@ -171,6 +135,8 @@ pub struct UserResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     pub is_admin: bool,
+    #[serde(default)]
+    pub service_account: bool,
     pub password_must_change: bool,
 }
 
@@ -182,6 +148,7 @@ impl From<&User> for UserResponse {
             email: user.email.clone(),
             display_name: user.display_name.clone(),
             is_admin: user.is_admin,
+            service_account: user.service_account,
             password_must_change: user.password_must_change,
         }
     }
@@ -231,18 +198,7 @@ async fn login(
             .await?
         {
             Some(u) => u,
-            None => {
-                agent_debug_login(
-                    "H1",
-                    "met-api/src/routes/auth.rs:login",
-                    "user_not_found_in_default_org",
-                    serde_json::json!({
-                        "org_id": org.id.as_uuid().to_string(),
-                        "identifier_len": req.username.len(),
-                    }),
-                );
-                return Err(ApiError::unauthorized("invalid credentials"));
-            }
+            None => return Err(ApiError::unauthorized("invalid credentials")),
         },
     };
 
@@ -251,21 +207,20 @@ async fn login(
         return Err(ApiError::unauthorized("account is disabled"));
     }
 
+    if user.service_account {
+        return Err(ApiError::forbidden(
+            "service accounts cannot sign in with a password; use an API token",
+        ));
+    }
+
     // Verify password
     let password_hash = user
         .password_hash
         .as_ref()
         .ok_or_else(|| ApiError::unauthorized("password login not configured for this user"))?;
 
-    verify_password(&req.password, password_hash).map_err(|_| {
-        agent_debug_login(
-            "H3",
-            "met-api/src/routes/auth.rs:login",
-            "password_verify_failed",
-            serde_json::json!({}),
-        );
-        ApiError::unauthorized("invalid credentials")
-    })?;
+    verify_password(&req.password, password_hash)
+        .map_err(|_| ApiError::unauthorized("invalid credentials"))?;
 
     user_repo
         .record_last_login(user.id)
@@ -314,7 +269,7 @@ async fn login(
     ),
     tag = "auth",
 )]
-async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
+async fn me(State(state): State<AppState>, Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
     // Determine role based on permissions - if they have "*" they're an admin
     let role = if user.permissions.contains("*") {
         "admin".to_string()
@@ -331,6 +286,22 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
             .to_string()
     });
 
+    let group_rows = GroupRepo::new(state.db())
+        .list_groups_for_user_in_org(user.org_id, user.user_id)
+        .await?;
+    let groups: Vec<MeGroup> = group_rows
+        .into_iter()
+        .map(|g| MeGroup {
+            id: g.group_id.to_string(),
+            name: g.name,
+            role: match g.role {
+                GroupRole::Member => "member".to_string(),
+                GroupRole::Maintainer => "maintainer".to_string(),
+                GroupRole::Owner => "owner".to_string(),
+            },
+        })
+        .collect();
+
     Ok(Json(MeResponse {
         id: user.user_id.to_string(),
         email: user.email.clone(),
@@ -339,7 +310,16 @@ async fn me(Auth(user): Auth) -> ApiResult<Json<MeResponse>> {
         role,
         created_at: chrono::Utc::now().to_rfc3339(),
         password_must_change: user.password_must_change,
+        groups,
     }))
+}
+
+/// Group membership summary on the current user profile.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MeGroup {
+    pub id: String,
+    pub name: String,
+    pub role: String,
 }
 
 /// Current user response.
@@ -352,6 +332,8 @@ pub struct MeResponse {
     pub role: String,
     pub created_at: String,
     pub password_must_change: bool,
+    #[serde(default)]
+    pub groups: Vec<MeGroup>,
 }
 
 /// Logout (client-side token invalidation).
@@ -493,6 +475,7 @@ async fn setup(
             None,
             Some(&password_hash),
             true, // is_admin
+            false, // service_account
             false,
         )
         .await?;
@@ -617,71 +600,4 @@ pub struct AdminResetPasswordRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdminResetPasswordResponse {
     pub message: String,
-}
-
-/// Admin endpoint to reset a user's password.
-#[utoipa::path(
-    post,
-    path = "/admin/users/{id}/reset-password",
-    params(("id" = String, Path, description = "User ID")),
-    request_body = AdminResetPasswordRequest,
-    responses(
-        (status = 200, description = "Password reset", body = AdminResetPasswordResponse),
-        (status = 400, description = "Bad request"),
-        (status = 403, description = "Admin access required"),
-    ),
-    tag = "auth",
-)]
-async fn admin_reset_password(
-    State(state): State<AppState>,
-    Auth(admin): Auth,
-    Path(user_id): Path<UserId>,
-    Json(req): Json<AdminResetPasswordRequest>,
-) -> ApiResult<Json<AdminResetPasswordResponse>> {
-    // Check admin permission
-    if !admin.has_permission("*") {
-        return Err(ApiError::forbidden("admin access required"));
-    }
-
-    // Check if password authentication is enabled
-    if !state.config.auth.password_enabled {
-        return Err(ApiError::forbidden("password authentication is disabled"));
-    }
-
-    let user_repo = UserRepo::new(state.db());
-
-    // Validate new password using configured minimum length
-    let min_length = state.config.auth.min_password_length;
-    if req.new_password.len() < min_length {
-        return Err(ApiError::bad_request(format!(
-            "password must be at least {} characters",
-            min_length
-        )));
-    }
-
-    // Verify the target user exists
-    let target_user = user_repo.get(user_id).await?;
-
-    // Ensure admin is in the same organization as the target user
-    if target_user.org_id != admin.org_id {
-        return Err(ApiError::forbidden(
-            "cannot reset password for users in other organizations",
-        ));
-    }
-
-    // Hash and update password
-    let new_hash = hash_password(&req.new_password)
-        .map_err(|e| ApiError::internal(format!("failed to hash password: {e}")))?;
-
-    user_repo.update_password(user_id, &new_hash).await?;
-
-    tracing::info!(
-        admin_id = %admin.user_id,
-        target_user_id = %user_id,
-        "admin reset user password"
-    );
-
-    Ok(Json(AdminResetPasswordResponse {
-        message: "password reset successfully".to_string(),
-    }))
 }

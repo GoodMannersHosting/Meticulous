@@ -2,16 +2,18 @@
 //!
 //! All API routes are mounted under `/api/v1`, with health checks at the root level.
 //! Auth routes are mounted at `/auth/*` for login, logout, and setup.
-//! Admin routes are mounted at `/admin/*` for user, group, and system management.
+//! Admin REST routes are mounted at `/api/v1/admin/*`. SvelteKit serves `/admin/*` pages.
 
 use crate::middleware::{cors_layer, logging_layer, rate_limit_layer};
 use crate::openapi::ApiDoc;
 use crate::state::AppState;
-use axum::{Json, Router};
+use axum::Router;
+use http::{HeaderName, HeaderValue};
 use tower::ServiceBuilder;
 use tower_http::{
     compression::CompressionLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    set_header::SetResponseHeaderLayer,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -31,6 +33,7 @@ pub mod orgs;
 pub mod pipelines;
 pub mod projects;
 pub mod runs;
+pub mod security;
 pub mod secrets;
 pub mod stored_secrets;
 pub mod tokens;
@@ -60,11 +63,13 @@ pub fn build_router(state: AppState) -> Router {
 
     // Build versioned API routes
     let api_v1 = Router::new()
+        .nest("/admin", admin::router())
         .merge(dashboard::router())
         .merge(projects::router())
         .merge(pipelines::router())
         .merge(triggers::router())
         .merge(runs::router())
+        .merge(security::router())
         .merge(agents::router())
         .merge(tokens::router())
         .merge(orgs::router())
@@ -93,9 +98,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(auth::router())
         // OAuth routes (OIDC, GitHub)
         .merge(oauth::router())
-        // Admin routes at root level (user, group, system management)
-        .merge(admin::router())
-        // API v1 routes
+        // API v1 routes (includes `/api/v1/admin/*`)
         .nest("/api/v1", api_v1)
         // Apply middleware stack
         .layer(middleware_stack)
@@ -103,6 +106,33 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state.clone())
         // Swagger UI and OpenAPI spec (stateless)
         .merge(swagger_router);
+
+    router = router
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy-report-only"),
+            HeaderValue::from_static(
+                "default-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'self'; object-src 'none'",
+            ),
+        ));
+
+    if config.enable_hsts {
+        router = router.layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=86400; includeSubDomains"),
+        ));
+    }
 
     // Conditionally add rate limiting
     if let Some(rate_limit) = rate_limit_layer(&config.rate_limit) {

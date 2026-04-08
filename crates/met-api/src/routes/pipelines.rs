@@ -17,8 +17,12 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
-    extractors::{Auth, PaginatedResponse, Pagination},
+    extractors::{Auth, PaginatedResponse, Pagination, SessionOrAppAuth},
     github_scm, pipeline_execution,
+    project_access::{
+        SessionOrApp, effective_project_role_in_user_org,
+        effective_project_role_session_or_app_in_user_org, ensure_session_or_app_pipeline_scope,
+    },
     state::AppState,
     workflow_diagnostics::{self, WorkflowDiagnosticItem},
 };
@@ -32,6 +36,8 @@ pub fn router() -> Router<AppState> {
                 .put(update_pipeline)
                 .delete(delete_pipeline),
         )
+        .route("/pipelines/{id}/archive", post(archive_pipeline))
+        .route("/pipelines/{id}/unarchive", post(unarchive_pipeline))
         .route(
             "/pipelines/by-slug/{project_id}/{slug}",
             get(get_pipeline_by_slug),
@@ -87,7 +93,7 @@ pub struct PipelineResponse {
 #[instrument(skip(state))]
 async fn list_pipelines(
     State(state): State<AppState>,
-    Auth(user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     pagination: Pagination,
     axum::extract::Query(query): axum::extract::Query<ListPipelinesQuery>,
 ) -> ApiResult<Json<PaginatedResponse<PipelineResponse>>> {
@@ -97,9 +103,20 @@ async fn list_pipelines(
         .project_id
         .ok_or_else(|| ApiError::bad_request("project_id query parameter is required"))?;
 
-    let pipelines = repo
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, project_id).await?;
+
+    let mut pipelines = repo
         .list_by_project(project_id, pagination.sql_limit(), 0)
         .await?;
+
+    if let SessionOrApp::User(u) = &caller {
+        if u.is_api_token {
+            if let Some(ref allow) = u.pipeline_ids {
+                let set: std::collections::HashSet<_> = allow.iter().copied().collect();
+                pipelines.retain(|p| set.contains(&p.id));
+            }
+        }
+    }
 
     let response = PaginatedResponse::new(
         pipelines
@@ -141,8 +158,11 @@ async fn create_pipeline(
     Auth(user): Auth,
     Json(req): Json<CreatePipelineRequest>,
 ) -> ApiResult<Json<PipelineResponse>> {
-    if !user.can_access_project(req.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, req.project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to create pipelines",
+        ));
     }
 
     let repo = PipelineRepo::new(state.db());
@@ -199,8 +219,11 @@ async fn import_pipeline_git(
     Path(project_id): Path<ProjectId>,
     Json(req): Json<ImportPipelineGitRequest>,
 ) -> ApiResult<Json<PipelineResponse>> {
-    if !user.can_access_project(project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role = effective_project_role_in_user_org(state.db(), &user, project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to import pipelines",
+        ));
     }
 
     let Some(crypto) = state.stored_secret_crypto.as_ref() else {
@@ -287,8 +310,12 @@ async fn sync_pipeline_from_git(
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role =
+        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to sync pipelines from Git",
+        ));
     }
 
     if pipeline.scm_provider.as_deref() != Some("github") {
@@ -373,22 +400,27 @@ async fn sync_pipeline_from_git(
 #[instrument(skip(state))]
 async fn get_pipeline(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path(id): Path<PipelineId>,
 ) -> ApiResult<Json<PipelineResponse>> {
     let repo = PipelineRepo::new(state.db());
     let pipeline = repo.get(id).await?;
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, pipeline.project_id)
+        .await?;
+    ensure_session_or_app_pipeline_scope(&caller, pipeline.id, pipeline.project_id)?;
     Ok(Json(PipelineResponse { pipeline }))
 }
 
 #[instrument(skip(state))]
 async fn get_pipeline_by_slug(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path((project_id, slug)): Path<(ProjectId, String)>,
 ) -> ApiResult<Json<PipelineResponse>> {
     let repo = PipelineRepo::new(state.db());
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, project_id).await?;
     let pipeline = repo.get_by_slug(project_id, &slug).await?;
+    ensure_session_or_app_pipeline_scope(&caller, pipeline.id, pipeline.project_id)?;
     Ok(Json(PipelineResponse { pipeline }))
 }
 
@@ -421,11 +453,19 @@ pub struct UpdatePipelineRequest {
 #[instrument(skip(state, req))]
 async fn update_pipeline(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     Path(id): Path<PipelineId>,
     Json(req): Json<UpdatePipelineRequest>,
 ) -> ApiResult<Json<PipelineResponse>> {
     let repo = PipelineRepo::new(state.db());
+    let existing = repo.get(id).await?;
+    let role =
+        effective_project_role_in_user_org(state.db(), &user, existing.project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to update pipelines",
+        ));
+    }
 
     let update = UpdatePipeline {
         name: req.name,
@@ -458,12 +498,64 @@ async fn update_pipeline(
 #[instrument(skip(state))]
 async fn delete_pipeline(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     Path(id): Path<PipelineId>,
 ) -> ApiResult<()> {
     let repo = PipelineRepo::new(state.db());
+    let pipeline = repo.get(id).await?;
+    let role =
+        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to delete pipelines",
+        ));
+    }
+    if pipeline.archived_at.is_none() {
+        return Err(ApiError::bad_request(
+            "only archived pipelines can be permanently deleted; archive first or purge from Admin → Archive",
+        ));
+    }
     repo.delete(id).await?;
     Ok(())
+}
+
+#[instrument(skip(state))]
+async fn archive_pipeline(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<PipelineId>,
+) -> ApiResult<Json<PipelineResponse>> {
+    let repo = PipelineRepo::new(state.db());
+    let p = repo.get(id).await?;
+    let role = effective_project_role_in_user_org(state.db(), &user, p.project_id).await?;
+    if !role.can_manage_pipelines() {
+        return Err(ApiError::forbidden(
+            "project administrator role is required to archive pipelines",
+        ));
+    }
+    let p = repo.archive(id).await?;
+    Ok(Json(PipelineResponse { pipeline: p }))
+}
+
+#[instrument(skip(state))]
+async fn unarchive_pipeline(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(id): Path<PipelineId>,
+) -> ApiResult<Json<PipelineResponse>> {
+    if !user.has_permission("*") {
+        return Err(ApiError::forbidden(
+            "only organization administrators may unarchive pipelines (Admin → Archive)",
+        ));
+    }
+    let repo = PipelineRepo::new(state.db());
+    let p = repo.get(id).await?;
+    let proj = ProjectRepo::new(state.db()).get(p.project_id).await?;
+    if proj.org_id != user.org_id {
+        return Err(ApiError::not_found("pipeline not found"));
+    }
+    let p = repo.unarchive(id).await?;
+    Ok(Json(PipelineResponse { pipeline: p }))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -502,8 +594,12 @@ async fn trigger_pipeline(
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
+    let role =
+        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    if !role.can_trigger_pipelines() {
+        return Err(ApiError::forbidden(
+            "developer or administrator project role is required to trigger pipelines",
+        ));
     }
 
     let project = ProjectRepo::new(state.db())
@@ -549,16 +645,15 @@ async fn trigger_pipeline(
 #[instrument(skip(state))]
 async fn pipeline_workflow_diagnostics(
     State(state): State<AppState>,
-    Auth(user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path(id): Path<PipelineId>,
     axum::extract::Query(q): axum::extract::Query<WorkflowDiagnosticsQuery>,
 ) -> ApiResult<Json<Vec<WorkflowDiagnosticItem>>> {
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
-    if !user.can_access_project(pipeline.project_id) {
-        return Err(ApiError::forbidden("no access to this project"));
-    }
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, pipeline.project_id)
+        .await?;
 
     let project = ProjectRepo::new(state.db())
         .get(pipeline.project_id)
@@ -613,11 +708,12 @@ pub struct ValidatePipelineResponse {
 #[instrument(skip(state, req))]
 async fn validate_pipeline(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    Auth(user): Auth,
     Path(id): Path<PipelineId>,
     Json(req): Json<ValidatePipelineRequest>,
 ) -> ApiResult<Json<ValidatePipelineResponse>> {
-    let _pipeline = PipelineRepo::new(state.db()).get(id).await?;
+    let pipeline = PipelineRepo::new(state.db()).get(id).await?;
+    effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
 
     let mut errors = Vec::new();
     let mut warnings = Vec::new();

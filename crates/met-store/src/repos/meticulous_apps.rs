@@ -1,13 +1,33 @@
 //! Meticulous App repository (integrations + installations).
 
-use chrono::Utc;
-use met_core::ids::{AppInstallationId, AppKeyId, MeticulousAppId, ProjectId, UserId};
+use chrono::{DateTime, Utc};
+use met_core::ids::{AppInstallationId, AppKeyId, MeticulousAppId, OrganizationId, ProjectId, UserId};
 use met_core::models::{MeticulousApp, MeticulousAppInstallation, MeticulousAppKey};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
 
-const APP_ROW: &str = "id, application_id, name, description, created_by, created_at, updated_at";
+const APP_ROW: &str = "id, application_id, name, description, enabled, created_by, created_at, updated_at";
+
+/// Public catalog fields for enabled apps in an org (project settings UI).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MeticulousAppCatalogRow {
+    pub application_id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// Installation on a project with app display fields (for project settings UI).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MeticulousAppInstallationSummary {
+    pub id: Uuid,
+    pub application_id: String,
+    pub name: String,
+    pub permissions: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
 const KEY_ROW: &str = "id, app_id, key_id, public_key_pem, created_at, revoked_at";
 const INSTALL_ROW: &str = "id, app_id, project_id, permissions, revoked_at, created_at";
 
@@ -37,8 +57,8 @@ impl<'a> MeticulousAppRepo<'a> {
 
         let app = sqlx::query_as::<_, MeticulousApp>(&format!(
             r#"
-            INSERT INTO meticulous_apps (id, application_id, name, description, created_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            INSERT INTO meticulous_apps (id, application_id, name, description, enabled, created_by, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, true, $5, $6, $6)
             RETURNING {APP_ROW}
             "#
         ))
@@ -80,6 +100,63 @@ impl<'a> MeticulousAppRepo<'a> {
         .map_err(Into::into)
     }
 
+    /// Enabled apps whose registering user belongs to `org_id` (catalog for project installs).
+    pub async fn list_enabled_for_org(&self, org_id: OrganizationId) -> Result<Vec<MeticulousApp>> {
+        sqlx::query_as::<_, MeticulousApp>(&format!(
+            r#"
+            SELECT {APP_ROW}
+            FROM meticulous_apps a
+            INNER JOIN users u ON u.id = a.created_by
+            WHERE u.org_id = $1 AND a.enabled = true
+            ORDER BY a.name ASC
+            "#
+        ))
+        .bind(org_id.as_uuid())
+        .fetch_all(self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn list_enabled_catalog_for_org(
+        &self,
+        org_id: OrganizationId,
+    ) -> Result<Vec<MeticulousAppCatalogRow>> {
+        let rows = sqlx::query_as::<_, MeticulousAppCatalogRow>(
+            r#"
+            SELECT a.application_id, a.name, a.description
+            FROM meticulous_apps a
+            INNER JOIN users u ON u.id = a.created_by
+            WHERE u.org_id = $1 AND a.enabled = true
+            ORDER BY a.name ASC
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    /// Installations on a project with public app identifiers (for project settings UI).
+    pub async fn list_installation_summaries_for_project(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<MeticulousAppInstallationSummary>> {
+        sqlx::query_as::<_, MeticulousAppInstallationSummary>(
+            r#"
+            SELECT i.id, a.application_id, a.name, i.permissions, i.created_at, i.revoked_at
+            FROM meticulous_app_installations i
+            INNER JOIN meticulous_apps a ON a.id = i.app_id
+            WHERE i.project_id = $1
+            ORDER BY i.created_at DESC
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .fetch_all(self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn get_by_application_id(&self, application_id: &str) -> Result<MeticulousApp> {
         sqlx::query_as::<_, MeticulousApp>(&format!(
             "SELECT {APP_ROW} FROM meticulous_apps WHERE application_id = $1"
@@ -95,6 +172,21 @@ impl<'a> MeticulousAppRepo<'a> {
             "SELECT {APP_ROW} FROM meticulous_apps WHERE id = $1"
         ))
         .bind(id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("meticulous_app", id))
+    }
+
+    pub async fn set_enabled(&self, id: MeticulousAppId, enabled: bool) -> Result<MeticulousApp> {
+        sqlx::query_as::<_, MeticulousApp>(&format!(
+            r#"
+            UPDATE meticulous_apps SET enabled = $2, updated_at = NOW()
+            WHERE id = $1
+            RETURNING {APP_ROW}
+            "#
+        ))
+        .bind(id.as_uuid())
+        .bind(enabled)
         .fetch_optional(self.pool)
         .await?
         .ok_or_else(|| StoreError::not_found("meticulous_app", id))
@@ -161,7 +253,7 @@ impl<'a> MeticulousAppRepo<'a> {
             SELECT a.id, k.public_key_pem
             FROM meticulous_apps a
             JOIN meticulous_app_keys k ON k.app_id = a.id AND k.revoked_at IS NULL
-            WHERE a.application_id = $1 AND k.key_id = $2
+            WHERE a.application_id = $1 AND k.key_id = $2 AND a.enabled = true
             "#,
         )
         .bind(application_id)

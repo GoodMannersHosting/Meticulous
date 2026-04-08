@@ -11,9 +11,8 @@ use axum::{
     extract::{FromRef, FromRequestParts},
     http::{Method, StatusCode, header::AUTHORIZATION, request::Parts},
 };
-use met_core::ids::ProjectId;
+use met_core::ids::{ApiTokenId, PipelineId, ProjectId};
 use met_core::{OrganizationId, UserId};
-use met_store::PgPool;
 use std::collections::HashSet;
 
 /// Authenticated user information extracted from the request.
@@ -34,8 +33,12 @@ pub struct CurrentUser {
     /// Project IDs this token can access (None = all projects).
     /// Only set for API tokens with project scope restrictions.
     pub project_ids: Option<Vec<ProjectId>>,
+    /// Pipeline IDs this API token may access (None = all pipelines within allowed projects).
+    pub pipeline_ids: Option<Vec<PipelineId>>,
     /// When true (from DB), only auth self-service routes are allowed until the password is changed.
     pub password_must_change: bool,
+    /// Set when authenticated via `Authorization: Token` (for credential-scoped rate limits).
+    pub api_token_id: Option<ApiTokenId>,
 }
 
 impl CurrentUser {
@@ -63,6 +66,17 @@ impl CurrentUser {
         self.project_ids
             .as_ref()
             .map_or(true, |ids| ids.contains(&project_id))
+    }
+
+    /// API-token pipeline allowlist. JWT users ignore this (`pipeline_ids` is always `None`).
+    #[must_use]
+    pub fn can_access_pipeline(&self, pipeline_id: PipelineId, project_id: ProjectId) -> bool {
+        if !self.can_access_project(project_id) {
+            return false;
+        }
+        self.pipeline_ids
+            .as_ref()
+            .map_or(true, |ids| ids.contains(&pipeline_id))
     }
 }
 
@@ -111,7 +125,7 @@ where
                 .validate(token)
                 .map_err(|e| ApiError::unauthorized(e.to_string()))?;
 
-            let user = finalize_authenticated_user(app_state.db(), user, &method, &path).await?;
+            let user = finalize_authenticated_user(&app_state, user, &method, &path).await?;
             return Ok(Auth(user));
         }
 
@@ -122,7 +136,7 @@ where
                 .validate(token)
                 .await
                 .map_err(|e| ApiError::unauthorized(e.to_string()))?;
-            let user = finalize_authenticated_user(app_state.db(), user, &method, &path).await?;
+            let user = finalize_authenticated_user(&app_state, user, &method, &path).await?;
             return Ok(Auth(user));
         }
 
@@ -133,12 +147,13 @@ where
 }
 
 /// Load session state from the database and enforce the forced password-change gate.
-async fn finalize_authenticated_user(
-    db: &sqlx::PgPool,
+pub(super) async fn finalize_authenticated_user(
+    app_state: &AppState,
     mut user: CurrentUser,
     method: &Method,
     path: &str,
 ) -> Result<CurrentUser, ApiError> {
+    let db = app_state.db();
     let result: Option<(bool, bool, bool)> = sqlx::query_as(
         r#"
         SELECT is_active, (deleted_at IS NULL) AS not_deleted, password_must_change
@@ -169,11 +184,21 @@ async fn finalize_authenticated_user(
         ));
     }
 
+    if let Some(limiter) = app_state.credential_rate_limit.as_ref() {
+        let policy = met_store::repos::OrgPolicyRepo::new(db)
+            .get(user.org_id)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        limiter.check_user(&user, &policy).map_err(|_| {
+            ApiError::rate_limited("credential rate limit exceeded; try again later")
+        })?;
+    }
+
     Ok(user)
 }
 
 /// Routes allowed while `password_must_change` is true (JWT and API token).
-fn is_password_change_exempt(method: &Method, path: &str) -> bool {
+pub(super) fn is_password_change_exempt(method: &Method, path: &str) -> bool {
     matches!(
         (method, path),
         (&Method::GET, "/auth/me")
@@ -223,7 +248,9 @@ mod tests {
                 .collect(),
             is_api_token: false,
             project_ids: None,
+            pipeline_ids: None,
             password_must_change: false,
+            api_token_id: None,
         };
 
         assert!(user.has_permission("pipelines:read"));
@@ -247,7 +274,9 @@ mod tests {
             permissions: ["*"].iter().map(|s| s.to_string()).collect(),
             is_api_token: false,
             project_ids: None,
+            pipeline_ids: None,
             password_must_change: false,
+            api_token_id: None,
         };
 
         assert!(admin.has_permission("pipelines:read"));
@@ -269,7 +298,9 @@ mod tests {
             permissions: HashSet::new(),
             is_api_token: false,
             project_ids: None,
+            pipeline_ids: None,
             password_must_change: false,
+            api_token_id: None,
         };
         assert!(unrestricted.can_access_project(project1));
         assert!(unrestricted.can_access_project(project2));
@@ -283,7 +314,9 @@ mod tests {
             permissions: HashSet::new(),
             is_api_token: true,
             project_ids: Some(vec![project1, project2]),
+            pipeline_ids: None,
             password_must_change: false,
+            api_token_id: None,
         };
         assert!(restricted.can_access_project(project1));
         assert!(restricted.can_access_project(project2));

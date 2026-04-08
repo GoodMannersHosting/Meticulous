@@ -43,6 +43,17 @@ where
 
         let principal =
             verify_app_installation_jwt(token, &app_state.config().jwt, app_state.db()).await?;
+
+        if let Some(limiter) = app_state.credential_rate_limit.as_ref() {
+            let policy = met_store::repos::OrgPolicyRepo::new(app_state.db())
+                .get(principal.org_id)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            limiter
+                .check_app(principal.installation_id, &policy)
+                .map_err(|_| ApiError::rate_limited("app credential rate limit exceeded"))?;
+        }
+
         Ok(AppInstallationAuth(principal))
     }
 }

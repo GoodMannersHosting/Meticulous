@@ -1,18 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { sidebar } from '$stores';
+	import { auth, sidebar } from '$stores';
 	import {
 		LayoutDashboard,
 		FolderKanban,
 		GitBranch,
 		Play,
 		Server,
-		Settings,
 		ChevronLeft,
 		ChevronRight,
 		Shield,
-		Layers,
-		FolderKey
+		Store,
+		FolderKey,
+		Radar
 	} from 'lucide-svelte';
 	import Tooltip from '../ui/tooltip.svelte';
 
@@ -38,23 +38,23 @@
 			items: [
 				{ label: 'Projects', href: '/projects', icon: FolderKanban },
 				{ label: 'Pipelines', href: '/pipelines', icon: GitBranch },
-				{ label: 'Workflows', href: '/workflows', icon: Layers },
-				{ label: 'Secrets & Variables', href: '/secrets-variables', icon: FolderKey },
 				{ label: 'Runs', href: '/runs', icon: Play }
 			]
 		},
 		{
-			title: 'Infrastructure',
+			title: 'Marketplace',
+			items: [{ label: 'Workflows', href: '/workflows', icon: Store }]
+		},
+		{
+			title: 'Security',
 			items: [
-				{ label: 'Agents', href: '/agents', icon: Server }
+				{ label: 'Secrets & Variables', href: '/secrets-variables', icon: FolderKey },
+				{ label: 'Blast radius', href: '/security/blast-radius', icon: Radar }
 			]
 		},
 		{
-			title: 'Administration',
-			items: [
-				{ label: 'Settings', href: '/settings', icon: Settings },
-				{ label: 'Admin', href: '/admin', icon: Shield }
-			]
+			title: 'Infrastructure',
+			items: [{ label: 'Agents', href: '/agents', icon: Server }]
 		}
 	];
 
@@ -69,6 +69,16 @@
 	function isActive(href: string): boolean {
 		return $page.url.pathname === href || $page.url.pathname.startsWith(href + '/');
 	}
+
+	const showAdminNav = $derived(auth.user?.role === 'admin');
+	const adminActive = $derived(isActive('/admin'));
+
+	/** Close the drawer after navigating (mobile only). */
+	function onSidebarClick(e: MouseEvent): void {
+		if (!sidebar.isMobile) return;
+		const el = (e.target as HTMLElement).closest('a[href]');
+		if (el) sidebar.closeMobile();
+	}
 </script>
 
 <aside
@@ -80,6 +90,7 @@
 	"
 	style="width: {sidebarWidth}; transform: translateX({translateX});"
 	aria-label="Sidebar navigation"
+	onclick={onSidebarClick}
 >
 	<div class="flex h-full flex-col">
 		<div class="flex h-16 items-center justify-between border-b border-[var(--border-primary)] px-4">
@@ -155,25 +166,66 @@
 			</div>
 		</nav>
 
-		{#if !sidebar.isMobile}
-			<div class="border-t border-[var(--border-primary)] p-3">
-				<button
-					type="button"
-					class="
-						flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2
-						text-[var(--text-secondary)] transition-colors duration-150
-						hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]
-					"
-					onclick={() => sidebar.toggle()}
-					aria-label={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				>
+		{#if showAdminNav || !sidebar.isMobile}
+			<div
+				class="shrink-0 space-y-2 border-t border-[var(--border-primary)] p-3"
+			>
+				{#if showAdminNav}
 					{#if sidebar.collapsed}
-						<ChevronRight class="h-5 w-5" />
+						<Tooltip content="Admin" side="right">
+							<a
+								href="/admin"
+								class="
+									flex h-10 w-10 items-center justify-center rounded-lg shadow-md
+									bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white
+									ring-1 ring-white/20 transition-all duration-150
+									hover:from-violet-500 hover:to-fuchsia-500 hover:ring-white/40 hover:shadow-lg
+									{adminActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-[var(--bg-secondary)]' : ''}
+								"
+								aria-current={adminActive ? 'page' : undefined}
+							>
+								<Shield class="h-5 w-5" strokeWidth={2.25} />
+							</a>
+						</Tooltip>
 					{:else}
-						<ChevronLeft class="h-5 w-5" />
-						<span class="text-sm font-medium">Collapse</span>
+						<a
+							href="/admin"
+							class="
+								flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-white shadow-md
+								bg-gradient-to-r from-violet-600 via-fuchsia-600 to-fuchsia-500
+								ring-1 ring-white/15 transition-all duration-150
+								hover:from-violet-500 hover:via-fuchsia-500 hover:to-fuchsia-400 hover:shadow-lg hover:ring-white/30
+								{adminActive
+									? 'ring-2 ring-amber-400/90 ring-offset-2 ring-offset-[var(--bg-secondary)]'
+									: ''}
+							"
+							aria-current={adminActive ? 'page' : undefined}
+						>
+							<Shield class="h-5 w-5 shrink-0" strokeWidth={2.25} />
+							<span>Admin</span>
+						</a>
 					{/if}
-				</button>
+				{/if}
+
+				{#if !sidebar.isMobile}
+					<button
+						type="button"
+						class="
+							flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2
+							text-[var(--text-secondary)] transition-colors duration-150
+							hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]
+						"
+						onclick={() => sidebar.toggle()}
+						aria-label={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+					>
+						{#if sidebar.collapsed}
+							<ChevronRight class="h-5 w-5" />
+						{:else}
+							<ChevronLeft class="h-5 w-5" />
+							<span class="text-sm font-medium">Collapse</span>
+						{/if}
+					</button>
+				{/if}
 			</div>
 		{/if}
 	</div>

@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use met_core::ids::{AppInstallationId, ProjectId};
 use met_core::models::{MeticulousApp, MeticulousAppInstallation};
@@ -20,25 +20,28 @@ use crate::extractors::Auth;
 use crate::routes::admin::require_admin;
 use crate::state::AppState;
 
-/// Routes under `/admin/meticulous-apps` (merge into admin router).
+/// Routes under `/api/v1/admin/meticulous-apps` (nested under admin router).
 pub fn admin_router() -> Router<AppState> {
     Router::new()
-        .route("/admin/meticulous-apps", get(list_apps).post(create_app))
-        .route("/admin/meticulous-apps/{application_id}", get(get_app))
+        .route("/meticulous-apps", get(list_apps).post(create_app))
         .route(
-            "/admin/meticulous-apps/{application_id}/keys",
+            "/meticulous-apps/{application_id}",
+            get(get_app).patch(patch_app_flags),
+        )
+        .route(
+            "/meticulous-apps/{application_id}/keys",
             post(add_app_key),
         )
         .route(
-            "/admin/meticulous-apps/{application_id}/keys/{key_id}/revoke",
+            "/meticulous-apps/{application_id}/keys/{key_id}/revoke",
             post(revoke_app_key),
         )
         .route(
-            "/admin/meticulous-apps/{application_id}/installations",
+            "/meticulous-apps/{application_id}/installations",
             get(list_installations).post(create_installation),
         )
         .route(
-            "/admin/meticulous-apps/{application_id}/installations/{installation_id}/revoke",
+            "/meticulous-apps/{application_id}/installations/{installation_id}/revoke",
             post(revoke_installation),
         )
 }
@@ -63,6 +66,7 @@ pub struct MeticulousAppSummary {
     pub application_id: String,
     pub name: String,
     pub description: Option<String>,
+    pub enabled: bool,
     pub created_at: String,
 }
 
@@ -73,9 +77,34 @@ impl From<&MeticulousApp> for MeticulousAppSummary {
             application_id: a.application_id.clone(),
             name: a.name.clone(),
             description: a.description.clone(),
+            enabled: a.enabled,
             created_at: a.created_at.to_rfc3339(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchMeticulousAppRequest {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[instrument(skip(state, body))]
+async fn patch_app_flags(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(application_id): Path<String>,
+    Json(body): Json<PatchMeticulousAppRequest>,
+) -> ApiResult<Json<MeticulousAppSummary>> {
+    require_admin(&admin)?;
+    let repo = MeticulousAppRepo::new(state.db());
+    let app = repo.get_by_application_id(&application_id).await?;
+    let app = if let Some(en) = body.enabled {
+        repo.set_enabled(app.id, en).await?
+    } else {
+        app
+    };
+    Ok(Json(MeticulousAppSummary::from(&app)))
 }
 
 #[derive(Debug, Deserialize)]

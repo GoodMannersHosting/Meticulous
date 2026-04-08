@@ -80,6 +80,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if std::env::var("MET_HTTP__ENABLE_HSTS")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        api_config.enable_hsts = true;
+    }
+
     // Create database pool
     let mut pool_config = PoolConfig::from(&met_config.database);
     if let Some(url) = args.database_url {

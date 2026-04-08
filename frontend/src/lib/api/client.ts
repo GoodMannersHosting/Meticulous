@@ -265,7 +265,30 @@ export const apiMethods = {
 			api.post<import('./types').Project>('/api/v1/projects', data),
 		update: (id: string, data: import('./types').UpdateProjectInput) =>
 			api.patch<import('./types').Project>(`/api/v1/projects/${id}`, data),
-		delete: (id: string) => api.delete<void>(`/api/v1/projects/${id}`)
+		archive: (id: string) =>
+			api.post<import('./types').Project>(`/api/v1/projects/${id}/archive`, {}),
+		unarchive: (id: string) =>
+			api.post<import('./types').Project>(`/api/v1/projects/${id}/unarchive`, {}),
+		installMeticulousApp: (
+			projectId: string,
+			body: { application_id: string; permissions?: string[] }
+		) =>
+			api.post<{
+				installation_id: string;
+				application_id: string;
+				project_id: string;
+				permissions: string[];
+			}>(`/api/v1/projects/${projectId}/meticulous-apps/installations`, body),
+		/** Project settings: enabled apps registered by your org (project admin). */
+		availableMeticulousApps: (projectId: string) =>
+			api.get<MeticulousAppCatalogEntry[]>(
+				`/api/v1/projects/${projectId}/meticulous-apps/available`
+			),
+		/** Installations on this project (metadata only). */
+		listMeticulousInstallations: (projectId: string) =>
+			api.get<ProjectMeticulousInstallationRow[]>(
+				`/api/v1/projects/${projectId}/meticulous-apps/installations`
+			)
 	},
 
 	/** Project-scoped webhook registrations (SCM + generic fan-out). */
@@ -308,7 +331,16 @@ export const apiMethods = {
 		deleteTarget: (projectId: string, registrationId: string, targetId: string) =>
 			api.delete<void>(
 				`/api/v1/projects/${projectId}/webhooks/${registrationId}/targets/${targetId}`
-			)
+			),
+		deleteRegistration: (projectId: string, registrationId: string) =>
+			api.delete<void>(`/api/v1/projects/${projectId}/webhooks/${registrationId}`)
+	},
+
+	security: {
+		blastRadius: (q: string) =>
+			api.get<BlastRadiusApiResponse>('/api/v1/security/blast-radius', {
+				params: { q }
+			})
 	},
 
 	// Platform stored secrets (encrypted at rest; values never returned)
@@ -565,139 +597,264 @@ export const apiMethods = {
 	},
 
 	// Admin
-	admin: {
+		admin: {
+		policy: {
+			get: () => api.get<OrgPolicyApiResponse>('/api/v1/admin/policy'),
+			patch: (body: OrgPolicyPatchInput) =>
+				api.patch<OrgPolicyApiResponse>('/api/v1/admin/policy', body)
+		},
+		archive: {
+			list: () => api.get<AdminArchiveResponse>('/api/v1/admin/archive'),
+			unarchiveProject: (id: string) =>
+				api.post<{ message: string }>(`/api/v1/admin/projects/${id}/unarchive`, {}),
+			unarchivePipeline: (id: string) =>
+				api.post<{ message: string }>(`/api/v1/admin/pipelines/${id}/unarchive`, {}),
+			purgePipeline: (id: string) =>
+				api.post<{ message: string }>(`/api/v1/admin/pipelines/${id}/purge`, {})
+		},
+		tokens: {
+			list: () => api.get<AdminOrgTokenRow[]>('/api/v1/admin/tokens')
+		},
 		// User management
 		users: {
 			list: (params?: { limit?: number }) =>
-				api.get<import('./types').PaginatedResponse<import('./types').AdminUser>>('/admin/users', { params }),
-			get: (id: string) => api.get<import('./types').AdminUser>(`/admin/users/${id}`),
+				api.get<import('./types').PaginatedResponse<import('./types').AdminUser>>('/api/v1/admin/users', { params }),
+			get: (id: string) => api.get<import('./types').AdminUser>(`/api/v1/admin/users/${id}`),
 			update: (id: string, data: { display_name?: string; is_admin?: boolean }) =>
-				api.patch<import('./types').AdminUser>(`/admin/users/${id}`, data),
-			lock: (id: string) => api.post<import('./types').AdminUser>(`/admin/users/${id}/lock`),
-			unlock: (id: string) => api.post<import('./types').AdminUser>(`/admin/users/${id}/unlock`),
-			delete: (id: string) => api.post<{ message: string }>(`/admin/users/${id}/delete`),
+				api.patch<import('./types').AdminUser>(`/api/v1/admin/users/${id}`, data),
+			lock: (id: string) => api.post<import('./types').AdminUser>(`/api/v1/admin/users/${id}/lock`),
+			unlock: (id: string) => api.post<import('./types').AdminUser>(`/api/v1/admin/users/${id}/unlock`),
+			delete: (id: string) => api.post<{ message: string }>(`/api/v1/admin/users/${id}/delete`),
 			resetPassword: (id: string, newPassword: string) =>
-				api.post<{ message: string }>(`/admin/users/${id}/reset-password`, { new_password: newPassword })
+				api.post<{ message: string }>(`/api/v1/admin/users/${id}/reset-password`, { new_password: newPassword }),
+			createServiceAccount: (body: {
+				username: string;
+				email: string;
+				display_name?: string;
+				is_admin?: boolean;
+			}) => api.post<import('./types').AdminUser>('/api/v1/admin/users', body),
+			/** Create an API token for a service-account user in the same org (platform admin). Plain token returned once. */
+			createToken: (
+				userId: string,
+				body: {
+					name: string;
+					description?: string;
+					scopes?: string[];
+					project_ids?: string[];
+					pipeline_ids?: string[];
+					expires_in_days?: number | null;
+				}
+			) =>
+				api.post<{
+					token: AdminOrgTokenRow['token'] & {
+						project_ids?: string[];
+						pipeline_ids?: string[];
+					};
+					plain_token: string;
+				}>(`/api/v1/admin/users/${userId}/tokens`, body)
 		},
 		// Group management
 		groups: {
 			list: (params?: { limit?: number }) =>
-				api.get<import('./types').PaginatedResponse<import('./types').AdminGroup>>('/admin/groups', { params }),
-			get: (id: string) => api.get<import('./types').AdminGroup>(`/admin/groups/${id}`),
+				api.get<import('./types').PaginatedResponse<import('./types').AdminGroup>>('/api/v1/admin/groups', { params }),
+			get: (id: string) => api.get<import('./types').AdminGroup>(`/api/v1/admin/groups/${id}`),
 			create: (data: { name: string; description?: string }) =>
-				api.post<import('./types').AdminGroup>('/admin/groups', data),
+				api.post<import('./types').AdminGroup>('/api/v1/admin/groups', data),
 			update: (id: string, data: { name?: string; description?: string }) =>
-				api.patch<import('./types').AdminGroup>(`/admin/groups/${id}`, data),
-			delete: (id: string) => api.delete<{ message: string }>(`/admin/groups/${id}`),
+				api.patch<import('./types').AdminGroup>(`/api/v1/admin/groups/${id}`, data),
+			delete: (id: string) => api.delete<{ message: string }>(`/api/v1/admin/groups/${id}`),
 			listMembers: (groupId: string) =>
-				api.get<import('./types').GroupMember[]>(`/admin/groups/${groupId}/members`),
+				api.get<import('./types').GroupMember[]>(`/api/v1/admin/groups/${groupId}/members`),
 			addMember: (groupId: string, userId: string, role?: string) =>
-				api.post<import('./types').GroupMember>(`/admin/groups/${groupId}/members`, { user_id: userId, role: role ?? 'member' }),
+				api.post<import('./types').GroupMember>(`/api/v1/admin/groups/${groupId}/members`, { user_id: userId, role: role ?? 'member' }),
 			updateMember: (groupId: string, userId: string, role: string) =>
-				api.patch<import('./types').GroupMember>(`/admin/groups/${groupId}/members/${userId}`, { role }),
+				api.patch<import('./types').GroupMember>(`/api/v1/admin/groups/${groupId}/members/${userId}`, { role }),
 			removeMember: (groupId: string, userId: string) =>
-				api.delete<{ message: string }>(`/admin/groups/${groupId}/members/${userId}`)
+				api.delete<{ message: string }>(`/api/v1/admin/groups/${groupId}/members/${userId}`)
 		},
 		// Role management
 		roles: {
-			list: () => api.get<import('./types').RoleInfo[]>('/admin/roles'),
-			getUserRoles: (userId: string) => api.get<import('./types').UserRoleAssignment[]>(`/admin/users/${userId}/roles`),
-			assign: (userId: string, role: string) => api.post<import('./types').UserRoleAssignment>(`/admin/users/${userId}/roles`, { role }),
-			revoke: (userId: string, role: string) => api.delete<{ message: string }>(`/admin/users/${userId}/roles/${role}`)
+			list: () => api.get<import('./types').RoleInfo[]>('/api/v1/admin/roles'),
+			getUserRoles: (userId: string) => api.get<import('./types').UserRoleAssignment[]>(`/api/v1/admin/users/${userId}/roles`),
+			assign: (userId: string, role: string) => api.post<import('./types').UserRoleAssignment>(`/api/v1/admin/users/${userId}/roles`, { role }),
+			revoke: (userId: string, role: string) => api.delete<{ message: string }>(`/api/v1/admin/users/${userId}/roles/${role}`)
 		},
 		// Project admin operations
 		projects: {
 			scheduleDeletion: (id: string, retentionDays?: number) =>
-				api.post<{ message: string; scheduled_deletion_at: string }>(`/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
-			cancelDeletion: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/cancel-deletion`),
-			forceDelete: (id: string) => api.post<{ message: string }>(`/admin/projects/${id}/force-delete`)
+				api.post<{ message: string; scheduled_deletion_at: string }>(`/api/v1/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
+			cancelDeletion: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/cancel-deletion`),
+			forceDelete: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/force-delete`)
 		},
 		workflows: {
 			approve: (workflowId: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
-					`/admin/workflows/${workflowId}/approve`,
+					`/api/v1/admin/workflows/${workflowId}/approve`,
 					{}
 				),
 			reject: (workflowId: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
-					`/admin/workflows/${workflowId}/reject`,
+					`/api/v1/admin/workflows/${workflowId}/reject`,
 					{}
 				),
 			trust: (workflowId: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
-					`/admin/workflows/${workflowId}/trust`,
+					`/api/v1/admin/workflows/${workflowId}/trust`,
 					{}
 				),
 			untrust: (workflowId: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
-					`/admin/workflows/${workflowId}/untrust`,
+					`/api/v1/admin/workflows/${workflowId}/untrust`,
 					{}
 				),
 			delete: (workflowId: string) =>
-				api.post<{ ok: boolean }>(`/admin/workflows/${workflowId}/delete`, {})
+				api.post<{ ok: boolean }>(`/api/v1/admin/workflows/${workflowId}/delete`, {})
 		},
 		// Auth provider management
 		authProviders: {
-			list: () => api.get<import('./types').AuthProviderResponse[]>('/admin/auth-providers'),
-			get: (id: string) => api.get<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}`),
+			list: () => api.get<import('./types').AuthProviderResponse[]>('/api/v1/admin/auth-providers'),
+			get: (id: string) => api.get<import('./types').AuthProviderResponse>(`/api/v1/admin/auth-providers/${id}`),
 			create: (data: { name: string; provider_type: string; client_id: string; client_secret: string; issuer_url?: string }) =>
-				api.post<import('./types').AuthProviderResponse>('/admin/auth-providers', data),
+				api.post<import('./types').AuthProviderResponse>('/api/v1/admin/auth-providers', data),
 			update: (id: string, data: { name?: string; client_id?: string; client_secret?: string; issuer_url?: string }) =>
-				api.patch<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}`, data),
-			enable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}/enable`),
-			disable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/admin/auth-providers/${id}/disable`),
-			delete: (id: string) => api.delete<{ message: string }>(`/admin/auth-providers/${id}`),
+				api.patch<import('./types').AuthProviderResponse>(`/api/v1/admin/auth-providers/${id}`, data),
+			enable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/api/v1/admin/auth-providers/${id}/enable`),
+			disable: (id: string) => api.post<import('./types').AuthProviderResponse>(`/api/v1/admin/auth-providers/${id}/disable`),
+			delete: (id: string) => api.delete<{ message: string }>(`/api/v1/admin/auth-providers/${id}`),
 			groupMappings: {
-				list: (providerId: string) => api.get<import('./types').GroupMappingResponse[]>(`/admin/auth-providers/${providerId}/group-mappings`),
+				list: (providerId: string) => api.get<import('./types').GroupMappingResponse[]>(`/api/v1/admin/auth-providers/${providerId}/group-mappings`),
 				create: (providerId: string, data: { oidc_group_claim: string; meticulous_group_id: string; role?: string }) =>
-					api.post<import('./types').GroupMappingResponse>(`/admin/auth-providers/${providerId}/group-mappings`, data),
+					api.post<import('./types').GroupMappingResponse>(`/api/v1/admin/auth-providers/${providerId}/group-mappings`, data),
 				delete: (providerId: string, mappingId: string) => 
-					api.delete<{ message: string }>(`/admin/auth-providers/${providerId}/group-mappings/${mappingId}`)
+					api.delete<{ message: string }>(`/api/v1/admin/auth-providers/${providerId}/group-mappings/${mappingId}`)
 			}
 		},
 		ops: {
 			jobQueue: (params?: { limit?: number }) =>
-				api.get<{ count: number; data: JobQueueEntry[] }>('/admin/ops/job-queue', { params })
+				api.get<{ count: number; data: JobQueueEntry[] }>('/api/v1/admin/ops/job-queue', { params })
 		},
 		/** Meticulous Apps (machine / integration auth). */
 		meticulousApps: {
-			list: () => api.get<MeticulousAppSummary[]>('/admin/meticulous-apps'),
+			list: () => api.get<MeticulousAppSummary[]>('/api/v1/admin/meticulous-apps'),
 			create: (data: { name: string; description?: string }) =>
-				api.post<CreateMeticulousAppResponse>('/admin/meticulous-apps', data),
+				api.post<CreateMeticulousAppResponse>('/api/v1/admin/meticulous-apps', data),
 			get: (applicationId: string) =>
 				api.get<MeticulousAppSummary>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}`
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}`
+				),
+			patch: (applicationId: string, body: { enabled?: boolean }) =>
+				api.patch<MeticulousAppSummary>(
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}`,
+					body
 				),
 			addKey: (applicationId: string) =>
 				api.post<{ key_id: string; private_key_pem: string }>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys`,
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys`,
 					{}
 				),
 			revokeKey: (applicationId: string, keyId: string) =>
 				api.post<{ message: string }>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys/${encodeURIComponent(keyId)}/revoke`,
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}/keys/${encodeURIComponent(keyId)}/revoke`,
 					{}
 				),
 			listInstallations: (applicationId: string) =>
 				api.get<MeticulousAppInstallationRow[]>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`
 				),
 			createInstallation: (
 				applicationId: string,
 				body: { project_id: string; permissions: string[] }
 			) =>
 				api.post<MeticulousAppInstallationRow>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`,
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations`,
 					body
 				),
 			revokeInstallation: (applicationId: string, installationId: string) =>
 				api.post<{ message: string }>(
-					`/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations/${encodeURIComponent(installationId)}/revoke`,
+					`/api/v1/admin/meticulous-apps/${encodeURIComponent(applicationId)}/installations/${encodeURIComponent(installationId)}/revoke`,
 					{}
 				)
 		}
 	}
 };
+
+/** Admin org policy (`GET/PATCH /api/v1/admin/policy`). */
+export interface OrgPolicyApiResponse {
+	max_api_token_ttl_days: number;
+	user_rl_primary_period_secs: number;
+	user_rl_primary_max: number;
+	user_rl_secondary_period_secs: number;
+	user_rl_secondary_max: number;
+	app_rl_primary_period_secs: number;
+	app_rl_primary_max: number;
+	app_rl_secondary_period_secs: number;
+	app_rl_secondary_max: number;
+}
+
+export type OrgPolicyPatchInput = Partial<OrgPolicyApiResponse>;
+
+export interface AdminArchiveResponse {
+	projects: {
+		id: string;
+		name: string;
+		slug: string;
+		archived_at?: string | null;
+	}[];
+	pipelines: {
+		id: string;
+		project_id: string;
+		name: string;
+		slug: string;
+		archived_at?: string | null;
+	}[];
+}
+
+/** Admin token list row (`GET /api/v1/admin/tokens`). */
+export interface AdminOrgTokenRow {
+	token: {
+		id: string;
+		name: string;
+		description?: string;
+		prefix: string;
+		scopes: string[];
+		expires_at?: string;
+		last_used_at?: string;
+		deactivated_at?: string;
+		revoked_at?: string;
+		created_at: string;
+	};
+	owner_user_id: string;
+	owner_email: string;
+}
+
+export interface BlastRadiusHit {
+	kind: string;
+	id: string;
+	project_id?: string;
+	detail?: string;
+}
+
+export interface BlastRadiusApiResponse {
+	query: string;
+	hits: BlastRadiusHit[];
+}
+
+/** Project-scoped catalog entry for installing an app. */
+export interface MeticulousAppCatalogEntry {
+	application_id: string;
+	name: string;
+	description?: string | null;
+}
+
+/** Project → app installation summary (non-admin). */
+export interface ProjectMeticulousInstallationRow {
+	installation_id: string;
+	application_id: string;
+	app_name: string;
+	permissions: string[];
+	created_at: string;
+	revoked_at?: string | null;
+}
 
 /** Admin: Meticulous App row (no secrets). */
 export interface MeticulousAppSummary {
@@ -705,6 +862,7 @@ export interface MeticulousAppSummary {
 	application_id: string;
 	name: string;
 	description?: string | null;
+	enabled: boolean;
 	created_at: string;
 }
 
@@ -724,7 +882,7 @@ export interface MeticulousAppInstallationRow {
 	revoked_at?: string | null;
 }
 
-/** Admin job queue row (`/admin/ops/job-queue`). */
+/** Admin job queue row (`/api/v1/admin/ops/job-queue`). */
 export interface JobQueueEntry {
 	job_run_id?: string;
 	run_id: string;

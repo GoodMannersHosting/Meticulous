@@ -2,6 +2,8 @@
 	import { getPublicApiBase } from '$lib/public-api-base';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
+	import { breadcrumbTrail } from '$lib/stores/breadcrumb-trail';
 	import { auth } from '$stores';
 	import {
 		Button,
@@ -554,6 +556,10 @@
 		}
 	}
 
+	onDestroy(() => {
+		breadcrumbTrail.set(null);
+	});
+
 	$effect(() => {
 		loadPipeline();
 	});
@@ -608,10 +614,20 @@
 			const pipelineId = $page.params.id!;
 			runsListOffset = 0;
 			pipeline = await apiMethods.pipelines.get(pipelineId);
+			try {
+				const proj = await apiMethods.projects.get(pipeline.project_id);
+				breadcrumbTrail.set([
+					{ label: proj.name, href: `/projects/${proj.id}` },
+					{ label: pipeline.name, href: `/pipelines/${pipeline.id}` }
+				]);
+			} catch {
+				breadcrumbTrail.set([{ label: pipeline.name, href: `/pipelines/${pipeline.id}` }]);
+			}
 			await loadRuns({ offset: 0 });
 			await loadWorkflowDiagnostics();
 			await loadTriggers();
 		} catch (e) {
+			breadcrumbTrail.set(null);
 			error = e instanceof Error ? e.message : 'Failed to load pipeline';
 		} finally {
 			loading = false;
@@ -1059,7 +1075,11 @@
 
 <div class="space-y-6">
 	<div class="flex items-start gap-4">
-		<Button variant="ghost" size="sm" href="/pipelines">
+		<Button
+			variant="ghost"
+			size="sm"
+			href={pipeline ? `/projects/${pipeline.project_id}` : '/projects'}
+		>
 			<ArrowLeft class="h-4 w-4" />
 		</Button>
 

@@ -12,7 +12,7 @@
 
 use crate::extractors::CurrentUser;
 use met_core::hash_join_token;
-use met_core::ids::ProjectId;
+use met_core::ids::{PipelineId, ProjectId};
 use met_store::PgPool;
 use met_store::repos::{ApiTokenRepo, UserRepo};
 use std::collections::HashSet;
@@ -104,6 +104,7 @@ impl<'a> ApiTokenValidator<'a> {
 
         // Convert project_ids if present
         let project_ids: Option<Vec<ProjectId>> = api_token.project_ids;
+        let pipeline_ids: Option<Vec<PipelineId>> = api_token.pipeline_ids;
 
         tracing::debug!(
             token_id = %api_token.id,
@@ -120,7 +121,9 @@ impl<'a> ApiTokenValidator<'a> {
             permissions,
             is_api_token: true,
             project_ids,
+            pipeline_ids,
             password_must_change: user.password_must_change,
+            api_token_id: Some(api_token.id),
         })
     }
 }

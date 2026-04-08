@@ -12,7 +12,7 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
-	let createMode = $state<'manual' | 'git'>('manual');
+	let createMode = $state<'manual' | 'git'>('git');
 
 	let form = $state<Partial<CreatePipelineInput>>({
 		project_id: $page.url.searchParams.get('project') ?? '',

@@ -17,6 +17,7 @@ pub mod github_scm;
 pub mod middleware;
 pub mod openapi;
 pub mod pipeline_execution;
+pub mod project_access;
 pub mod routes;
 pub mod scheduling_hints;
 pub mod state;

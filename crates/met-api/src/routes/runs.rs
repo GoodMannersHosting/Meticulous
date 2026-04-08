@@ -1,6 +1,6 @@
 //! Pipeline run routes.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use axum::{
     Json, Router,
@@ -28,8 +28,12 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta},
+    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta, SessionOrAppAuth},
     pipeline_execution,
+    project_access::{
+        SessionOrApp, effective_project_role_session_or_app_in_user_org,
+        ensure_session_or_app_pipeline_scope,
+    },
     state::AppState,
 };
 
@@ -168,7 +172,7 @@ async fn enrich_run_responses_status_display(
 #[instrument(skip(state))]
 async fn list_runs(
     State(state): State<AppState>,
-    Auth(user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     pagination: Pagination,
     axum::extract::Query(query): axum::extract::Query<ListRunsQuery>,
 ) -> ApiResult<Json<PaginatedResponse<RunResponse>>> {
@@ -186,14 +190,27 @@ async fn list_runs(
         ));
     }
 
+    if matches!(&caller, SessionOrApp::App(_))
+        && query.pipeline_id.is_none()
+        && query.project_id.is_none()
+        && query.run_number.is_none()
+    {
+        return Err(ApiError::bad_request(
+            "Meticulous App credentials require `project_id` or `pipeline_id` when listing runs",
+        ));
+    }
+
     if let Some(run_number) = query.run_number {
         let Some(pipeline_id) = query.pipeline_id else {
             return Err(ApiError::bad_request("`run_number` requires `pipeline_id`"));
         };
         let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-        if !user.can_access_project(pipeline.project_id) {
-            return Err(ApiError::forbidden("no access to this project"));
-        }
+        effective_project_role_session_or_app_in_user_org(
+            state.db(),
+            &caller,
+            pipeline.project_id,
+        )
+        .await?;
         let mut items: Vec<RunResponse> = repo
             .find_by_pipeline_and_run_number(pipeline_id, run_number)
             .await?
@@ -220,9 +237,13 @@ async fn list_runs(
     let mut items: Vec<RunResponse> = match (query.pipeline_id, query.project_id) {
         (Some(pipeline_id), None) => {
             let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-            if !user.can_access_project(pipeline.project_id) {
-                return Err(ApiError::forbidden("no access to this project"));
-            }
+            effective_project_role_session_or_app_in_user_org(
+                state.db(),
+                &caller,
+                pipeline.project_id,
+            )
+            .await?;
+            ensure_session_or_app_pipeline_scope(&caller, pipeline_id, pipeline.project_id)?;
             repo.list_by_pipeline(pipeline_id, status_filter, limit, offset)
                 .await?
                 .into_iter()
@@ -230,9 +251,8 @@ async fn list_runs(
                 .collect()
         }
         (None, Some(project_id)) => {
-            if !user.can_access_project(project_id) {
-                return Err(ApiError::forbidden("no access to this project"));
-            }
+            effective_project_role_session_or_app_in_user_org(state.db(), &caller, project_id)
+                .await?;
             repo.list_by_project(project_id, status_filter, limit, offset)
                 .await?
                 .into_iter()
@@ -244,6 +264,9 @@ async fn list_runs(
                 .collect()
         }
         (None, None) => {
+            let SessionOrApp::User(user) = &caller else {
+                return Err(ApiError::internal("invalid run list branch for app caller"));
+            };
             let rows = match &user.project_ids {
                 None => {
                     repo.list_by_organization(user.org_id, status_filter, limit, offset)
@@ -271,6 +294,15 @@ async fn list_runs(
             ));
         }
     };
+
+    if let SessionOrApp::User(u) = &caller {
+        if u.is_api_token {
+            if let Some(ref allow) = u.pipeline_ids {
+                let set: HashSet<_> = allow.iter().copied().collect();
+                items.retain(|r| set.contains(&r.run.pipeline_id));
+            }
+        }
+    }
 
     let limit = pagination.limit as usize;
     let fetched = items.len();
@@ -342,11 +374,19 @@ fn job_run_snapshot_key(bytes: &Option<Vec<u8>>) -> Option<[u8; 32]> {
 #[instrument(skip(state))]
 async fn get_run(
     State(state): State<AppState>,
-    Auth(_user): Auth,
+    SessionOrAppAuth(caller): SessionOrAppAuth,
     Path(id): Path<RunId>,
 ) -> ApiResult<Json<RunResponse>> {
     let repo = RunRepo::new(state.db());
     let run = repo.get(id).await?;
+    let pipeline = PipelineRepo::new(state.db()).get(run.pipeline_id).await?;
+    effective_project_role_session_or_app_in_user_org(
+        state.db(),
+        &caller,
+        pipeline.project_id,
+    )
+    .await?;
+    ensure_session_or_app_pipeline_scope(&caller, run.pipeline_id, pipeline.project_id)?;
     let parent_run_number = match run.parent_run_id {
         Some(pid) => repo.get(pid).await.ok().map(|p| p.run_number),
         None => None,

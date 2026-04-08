@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { auth, theme, sidebar } from '$stores';
-	import { Menu, Sun, Moon, Bell, User, LogOut, Settings } from 'lucide-svelte';
+	import { breadcrumbTrail } from '$lib/stores/breadcrumb-trail';
+	import { Menu, Sun, Moon, Bell, LogOut, Settings, Shield } from 'lucide-svelte';
 	import { DropdownMenu } from 'bits-ui';
 	import Breadcrumbs from './Breadcrumbs.svelte';
 	import { Avatar } from '$components/ui';
 
-	const breadcrumbs = $derived($page.data.breadcrumbs ?? []);
+	const breadcrumbs = $derived(
+		($breadcrumbTrail?.length ?? 0) > 0 ? $breadcrumbTrail! : ($page.data.breadcrumbs ?? [])
+	);
 </script>
 
 <header
@@ -112,9 +116,22 @@
 								text-[var(--text-primary)] outline-none
 								data-[highlighted]:bg-[var(--bg-hover)]
 							"
+							onclick={() => goto('/settings')}
 						>
 							<Settings class="h-4 w-4 text-[var(--text-secondary)]" />
 							Settings
+						</DropdownMenu.Item>
+
+						<DropdownMenu.Item
+							class="
+								flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm
+								text-[var(--text-primary)] outline-none
+								data-[highlighted]:bg-[var(--bg-hover)]
+							"
+							onclick={() => goto('/settings/security')}
+						>
+							<Shield class="h-4 w-4 text-[var(--text-secondary)]" />
+							Security
 						</DropdownMenu.Item>
 
 						<DropdownMenu.Separator class="my-1 h-px bg-[var(--border-secondary)]" />

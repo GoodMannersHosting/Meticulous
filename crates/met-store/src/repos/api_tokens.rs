@@ -1,7 +1,7 @@
 //! API token repository.
 
 use chrono::{Duration, Utc};
-use met_core::ids::{ApiTokenId, ProjectId, UserId};
+use met_core::ids::{ApiTokenId, OrganizationId, PipelineId, ProjectId, UserId};
 use met_core::models::{ApiToken, CreateApiToken};
 use sqlx::PgPool;
 
@@ -34,9 +34,9 @@ impl<'a> ApiTokenRepo<'a> {
 
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            INSERT INTO api_tokens (id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            INSERT INTO api_tokens (id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             "#,
         )
         .bind(id.as_uuid())
@@ -47,6 +47,7 @@ impl<'a> ApiTokenRepo<'a> {
         .bind(prefix)
         .bind(&input.scopes)
         .bind(input.project_ids.as_ref().map(|ids| ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>()))
+        .bind(input.pipeline_ids.as_ref().map(|ids| ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>()))
         .bind(expires_at)
         .bind(now)
         .fetch_one(self.pool)
@@ -59,7 +60,7 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get(&self, id: ApiTokenId) -> Result<ApiToken> {
         sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
             WHERE id = $1
             "#,
@@ -74,9 +75,9 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get_by_hash(&self, token_hash: &str) -> Result<Option<ApiToken>> {
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
-            WHERE token_hash = $1 AND revoked_at IS NULL
+            WHERE token_hash = $1 AND revoked_at IS NULL AND deactivated_at IS NULL
             "#,
         )
         .bind(token_hash)
@@ -90,9 +91,9 @@ impl<'a> ApiTokenRepo<'a> {
     pub async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiToken>> {
         let token = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
-            WHERE prefix = $1 AND revoked_at IS NULL
+            WHERE prefix = $1 AND revoked_at IS NULL AND deactivated_at IS NULL
             "#,
         )
         .bind(prefix)
@@ -111,7 +112,7 @@ impl<'a> ApiTokenRepo<'a> {
     ) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
             WHERE user_id = $1 AND revoked_at IS NULL
             ORDER BY created_at DESC
@@ -127,11 +128,38 @@ impl<'a> ApiTokenRepo<'a> {
         Ok(tokens)
     }
 
+    /// List tokens owned by users in an organization (admin view).
+    pub async fn list_for_org(
+        &self,
+        org_id: OrganizationId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ApiToken>> {
+        let tokens = sqlx::query_as::<_, ApiToken>(
+            r#"
+            SELECT t.id, t.user_id, t.name, t.description, t.token_hash, t.prefix, t.scopes, t.project_ids, t.pipeline_ids,
+                   t.expires_at, t.last_used_at, t.revoked_at, t.deactivated_at, t.created_at
+            FROM api_tokens t
+            INNER JOIN users u ON u.id = t.user_id
+            WHERE u.org_id = $1
+            ORDER BY t.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(tokens)
+    }
+
     /// List all active tokens (for admin).
     pub async fn list_all(&self, limit: i64, offset: i64) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
             WHERE revoked_at IS NULL
             ORDER BY created_at DESC
@@ -232,7 +260,7 @@ impl<'a> ApiTokenRepo<'a> {
     ) -> Result<Vec<ApiToken>> {
         let tokens = sqlx::query_as::<_, ApiToken>(
             r#"
-            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
+            SELECT id, user_id, name, description, token_hash, prefix, scopes, project_ids, pipeline_ids, expires_at, last_used_at, revoked_at, deactivated_at, created_at
             FROM api_tokens
             WHERE revoked_at IS NULL
               AND (project_ids IS NULL OR $1 = ANY(project_ids))
@@ -248,6 +276,46 @@ impl<'a> ApiTokenRepo<'a> {
         Ok(tokens)
     }
 
+    /// Count tokens that count toward the per-owner active cap (not revoked/deactivated/expired).
+    pub async fn count_valid_active_for_user(&self, user_id: UserId) -> Result<i64> {
+        let (count,): (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)::bigint FROM api_tokens
+            WHERE user_id = $1
+              AND revoked_at IS NULL
+              AND deactivated_at IS NULL
+              AND (expires_at IS NULL OR expires_at > NOW())
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .fetch_one(self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    pub async fn set_deactivated(&self, id: ApiTokenId, deactivate: bool) -> Result<()> {
+        let at = if deactivate {
+            Some(Utc::now())
+        } else {
+            None
+        };
+        let r = sqlx::query(
+            r#"
+            UPDATE api_tokens SET deactivated_at = $2
+            WHERE id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(at)
+        .execute(self.pool)
+        .await?;
+
+        if r.rows_affected() == 0 {
+            return Err(StoreError::not_found("api_token", id));
+        }
+        Ok(())
+    }
+
     /// Remove a project from all tokens (when project is deleted).
     pub async fn remove_project_from_all(&self, project_id: ProjectId) -> Result<u64> {
         let result = sqlx::query(
@@ -258,6 +326,22 @@ impl<'a> ApiTokenRepo<'a> {
             "#,
         )
         .bind(project_id.as_uuid())
+        .execute(self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Remove a pipeline from token scope lists (when pipeline is deleted).
+    pub async fn remove_pipeline_from_all(&self, pipeline_id: PipelineId) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE api_tokens
+            SET pipeline_ids = array_remove(pipeline_ids, $1)
+            WHERE pipeline_ids IS NOT NULL AND $1 = ANY(pipeline_ids)
+            "#,
+        )
+        .bind(pipeline_id.as_uuid())
         .execute(self.pool)
         .await?;
 
