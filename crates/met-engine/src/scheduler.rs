@@ -485,6 +485,9 @@ impl Scheduler {
             suppress_exit_after_jobs_increment: msg.suppress_exit_after_jobs_increment,
             workflow_invocation_id: msg.workflow_invocation_id.clone(),
             output_wrap_x25519_public_key: msg.output_wrap_x25519_public_key.clone(),
+            environment: None,
+            workspace_restore: None,
+            agent_resolved_secrets: Vec::new(),
         })
     }
 

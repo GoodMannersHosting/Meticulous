@@ -42,7 +42,7 @@
 			]
 		},
 		{
-			title: 'Marketplace',
+			title: 'Catalog',
 			items: [{ label: 'Workflows', href: '/workflows', icon: Store }]
 		},
 		{

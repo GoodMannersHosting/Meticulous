@@ -291,6 +291,34 @@ export const apiMethods = {
 			)
 	},
 
+	/** Project member management (ADR-021). */
+	projectMembers: {
+		list: (projectId: string) =>
+			api.get<import('./types').Member[]>(`/api/v1/projects/${projectId}/members`),
+		add: (projectId: string, data: import('./types').AddMemberInput) =>
+			api.post<{ message: string }>(`/api/v1/projects/${projectId}/members`, data),
+		remove: (projectId: string, principalId: string) =>
+			api.delete<{ message: string }>(`/api/v1/projects/${projectId}/members/${principalId}`)
+	},
+
+	/** Pipeline member management (ADR-021). */
+	pipelineMembers: {
+		list: (pipelineId: string) =>
+			api.get<import('./types').Member[]>(`/api/v1/pipelines/${pipelineId}/members`),
+		add: (pipelineId: string, data: import('./types').AddMemberInput) =>
+			api.post<{ message: string }>(`/api/v1/pipelines/${pipelineId}/members`, data),
+		remove: (pipelineId: string, principalId: string) =>
+			api.delete<{ message: string }>(`/api/v1/pipelines/${pipelineId}/members/${principalId}`)
+	},
+
+	/** Platform settings (super_admin only). */
+	platformSettings: {
+		get: () =>
+			api.get<import('./types').PlatformSettings>('/api/v1/platform/settings'),
+		update: (data: Partial<import('./types').PlatformSettings>) =>
+			api.patch<import('./types').PlatformSettings>('/api/v1/platform/settings', data)
+	},
+
 	/** Project-scoped webhook registrations (SCM + generic fan-out). */
 	projectWebhooks: {
 		list: (projectId: string) =>

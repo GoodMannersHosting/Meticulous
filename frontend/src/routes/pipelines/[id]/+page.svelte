@@ -239,7 +239,8 @@
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
 		{ value: 'github_app', label: 'GitHub App' },
-		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
+		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' },
+		{ value: 'registry', label: 'Container registry' }
 	];
 
 	function definitionJobs(def: Pipeline['definition']): PipelineJob[] {

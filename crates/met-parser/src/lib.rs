@@ -62,9 +62,10 @@ pub use providers::GitWorkflowProvider;
 #[cfg(feature = "database")]
 pub use providers::{CompositeWorkflowProvider, DatabaseWorkflowProvider};
 pub use schema::{
-    RawAgentAffinity, RawCacheConfig, RawJob, RawPipeline, RawPoolSelector, RawRetryPolicy,
-    RawSecretRef, RawService, RawStep, RawStoredSecretRef, RawTriggers, RawWorkflowDef,
-    RawWorkflowInvocation,
+    RawAgentAffinity, RawAzureSecretRef, RawCacheConfig, RawEnvironment, RawGcpSecretRef, RawJob,
+    RawKubernetesSecretRef, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef,
+    RawService, RawStep, RawStoredSecretRef, RawTriggers, RawWorkflowDef,
+    RawWorkflowInvocation, RawWorkspaceTransfer,
 };
 pub use semver::{VersionConstraint, parse_version_constraint, resolve_version};
 pub use span::{SpanTracker, SpannedYamlParser};

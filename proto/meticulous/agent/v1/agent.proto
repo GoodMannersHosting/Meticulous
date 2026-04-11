@@ -153,6 +153,8 @@ enum SecretMaterialKind {
     SECRET_MATERIAL_KIND_ENV_INLINE = 1;
     // Plaintext is file contents; agent writes under workspace `.meticulous/secrets/` and sets env `key` to the absolute file path.
     SECRET_MATERIAL_KIND_WORKSPACE_FILE_PATH = 2;
+    // Registry auth JSON ({username, password/token, server_address}). Held in-memory only, never written to disk or env (ADR-015).
+    SECRET_MATERIAL_KIND_REGISTRY_AUTH = 3;
 }
 
 // An encrypted secret value.

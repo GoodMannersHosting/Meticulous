@@ -61,6 +61,48 @@ message JobDispatch {
     string workflow_invocation_id = 25;
     // X25519 public key (32 bytes) for wrapping `met-output secret`; empty disables secret outputs for this job.
     bytes output_wrap_x25519_public_key = 26;
+    // OCI container environment for this job (ADR-015).
+    EnvironmentSpec environment = 27;
+    // Workspace snapshot to restore before this job starts (ADR-014).
+    WorkspaceSnapshot workspace_restore = 28;
+    // Secrets the agent must resolve using ambient identity (ADR-020 local mode).
+    repeated ExternalSecretRef agent_resolved_secrets = 29;
+}
+
+// OCI container environment specification (ADR-015, Phase 1.3).
+message EnvironmentSpec {
+    // Fully qualified image reference (should include @sha256: digest).
+    string image = 1;
+    // Expected image digest for post-pull verification.
+    string expected_digest = 2;
+    // Name of the registry credential (resolved to REGISTRY_AUTH material).
+    string registry_credential_name = 3;
+    // Signature verification method ("cosign" or empty for none).
+    string verify_method = 4;
+    // Public key reference for cosign verification.
+    string verify_key_ref = 5;
+    // Pull policy: "always", "if-not-present", or "never".
+    string pull_policy = 6;
+}
+
+// Workspace snapshot for cross-agent workspace transfer (ADR-014, Phase 3.1).
+message WorkspaceSnapshot {
+    // Presigned URL to download the snapshot archive.
+    string snapshot_download_url = 1;
+    // SHA-256 digest of the archive for integrity verification.
+    string expected_sha256 = 2;
+    // Paths to restore (relative to workspace root).
+    repeated string restore_paths = 3;
+}
+
+// External secret reference for agent-side resolution (ADR-020, Phase 1.2).
+message ExternalSecretRef {
+    // Provider type (aws_sm, vault, gcp_sm, etc.).
+    string provider_type = 1;
+    // Environment variable name to set with the resolved value.
+    string name = 2;
+    // Provider-specific parameters (path, key, version, etc.).
+    map<string, string> parameters = 3;
 }
 
 // Full job payload message (comprehensive version).

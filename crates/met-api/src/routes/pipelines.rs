@@ -179,6 +179,7 @@ async fn create_pipeline(
         scm_path: None,
         scm_credentials_secret_path: None,
         scm_revision: None,
+        visibility: Default::default(),
     };
 
     let pipeline = repo.create(req.project_id, &create).await?;
@@ -269,6 +270,7 @@ async fn import_pipeline_git(
         scm_path: Some(req.scm_path),
         scm_credentials_secret_path: Some(req.credentials_path),
         scm_revision: Some(commit_sha),
+        visibility: Default::default(),
     };
 
     let pipeline = repo.create(project_id, &create).await?;
@@ -380,6 +382,7 @@ async fn sync_pipeline_from_git(
         scm_path: None,
         scm_credentials_secret_path: None,
         scm_revision: Some(commit_sha),
+        visibility: None,
     };
 
     let pipeline = pipeline_repo.update(id, &update).await?;
@@ -478,6 +481,7 @@ async fn update_pipeline(
         scm_path: req.scm_path,
         scm_credentials_secret_path: req.scm_credentials_secret_path,
         scm_revision: req.scm_revision,
+        visibility: None,
     };
 
     let pipeline = repo.update(id, &update).await?;

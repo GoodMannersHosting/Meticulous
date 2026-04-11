@@ -18,9 +18,10 @@ use crate::error::ResolveError;
 #[must_use]
 pub fn materialization_for_kind(kind: &str) -> i32 {
     match kind {
-        "github_app" => 1, // installation token is always env-inline at job time
+        "github_app" => 1,                      // installation token is always env-inline
         "ssh_private_key" | "x509_bundle" => 2, // WORKSPACE_FILE_PATH
-        _ => 1,            // ENV_INLINE
+        "registry" => 3,                        // REGISTRY_AUTH (ADR-015)
+        _ => 1,                                 // ENV_INLINE
     }
 }
 

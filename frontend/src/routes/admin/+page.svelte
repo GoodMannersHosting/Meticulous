@@ -8,7 +8,8 @@
 		ChevronRight,
 		AppWindow,
 		Shield,
-		Archive
+		Archive,
+		Globe
 	} from 'lucide-svelte';
 
 	interface AdminLink {
@@ -66,6 +67,12 @@
 			description: 'See pipeline jobs that are pending or queued for agents',
 			href: '/admin/job-queue',
 			icon: ListOrdered
+		},
+		{
+			title: 'Platform settings',
+			description: 'Unauthenticated access toggle and platform-wide configuration',
+			href: '/admin/platform-settings',
+			icon: Globe
 		}
 	];
 </script>

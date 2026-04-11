@@ -42,6 +42,14 @@ struct Args {
     )]
     controller_url: String,
 
+    /// NATS URL for this process only (does not rewrite `agent-identity.json`).
+    ///
+    /// Use when the URL saved at enrollment is only resolvable inside Kubernetes (e.g.
+    /// `nats://meticulous-nats...`) but the agent runs elsewhere; set to a reachable host,
+    /// typically the same address as `--controller-url` with port **4222**.
+    #[arg(long, env = "MET_AGENT_NATS_URL", value_name = "URL")]
+    nats_url: Option<String>,
+
     /// Join token for registration
     #[arg(long, env = "MET_JOIN_TOKEN")]
     join_token: Option<String>,
@@ -243,12 +251,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             job_pause_tx,
         );
 
-    // Connect to NATS
+    // Connect to NATS (optional URL override for agents enrolled with in-cluster NATS hostname)
     let require_nats_jwt = std::env::var("MET_AGENT_REQUIRE_NATS_JWT")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let nats_url = identity.nats_url.clone();
-    let nats_client = match connect_nats(&identity).await {
+    let mut nats_connect_identity = identity.clone();
+    if let Some(ref raw) = args.nats_url {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            info!(
+                persisted = %identity.nats_url,
+                using = %trimmed,
+                "NATS URL override active (identity file unchanged; use MET_AGENT_NATS_URL or --nats-url)"
+            );
+            nats_connect_identity.nats_url = trimmed.to_string();
+        }
+    }
+    let nats_url = nats_connect_identity.nats_url.clone();
+    let nats_client = match connect_nats(&nats_connect_identity).await {
         Ok(c) => c,
         Err(e) if require_nats_jwt => {
             error!(

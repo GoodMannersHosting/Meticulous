@@ -5,6 +5,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{GroupId, OrganizationId, ProjectId, UserId};
 
+/// Three-tier visibility for projects and pipelines (ADR-021).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "resource_visibility", rename_all = "snake_case")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceVisibility {
+    /// Visible to anyone (including unauthenticated when globally enabled).
+    Public,
+    /// Visible to any authenticated user in the org.
+    Authenticated,
+    /// Visible only to explicit members.
+    Private,
+}
+
+impl Default for ResourceVisibility {
+    fn default() -> Self {
+        Self::Authenticated
+    }
+}
+
 /// A project contains pipelines, secrets, and variables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
@@ -24,6 +47,8 @@ pub struct Project {
     pub owner_type: OwnerType,
     /// ID of the owner (user or group).
     pub owner_id: String,
+    /// Who may discover and view this project.
+    pub visibility: ResourceVisibility,
     /// When the project was created.
     pub created_at: DateTime<Utc>,
     /// When the project was last updated.
@@ -57,6 +82,7 @@ impl Project {
             description: None,
             owner_type: OwnerType::User,
             owner_id: owner_id.to_string(),
+            visibility: ResourceVisibility::default(),
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -82,6 +108,7 @@ impl Project {
             description: None,
             owner_type: OwnerType::Group,
             owner_id: owner_id.to_string(),
+            visibility: ResourceVisibility::default(),
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -166,6 +193,9 @@ pub struct CreateProject {
     pub owner_type: OwnerType,
     /// Owner ID (user or group).
     pub owner_id: String,
+    /// Visibility tier (defaults to `authenticated`).
+    #[serde(default)]
+    pub visibility: ResourceVisibility,
 }
 
 /// Input for updating a project.
@@ -180,4 +210,39 @@ pub struct UpdateProject {
     /// New description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// New visibility tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ResourceVisibility>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resource_visibility_default_is_authenticated() {
+        assert_eq!(ResourceVisibility::default(), ResourceVisibility::Authenticated);
+    }
+
+    #[test]
+    fn test_resource_visibility_serde_roundtrip() {
+        let cases = [
+            ("\"public\"", ResourceVisibility::Public),
+            ("\"authenticated\"", ResourceVisibility::Authenticated),
+            ("\"private\"", ResourceVisibility::Private),
+        ];
+        for (json, expected) in cases {
+            let deserialized: ResourceVisibility = serde_json::from_str(json).unwrap();
+            assert_eq!(deserialized, expected);
+
+            let serialized = serde_json::to_string(&expected).unwrap();
+            assert_eq!(serialized, json);
+        }
+    }
+
+    #[test]
+    fn test_resource_visibility_rejects_unknown() {
+        let result = serde_json::from_str::<ResourceVisibility>("\"internal\"");
+        assert!(result.is_err());
+    }
 }

@@ -113,6 +113,7 @@
 	let settingsName = $state('');
 	let settingsSlug = $state('');
 	let settingsDescription = $state('');
+	let settingsVisibility = $state<import('$api/types').ResourceVisibility>('authenticated');
 	let settingsSaving = $state(false);
 	let settingsError = $state<string | null>(null);
 
@@ -163,7 +164,8 @@
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
 		{ value: 'github_app', label: 'GitHub App' },
-		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
+		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' },
+		{ value: 'registry', label: 'Container registry' }
 	];
 
 	const tabs = [
@@ -186,6 +188,7 @@
 		settingsName = project.name;
 		settingsSlug = project.slug;
 		settingsDescription = project.description ?? '';
+		settingsVisibility = project.visibility ?? 'authenticated';
 		settingsError = null;
 	});
 
@@ -542,7 +545,8 @@
 			const updated = await apiMethods.projects.update(project.id, {
 				name: settingsName.trim(),
 				slug: settingsSlug.trim(),
-				description: settingsDescription.trim() || null
+				description: settingsDescription.trim() || null,
+				visibility: settingsVisibility
 			});
 			project = updated;
 		} catch (e) {
@@ -887,7 +891,8 @@
 		!!project &&
 			(settingsName.trim() !== project.name ||
 				settingsSlug.trim() !== project.slug ||
-				settingsDescription.trim() !== (project.description ?? '').trim())
+				settingsDescription.trim() !== (project.description ?? '').trim() ||
+				settingsVisibility !== (project.visibility ?? 'authenticated'))
 	);
 
 	const settingsSaveDisabled = $derived(
@@ -1766,6 +1771,20 @@
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
 								placeholder="Optional"
 							></textarea>
+						</div>
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="proj-visibility"
+								>Visibility</label
+							>
+							<select
+								id="proj-visibility"
+								bind:value={settingsVisibility}
+								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+							>
+								<option value="public">Public — visible to anyone (metadata only)</option>
+								<option value="authenticated">Authenticated — all org members</option>
+								<option value="private">Private — explicit members only</option>
+							</select>
 						</div>
 						<div class="flex justify-end">
 							<Button

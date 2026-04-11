@@ -15,6 +15,8 @@ pub enum StoredSecretKind {
     GithubApp,
     ApiKey,
     X509Bundle,
+    /// Authenticated OCI registry credentials (ADR-015).
+    Registry,
 }
 
 impl StoredSecretKind {
@@ -26,6 +28,7 @@ impl StoredSecretKind {
             Self::GithubApp => "github_app",
             Self::ApiKey => "api_key",
             Self::X509Bundle => "x509_bundle",
+            Self::Registry => "registry",
         }
     }
 
@@ -36,6 +39,7 @@ impl StoredSecretKind {
             "github_app" => Ok(Self::GithubApp),
             "api_key" => Ok(Self::ApiKey),
             "x509_bundle" => Ok(Self::X509Bundle),
+            "registry" => Ok(Self::Registry),
             _ => Err(StoreError::validation(format!("unknown secret kind: {s}"))),
         }
     }

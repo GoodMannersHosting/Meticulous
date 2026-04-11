@@ -18,7 +18,10 @@ use crate::ids::{
 )]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionRole {
-    /// Full system access.
+    /// Unrestricted access (break-glass). Use sparingly; audited.
+    SuperAdmin,
+    /// Org-wide metadata and permission management. Cannot read pipeline
+    /// definitions, run logs, secret values, or artifact content.
     Admin,
     /// Read-only access to all resources and audit logs.
     Auditor,
@@ -35,12 +38,31 @@ impl PermissionRole {
     #[must_use]
     pub fn permissions(&self) -> Vec<&'static str> {
         match self {
-            Self::Admin => vec!["*"],
+            Self::SuperAdmin => vec!["*"],
+            Self::Admin => vec![
+                "admin:metadata",
+                "admin:permissions",
+                "user:read",
+                "user:write",
+                "audit:read",
+            ],
             Self::Auditor => vec!["read:*", "audit:read"],
             Self::SecurityLead => vec!["user:read", "user:write", "token:revoke", "audit:read"],
             Self::SecurityAuditor => vec!["security:blast-radius:org", "read:*"],
             Self::User => vec!["pipeline:read", "run:read", "run:write", "agent:read"],
         }
+    }
+
+    /// Whether this role grants unrestricted access (break-glass).
+    #[must_use]
+    pub fn is_super_admin(self) -> bool {
+        matches!(self, Self::SuperAdmin)
+    }
+
+    /// Whether this role is a platform admin (metadata-only, no content access).
+    #[must_use]
+    pub fn is_platform_admin(self) -> bool {
+        matches!(self, Self::Admin)
     }
 }
 
@@ -252,6 +274,43 @@ pub struct OidcGroupMapping {
     pub role: GroupRole,
     /// When the mapping was created.
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_super_admin_permissions_contain_wildcard() {
+        assert!(PermissionRole::SuperAdmin.permissions().contains(&"*"));
+    }
+
+    #[test]
+    fn test_super_admin_is_super_admin() {
+        assert!(PermissionRole::SuperAdmin.is_super_admin());
+    }
+
+    #[test]
+    fn test_admin_is_not_super_admin() {
+        assert!(!PermissionRole::Admin.is_super_admin());
+    }
+
+    #[test]
+    fn test_admin_is_platform_admin() {
+        assert!(PermissionRole::Admin.is_platform_admin());
+    }
+
+    #[test]
+    fn test_super_admin_is_not_platform_admin() {
+        assert!(!PermissionRole::SuperAdmin.is_platform_admin());
+    }
+
+    #[test]
+    fn test_admin_permissions_do_not_contain_wildcard() {
+        let perms = PermissionRole::Admin.permissions();
+        assert!(!perms.contains(&"*"));
+        assert!(perms.contains(&"admin:metadata"));
+    }
 }
 
 /// Input for creating an OIDC group mapping.

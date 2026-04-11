@@ -22,7 +22,7 @@ Non-functional requirements and boundaries that shape implementation. Security a
 
 ## Compatibility and scope
 
-- **Not a drop-in GitHub Actions clone** — Workflow syntax and actions marketplace parity are non-goals; **migration aids** may map common patterns over time.
+- **Not a drop-in GitHub Actions clone** — Workflow syntax and actions catalog parity are non-goals; **migration aids** may map common patterns over time.
 - **Language stack** — Core services in Rust (Tokio, Axum, sqlx, tonic); web UI SvelteKit/Svelte 5; protobuf for gRPC contracts.
 
 ## Explicit deferrals

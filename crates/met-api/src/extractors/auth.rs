@@ -1,8 +1,9 @@
 //! Authentication extractor for JWT and API token validation.
 //!
-//! Supports two authentication schemes:
-//! - `Authorization: Bearer <jwt>` - JWT tokens for user sessions
-//! - `Authorization: Token met_<token>` - API tokens for programmatic access
+//! Supports three authentication formats:
+//! - `Authorization: Bearer <jwt>` — JWT tokens for user sessions
+//! - `Authorization: Bearer met_<token>` — API tokens via Bearer (CI/SDK compat)
+//! - `Authorization: Token met_<token>` — API tokens via custom scheme
 
 use crate::auth::{ApiTokenValidator, JwtValidator};
 use crate::error::ApiError;
@@ -118,8 +119,20 @@ where
         let method = parts.method.clone();
         let path = parts.uri.path().to_string();
 
-        // Try Bearer token (JWT) first
+        // Try Bearer token: JWT first, then API token (met_...) for service
+        // accounts and CI tools that only support the Bearer scheme.
         if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            if token.starts_with("met_") {
+                let validator = ApiTokenValidator::new(app_state.db());
+                let user = validator
+                    .validate(token)
+                    .await
+                    .map_err(|e| ApiError::unauthorized(e.to_string()))?;
+                let user =
+                    finalize_authenticated_user(&app_state, user, &method, &path).await?;
+                return Ok(Auth(user));
+            }
+
             let validator = JwtValidator::new(&app_state.config.jwt);
             let user = validator
                 .validate(token)
@@ -129,7 +142,7 @@ where
             return Ok(Auth(user));
         }
 
-        // Try API token
+        // Try API token with custom Token scheme
         if let Some(token) = auth_header.strip_prefix("Token ") {
             let validator = ApiTokenValidator::new(app_state.db());
             let user = validator
@@ -141,7 +154,7 @@ where
         }
 
         Err(ApiError::unauthorized(
-            "invalid authorization header format, expected 'Bearer <jwt>' or 'Token met_<token>'",
+            "invalid authorization header format, expected 'Bearer <jwt-or-met-token>' or 'Token met_<token>'",
         ))
     }
 }
@@ -321,5 +334,75 @@ mod tests {
         assert!(restricted.can_access_project(project1));
         assert!(restricted.can_access_project(project2));
         assert!(!restricted.can_access_project(project3));
+    }
+
+    #[test]
+    fn test_is_api_token_flag() {
+        let jwt_user = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "jwt@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: false,
+            project_ids: None,
+            pipeline_ids: None,
+            password_must_change: false,
+            api_token_id: None,
+        };
+        assert!(!jwt_user.is_api_token);
+
+        let token_user = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "token@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: true,
+            project_ids: None,
+            pipeline_ids: None,
+            password_must_change: false,
+            api_token_id: None,
+        };
+        assert!(token_user.is_api_token);
+    }
+
+    #[test]
+    fn test_pipeline_access_scope() {
+        let project_id = ProjectId::new();
+        let pipeline1 = PipelineId::new();
+        let pipeline2 = PipelineId::new();
+
+        let scoped = CurrentUser {
+            user_id: UserId::new(),
+            org_id: OrganizationId::new(),
+            email: "ci@example.com".to_string(),
+            name: None,
+            permissions: HashSet::new(),
+            is_api_token: true,
+            project_ids: Some(vec![project_id]),
+            pipeline_ids: Some(vec![pipeline1]),
+            password_must_change: false,
+            api_token_id: None,
+        };
+        assert!(scoped.can_access_pipeline(pipeline1, project_id));
+        assert!(!scoped.can_access_pipeline(pipeline2, project_id));
+
+        let other_project = ProjectId::new();
+        assert!(!scoped.can_access_pipeline(pipeline1, other_project));
+    }
+
+    #[test]
+    fn test_is_password_change_exempt_allowed_routes() {
+        assert!(is_password_change_exempt(&Method::GET, "/auth/me"));
+        assert!(is_password_change_exempt(&Method::POST, "/auth/logout"));
+        assert!(is_password_change_exempt(&Method::POST, "/auth/change-password"));
+    }
+
+    #[test]
+    fn test_is_password_change_exempt_blocked_routes() {
+        assert!(!is_password_change_exempt(&Method::GET, "/projects"));
+        assert!(!is_password_change_exempt(&Method::POST, "/pipelines"));
+        assert!(!is_password_change_exempt(&Method::GET, "/auth/change-password"));
     }
 }

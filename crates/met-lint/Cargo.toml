@@ -1,0 +1,15 @@
+[package]
+name = "met-lint"
+description = "Deterministic pipeline linter for Meticulous CI/CD (ADR-009)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+met-parser = { path = "../met-parser" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

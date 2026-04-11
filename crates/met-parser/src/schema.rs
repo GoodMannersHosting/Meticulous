@@ -167,6 +167,18 @@ pub struct RawSecretRef {
     /// Platform-stored secret (preferred over `builtin`).
     #[serde(default)]
     pub stored: Option<RawStoredSecretRef>,
+    /// GCP Secret Manager reference (ADR-020).
+    #[serde(default)]
+    pub gcp: Option<RawGcpSecretRef>,
+    /// Azure Key Vault reference (ADR-020).
+    #[serde(default)]
+    pub azure: Option<RawAzureSecretRef>,
+    /// Kubernetes secret reference (ADR-020).
+    #[serde(default)]
+    pub kubernetes: Option<RawKubernetesSecretRef>,
+    /// Resolution mode override: `"local"` or `"remote"` (ADR-020).
+    #[serde(default)]
+    pub resolution: Option<String>,
 }
 
 /// Platform-stored secret reference.
@@ -203,6 +215,44 @@ pub struct RawVaultSecretRef {
 pub struct RawBuiltinSecretRef {
     /// Secret name.
     pub name: String,
+}
+
+/// GCP Secret Manager reference (ADR-020).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RawGcpSecretRef {
+    /// Secret name in GCP.
+    pub name: String,
+    /// GCP project ID (optional; uses provider config default).
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Secret version (optional; defaults to `"latest"`).
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// Azure Key Vault reference (ADR-020).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RawAzureSecretRef {
+    /// Secret name in the vault.
+    pub name: String,
+    /// Vault URL (optional; uses provider config default).
+    #[serde(default)]
+    pub vault_url: Option<String>,
+    /// Secret version (optional; defaults to latest).
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// Kubernetes secret reference (ADR-020).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RawKubernetesSecretRef {
+    /// Secret name.
+    pub name: String,
+    /// Key within the secret data map.
+    pub key: String,
+    /// Namespace (optional; defaults to provider config).
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 /// Workflow invocation in a pipeline.
@@ -249,6 +299,25 @@ pub struct RawWorkflowInvocation {
     /// Same-agent affinity group (overrides pipeline `agent-affinity.default-group` when set).
     #[serde(default)]
     pub affinity_group: Option<String>,
+
+    /// Target deployment environment (ADR-016).
+    #[serde(default)]
+    pub environment: Option<String>,
+
+    /// Workspace snapshot transfer (ADR-014).
+    #[serde(default)]
+    pub workspace: Option<RawWorkspaceTransfer>,
+}
+
+/// Workspace snapshot transfer between workflow invocations (ADR-014).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawWorkspaceTransfer {
+    /// Invocation ID to restore workspace from.
+    pub from: String,
+    /// Paths to archive after this invocation completes.
+    #[serde(default)]
+    pub outputs: Vec<String>,
 }
 
 /// Retry policy configuration.
@@ -352,6 +421,23 @@ pub struct RawOutputDef {
     pub secret: bool,
 }
 
+/// OCI container environment for a job (ADR-015).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawEnvironment {
+    /// Fully-qualified image reference (should include `@sha256:` digest).
+    pub image: String,
+    /// Signature verification method: `"cosign"` or `"none"` (default).
+    #[serde(default)]
+    pub verify: Option<String>,
+    /// Registry credential reference (must be a `stored:` secret).
+    #[serde(default)]
+    pub credentials: Option<RawStoredSecretRef>,
+    /// Pull policy: `"always"`, `"if-not-present"`, or `"never"`.
+    #[serde(default)]
+    pub pull_policy: Option<String>,
+}
+
 /// Job definition within a workflow.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -365,6 +451,10 @@ pub struct RawJob {
     /// Pool selector override.
     #[serde(default)]
     pub runs_on: Option<RawPoolSelector>,
+
+    /// OCI container environment (ADR-015).
+    #[serde(default)]
+    pub environment: Option<RawEnvironment>,
 
     /// Steps to execute.
     #[serde(default)]

@@ -126,6 +126,7 @@ export interface CatalogUpstreamRefSearchResponse {
 
 // Project Types
 export type OwnerType = 'user' | 'group';
+export type ResourceVisibility = 'public' | 'authenticated' | 'private';
 
 export interface Project {
 	id: string;
@@ -135,6 +136,7 @@ export interface Project {
 	description?: string;
 	owner_type: OwnerType;
 	owner_id: string;
+	visibility: ResourceVisibility;
 	created_at: string;
 	updated_at: string;
 }
@@ -145,6 +147,7 @@ export interface CreateProjectInput {
 	description?: string;
 	owner_type: OwnerType;
 	owner_id: string;
+	visibility?: ResourceVisibility;
 }
 
 /** PATCH /api/v1/projects/{id} */
@@ -152,6 +155,29 @@ export interface UpdateProjectInput {
 	name?: string;
 	slug?: string;
 	description?: string | null;
+	visibility?: ResourceVisibility;
+}
+
+/** Member of a project or pipeline. */
+export interface Member {
+	id: string;
+	principal_type: 'user' | 'group';
+	principal_id: string;
+	role: 'admin' | 'developer' | 'readonly';
+	inherited?: boolean;
+	display_name?: string;
+	created_at: string;
+}
+
+export interface AddMemberInput {
+	principal_type: 'user' | 'group';
+	principal_id: string;
+	role: 'admin' | 'developer' | 'readonly';
+}
+
+/** Platform-wide settings (super_admin only). */
+export interface PlatformSettings {
+	allow_unauthenticated_access: boolean;
 }
 
 /** GET /api/v1/projects/{id}/workflows/available */
@@ -191,6 +217,9 @@ export interface Pipeline {
 	scm_path?: string | null;
 	scm_credentials_secret_path?: string | null;
 	scm_revision?: string | null;
+	owner_type: OwnerType;
+	owner_id: string;
+	visibility: ResourceVisibility;
 	enabled: boolean;
 	created_at: string;
 	updated_at: string;

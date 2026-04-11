@@ -2,7 +2,7 @@
 
 use chrono::{Duration, Utc};
 use met_core::ids::{OrganizationId, ProjectId, UserId};
-use met_core::models::{CreateProject, OwnerType, Project, UpdateProject};
+use met_core::models::{CreateProject, OwnerType, Project, ResourceVisibility, UpdateProject};
 use sqlx::PgPool;
 
 use crate::error::{Result, StoreError};
@@ -20,15 +20,18 @@ impl<'a> ProjectRepo<'a> {
     }
 
     /// Create a new project.
+    ///
+    /// The owner is automatically inserted as an `admin` project member.
     pub async fn create(&self, org_id: OrganizationId, input: &CreateProject) -> Result<Project> {
         let id = ProjectId::new();
         let now = Utc::now();
 
         let project = sqlx::query_as::<_, Project>(
             r#"
-            INSERT INTO projects (id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            INSERT INTO projects (id, org_id, name, slug, description, owner_type, owner_id, visibility, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -38,8 +41,29 @@ impl<'a> ProjectRepo<'a> {
         .bind(&input.description)
         .bind(&input.owner_type)
         .bind(&input.owner_id)
+        .bind(&input.visibility)
         .bind(now)
         .fetch_one(self.pool)
+        .await?;
+
+        let principal_type = match input.owner_type {
+            OwnerType::User => "user",
+            OwnerType::Group => "group",
+        };
+        let owner_uuid: uuid::Uuid = input.owner_id.parse().map_err(|_| {
+            StoreError::validation("owner_id must be a valid UUID")
+        })?;
+        sqlx::query(
+            r#"
+            INSERT INTO project_members (project_id, principal_type, principal_id, role)
+            VALUES ($1, $2::project_principal_type, $3, 'admin'::project_role)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(principal_type)
+        .bind(owner_uuid)
+        .execute(self.pool)
         .await?;
 
         Ok(project)
@@ -49,7 +73,8 @@ impl<'a> ProjectRepo<'a> {
     pub async fn get(&self, id: ProjectId) -> Result<Project> {
         sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -64,7 +89,8 @@ impl<'a> ProjectRepo<'a> {
     pub async fn get_including_deleted(&self, id: ProjectId) -> Result<Project> {
         sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE id = $1
             "#,
@@ -79,7 +105,8 @@ impl<'a> ProjectRepo<'a> {
     pub async fn get_by_slug(&self, org_id: OrganizationId, slug: &str) -> Result<Project> {
         sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL
             "#,
@@ -100,7 +127,8 @@ impl<'a> ProjectRepo<'a> {
     ) -> Result<Vec<Project>> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE org_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
             ORDER BY created_at DESC
@@ -116,10 +144,11 @@ impl<'a> ProjectRepo<'a> {
         Ok(projects)
     }
 
-    /// Projects visible to a user when [`project_members`](crate::repos::project_members) restricts access.
+    /// Projects visible to a user, respecting both visibility and membership.
     ///
-    /// If a project has **no** `project_members` rows, every org member keeps legacy Developer-level visibility.
-    /// If it has rows, only principals listed there may see the project.
+    /// `public` and `authenticated` projects are visible to all authenticated org members.
+    /// `private` projects require explicit membership. Legacy projects with no
+    /// `project_members` rows remain visible to everyone.
     pub async fn list_by_org_for_user(
         &self,
         org_id: OrganizationId,
@@ -130,13 +159,15 @@ impl<'a> ProjectRepo<'a> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
             SELECT p.id, p.org_id, p.name, p.slug, p.description, p.owner_type, p.owner_id,
-                   p.created_at, p.updated_at, p.deleted_at, p.archived_at, p.scheduled_deletion_at
+                   p.visibility, p.created_at, p.updated_at, p.deleted_at, p.archived_at,
+                   p.scheduled_deletion_at
             FROM projects p
             WHERE p.org_id = $1
               AND p.deleted_at IS NULL
               AND p.archived_at IS NULL
               AND (
-                NOT EXISTS (
+                p.visibility IN ('public', 'authenticated')
+                OR NOT EXISTS (
                   SELECT 1 FROM project_members pm
                   WHERE pm.project_id = p.id
                 )
@@ -178,7 +209,8 @@ impl<'a> ProjectRepo<'a> {
     ) -> Result<Vec<Project>> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE org_id = $1 AND archived_at IS NOT NULL AND deleted_at IS NULL
             ORDER BY archived_at DESC
@@ -198,7 +230,8 @@ impl<'a> ProjectRepo<'a> {
     pub async fn list_pending_deletion(&self, limit: i64) -> Result<Vec<Project>> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             FROM projects
             WHERE scheduled_deletion_at IS NOT NULL AND scheduled_deletion_at <= NOW() AND deleted_at IS NULL
             ORDER BY scheduled_deletion_at ASC
@@ -255,18 +288,22 @@ impl<'a> ProjectRepo<'a> {
             }
         };
 
+        let visibility = input.visibility.unwrap_or(existing.visibility);
+
         let project = sqlx::query_as::<_, Project>(
             r#"
             UPDATE projects
-            SET name = $2, slug = $3, description = $4, updated_at = NOW()
+            SET name = $2, slug = $3, description = $4, visibility = $5, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(name)
         .bind(&slug)
         .bind(description)
+        .bind(visibility)
         .fetch_one(self.pool)
         .await?;
 
@@ -280,7 +317,8 @@ impl<'a> ProjectRepo<'a> {
             UPDATE projects
             SET archived_at = NOW(), updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -298,7 +336,8 @@ impl<'a> ProjectRepo<'a> {
             UPDATE projects
             SET archived_at = NULL, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NOT NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -318,7 +357,8 @@ impl<'a> ProjectRepo<'a> {
             UPDATE projects
             SET scheduled_deletion_at = $2, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -337,7 +377,8 @@ impl<'a> ProjectRepo<'a> {
             UPDATE projects
             SET scheduled_deletion_at = NULL, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND scheduled_deletion_at IS NOT NULL
-            RETURNING id, org_id, name, slug, description, owner_type, owner_id, created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+            RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
             "#,
         )
         .bind(id.as_uuid())
@@ -404,7 +445,7 @@ impl<'a> ProjectRepo<'a> {
     }
 }
 
-// Suppress unused warning for OwnerType which is used in the query binding
+// Suppress unused warnings for types used only in query bindings.
 const _: () = {
-    fn _assert_owner_type_used(_: OwnerType) {}
+    fn _assert_types_used(_: OwnerType, _: ResourceVisibility) {}
 };

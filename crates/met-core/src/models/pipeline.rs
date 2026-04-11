@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::ids::{PipelineId, ProjectId};
+use super::project::{OwnerType, ResourceVisibility};
 
 /// A pipeline defines a CI/CD workflow with jobs and steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +46,12 @@ pub struct Pipeline {
     /// Commit SHA of the definition blob last fetched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scm_revision: Option<String>,
+    /// Type of entity that owns this pipeline.
+    pub owner_type: OwnerType,
+    /// ID of the pipeline owner.
+    pub owner_id: String,
+    /// Who may discover and view this pipeline.
+    pub visibility: ResourceVisibility,
     /// Whether the pipeline is enabled.
     pub enabled: bool,
     /// When the pipeline was archived (soft).
@@ -80,6 +87,9 @@ impl Pipeline {
             scm_path: None,
             scm_credentials_secret_path: None,
             scm_revision: None,
+            owner_type: OwnerType::User,
+            owner_id: String::new(),
+            visibility: ResourceVisibility::default(),
             enabled: true,
             archived_at: None,
             created_at: now,
@@ -115,6 +125,9 @@ pub struct CreatePipeline {
     pub scm_credentials_secret_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scm_revision: Option<String>,
+    /// Visibility tier (defaults to `authenticated`).
+    #[serde(default)]
+    pub visibility: ResourceVisibility,
 }
 
 /// Input for updating a pipeline.
@@ -144,4 +157,20 @@ pub struct UpdatePipeline {
     pub scm_credentials_secret_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scm_revision: Option<String>,
+    /// New visibility tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ResourceVisibility>,
+}
+
+/// A member of a pipeline (direct or inherited from project).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct PipelineMember {
+    pub id: uuid::Uuid,
+    pub pipeline_id: PipelineId,
+    pub principal_type: String,
+    pub principal_id: uuid::Uuid,
+    pub role: String,
+    pub inherited: bool,
+    pub created_at: DateTime<Utc>,
 }

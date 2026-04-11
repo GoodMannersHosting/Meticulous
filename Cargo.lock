@@ -3538,6 +3538,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "met-lint"
+version = "0.1.0"
+dependencies = [
+ "met-parser",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "met-logging"
 version = "0.1.0"
 dependencies = [

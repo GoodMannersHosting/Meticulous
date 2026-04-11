@@ -20,6 +20,8 @@ impl<'a> PipelineRepo<'a> {
     }
 
     /// Create a new pipeline.
+    ///
+    /// The project's owner is inherited and inserted as an `admin` pipeline member.
     pub async fn create(&self, project_id: ProjectId, input: &CreatePipeline) -> Result<Pipeline> {
         let id = PipelineId::new();
         let now = Utc::now();
@@ -29,12 +31,12 @@ impl<'a> PipelineRepo<'a> {
             INSERT INTO pipelines (
                 id, project_id, name, slug, description, definition, definition_path,
                 scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                enabled, archived_at, created_at, updated_at
+                visibility, enabled, archived_at, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, NULL, $14, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, NULL, $15, $15)
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, archived_at, created_at, updated_at
+                      owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -50,6 +52,7 @@ impl<'a> PipelineRepo<'a> {
         .bind(&input.scm_path)
         .bind(&input.scm_credentials_secret_path)
         .bind(&input.scm_revision)
+        .bind(&input.visibility)
         .bind(now)
         .fetch_one(self.pool)
         .await?;
@@ -63,7 +66,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, archived_at, created_at, updated_at
+                   owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             FROM pipelines
             WHERE id = $1
             "#,
@@ -80,7 +83,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, archived_at, created_at, updated_at
+                   owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             FROM pipelines
             WHERE project_id = $1 AND slug = $2
             "#,
@@ -103,7 +106,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT id, project_id, name, slug, description, definition, definition_path,
                    scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                   enabled, archived_at, created_at, updated_at
+                   owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             FROM pipelines
             WHERE project_id = $1 AND archived_at IS NULL
             ORDER BY created_at DESC
@@ -163,7 +166,7 @@ impl<'a> PipelineRepo<'a> {
             WHERE id = $1
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, archived_at, created_at, updated_at
+                      owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -259,7 +262,7 @@ impl<'a> PipelineRepo<'a> {
             WHERE id = $1 AND archived_at IS NULL
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, archived_at, created_at, updated_at
+                      owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -276,7 +279,7 @@ impl<'a> PipelineRepo<'a> {
             WHERE id = $1 AND archived_at IS NOT NULL
             RETURNING id, project_id, name, slug, description, definition, definition_path,
                       scm_provider, scm_repository, scm_ref, scm_path, scm_credentials_secret_path, scm_revision,
-                      enabled, archived_at, created_at, updated_at
+                      owner_type, owner_id, visibility, enabled, archived_at, created_at, updated_at
             "#,
         )
         .bind(id.as_uuid())
@@ -291,7 +294,7 @@ impl<'a> PipelineRepo<'a> {
             r#"
             SELECT p.id, p.project_id, p.name, p.slug, p.description, p.definition, p.definition_path,
                    p.scm_provider, p.scm_repository, p.scm_ref, p.scm_path, p.scm_credentials_secret_path, p.scm_revision,
-                   p.enabled, p.archived_at, p.created_at, p.updated_at
+                   p.owner_type, p.owner_id, p.visibility, p.enabled, p.archived_at, p.created_at, p.updated_at
             FROM pipelines p
             INNER JOIN projects pr ON pr.id = p.project_id
             WHERE pr.org_id = $1 AND p.archived_at IS NOT NULL AND pr.deleted_at IS NULL

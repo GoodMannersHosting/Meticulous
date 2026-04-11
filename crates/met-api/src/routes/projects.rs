@@ -175,6 +175,7 @@ async fn create_project(
         description: req.description,
         owner_type: req.owner_type,
         owner_id,
+        visibility: Default::default(),
     };
 
     let project = repo.create(user.org_id, &create).await?;
@@ -293,6 +294,7 @@ async fn update_project(
         name: req.name,
         slug: req.slug,
         description: req.description,
+        visibility: None,
     };
 
     let project = repo.update(id, &update).await?;
