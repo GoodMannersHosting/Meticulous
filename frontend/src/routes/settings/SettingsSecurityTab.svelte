@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { Button, Card, Input, Badge, Dialog, Alert, CopyButton } from '$components/ui';
+	import { Button, Card, Badge, Dialog, Alert } from '$components/ui';
 	import { Skeleton, EmptyState } from '$components/data';
 	import { Key, Plus, Trash2, Shield, Ban, RotateCcw } from 'lucide-svelte';
-	import { api, apiMethods } from '$lib/api';
+	import { api } from '$lib/api';
 	import { auth } from '$stores';
-	import type { Project } from '$api/types';
 
 	interface ApiToken {
 		id: string;
@@ -24,72 +23,20 @@
 	let tokens = $state<ApiToken[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let showCreateDialog = $state(false);
-	let showNewTokenDialog = $state(false);
 	let showDeleteDialog = $state(false);
 	let tokenToDelete = $state<ApiToken | null>(null);
 	let deleting = $state(false);
 	let actionTokenId = $state<string | null>(null);
-	let newTokenValue = $state<string | null>(null);
-	let creating = $state(false);
 
-	let newToken = $state({
-		name: '',
-		description: '',
-		scopes: ['read'] as string[],
-		expiresIn: '90',
-		scopeProjects: false,
-		selectedProjectIds: [] as string[],
-		pipelineIdsText: ''
-	});
-
-	let scopeProjectsCatalog = $state<Project[]>([]);
-	let scopeProjectsLoading = $state(false);
-
-	const scopeOptions = [
-		{ value: 'read', label: 'Read', description: 'Read access to resources' },
-		{ value: 'write', label: 'Write', description: 'Write access to resources' },
-		{ value: 'admin', label: 'Admin', description: 'Full administrative access' }
-	];
-
-	const expirationOptions = [
-		{ value: '30', label: '30 days' },
-		{ value: '90', label: '90 days' },
-		{ value: '365', label: '1 year' },
-		{ value: 'never', label: 'Never' }
-	];
+	const createTokenHref = '/settings/api-token/new';
 
 	$effect(() => {
 		loadTokens();
 	});
 
-	$effect(() => {
-		if (!showCreateDialog) return;
-		scopeProjectsLoading = true;
-		void (async () => {
-			try {
-				const res = await apiMethods.projects.list({ per_page: 200 });
-				scopeProjectsCatalog = res.data ?? [];
-			} catch {
-				scopeProjectsCatalog = [];
-			} finally {
-				scopeProjectsLoading = false;
-			}
-		})();
-	});
-
-	function parseIdList(raw: string): string[] {
-		return raw
-			.split(/[\s,]+/)
-			.map((s) => s.trim())
-			.filter(Boolean);
-	}
-
-	function toggleProjectForScope(projectId: string) {
-		const set = new Set(newToken.selectedProjectIds);
-		if (set.has(projectId)) set.delete(projectId);
-		else set.add(projectId);
-		newToken.selectedProjectIds = [...set];
+	function formatScopeLabel(scope: string): string {
+		if (scope === 'write') return 'Operator';
+		return scope.charAt(0).toUpperCase() + scope.slice(1);
 	}
 
 	async function loadTokens() {
@@ -111,56 +58,6 @@
 		if (t.expires_at && new Date(t.expires_at) < new Date()) return 'expired';
 		if (t.deactivated_at) return 'deactivated';
 		return 'active';
-	}
-
-	async function createToken() {
-		if (!newToken.name.trim()) return;
-		if (newToken.scopeProjects && newToken.selectedProjectIds.length === 0) {
-			error = 'Select at least one project, or turn off “Limit to specific projects”.';
-			return;
-		}
-
-		creating = true;
-		error = null;
-		try {
-			const expiresInDays = newToken.expiresIn === 'never' ? null : parseInt(newToken.expiresIn, 10);
-			const description = newToken.description.trim() || undefined;
-
-			const project_ids =
-				newToken.scopeProjects && newToken.selectedProjectIds.length > 0
-					? newToken.selectedProjectIds
-					: undefined;
-			const pipeline_ids_raw = parseIdList(newToken.pipelineIdsText);
-			const pipeline_ids = pipeline_ids_raw.length > 0 ? pipeline_ids_raw : undefined;
-
-			const response = await api.post<{ token: ApiToken; plain_token: string }>('/api/v1/tokens', {
-				name: newToken.name.trim(),
-				description,
-				scopes: newToken.scopes,
-				expires_in_days: expiresInDays,
-				...(project_ids ? { project_ids } : {}),
-				...(pipeline_ids ? { pipeline_ids } : {})
-			});
-
-			showCreateDialog = false;
-			newTokenValue = response.plain_token;
-			showNewTokenDialog = true;
-			tokens = [response.token, ...tokens];
-			newToken = {
-				name: '',
-				description: '',
-				scopes: ['read'],
-				expiresIn: '90',
-				scopeProjects: false,
-				selectedProjectIds: [],
-				pipelineIdsText: ''
-			};
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to create token';
-			console.error('Failed to create token:', e);
-		} finally {
-			creating = false;
-		}
 	}
 
 	async function deactivateToken(t: ApiToken) {
@@ -233,25 +130,13 @@
 			day: 'numeric'
 		});
 	}
-
-	function toggleScope(scope: string) {
-		if (newToken.scopes.includes(scope)) {
-			newToken.scopes = newToken.scopes.filter((s) => s !== scope);
-		} else {
-			newToken.scopes = [...newToken.scopes, scope];
-		}
-	}
 </script>
-
-<svelte:head>
-	<title>Security | Meticulous</title>
-</svelte:head>
 
 <div class="space-y-6">
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
-			<h1 class="text-2xl font-bold text-[var(--text-primary)]">Security</h1>
-			<p class="mt-1 text-[var(--text-secondary)]">
+			<h3 class="text-lg font-medium text-[var(--text-primary)]">Security</h3>
+			<p class="mt-1 text-sm text-[var(--text-secondary)]">
 				Manage API tokens. At most two may be active at once. Deactivate a token before deleting it.
 			</p>
 			{#if auth.user?.role === 'admin'}
@@ -263,7 +148,7 @@
 			{/if}
 		</div>
 
-		<Button variant="primary" onclick={() => (showCreateDialog = true)}>
+		<Button variant="primary" href={createTokenHref}>
 			<Plus class="h-4 w-4" />
 			New API Token
 		</Button>
@@ -307,7 +192,7 @@
 				title="No API tokens"
 				description="Create an API token to authenticate with the Meticulous API."
 			>
-				<Button variant="primary" onclick={() => (showCreateDialog = true)}>
+				<Button variant="primary" href={createTokenHref}>
 					<Plus class="h-4 w-4" />
 					Create Token
 				</Button>
@@ -336,7 +221,7 @@
 							{/if}
 							<div class="mt-1 flex flex-wrap gap-1">
 								{#each token.scopes as scope (scope)}
-									<Badge variant="outline" size="sm">{scope}</Badge>
+									<Badge variant="outline" size="sm">{formatScopeLabel(scope)}</Badge>
 								{/each}
 							</div>
 							{#if token.project_ids && token.project_ids.length > 0}
@@ -480,170 +365,6 @@
 		</div>
 	</Card>
 </div>
-
-<Dialog bind:open={showCreateDialog} title="Create API Token">
-	<form
-		onsubmit={(e) => {
-			e.preventDefault();
-			createToken();
-		}}
-		class="space-y-4"
-	>
-		<div>
-			<label for="token-name" class="block text-sm font-medium text-[var(--text-primary)]">
-				Token Name
-			</label>
-			<Input id="token-name" placeholder="e.g., CI/CD Token" bind:value={newToken.name} class="mt-1" required />
-		</div>
-
-		<div>
-			<label for="token-description" class="block text-sm font-medium text-[var(--text-primary)]">
-				Description
-				<span class="font-normal text-[var(--text-tertiary)]">(optional)</span>
-			</label>
-			<Input
-				id="token-description"
-				placeholder="e.g., Used by GitHub Actions to deploy staging"
-				bind:value={newToken.description}
-				class="mt-1"
-			/>
-		</div>
-
-		<div>
-			<span class="block text-sm font-medium text-[var(--text-primary)]">Scopes</span>
-			<div class="mt-2 space-y-2">
-				{#each scopeOptions as option (option.value)}
-					<label class="flex items-center gap-3 rounded-lg border border-[var(--border-primary)] p-3">
-						<input
-							type="checkbox"
-							checked={newToken.scopes.includes(option.value)}
-							onchange={() => toggleScope(option.value)}
-							class="h-4 w-4 rounded border-secondary-300"
-						/>
-						<div>
-							<p class="font-medium text-[var(--text-primary)]">{option.label}</p>
-							<p class="text-sm text-[var(--text-secondary)]">{option.description}</p>
-						</div>
-					</label>
-				{/each}
-			</div>
-		</div>
-
-		<div class="rounded-lg border border-[var(--border-primary)] p-3 space-y-3">
-			<label class="flex items-start gap-3">
-				<input
-					type="checkbox"
-					class="mt-1 h-4 w-4 rounded border-secondary-300"
-					bind:checked={newToken.scopeProjects}
-				/>
-				<span>
-					<span class="block text-sm font-medium text-[var(--text-primary)]">Limit to specific projects</span>
-					<span class="block text-sm text-[var(--text-secondary)]">
-						Leave off for access to all projects you can use. Turn on to choose one or more projects.
-					</span>
-				</span>
-			</label>
-			{#if newToken.scopeProjects}
-				{#if scopeProjectsLoading}
-					<p class="text-sm text-[var(--text-tertiary)]">Loading projects…</p>
-				{:else if scopeProjectsCatalog.length === 0}
-					<p class="text-sm text-[var(--text-tertiary)]">No projects available.</p>
-				{:else}
-					<div class="max-h-40 space-y-2 overflow-y-auto rounded-md border border-[var(--border-secondary)] p-2">
-						{#each scopeProjectsCatalog as p (p.id)}
-							<label class="flex items-center gap-2 text-sm">
-								<input
-									type="checkbox"
-									class="h-4 w-4 rounded border-secondary-300"
-									checked={newToken.selectedProjectIds.includes(p.id)}
-									onchange={() => toggleProjectForScope(p.id)}
-								/>
-								<span class="text-[var(--text-primary)]">{p.name}</span>
-							</label>
-						{/each}
-					</div>
-				{/if}
-			{/if}
-		</div>
-
-		<div>
-			<label for="pipeline-scope" class="block text-sm font-medium text-[var(--text-primary)]">
-				Pipeline IDs
-				<span class="font-normal text-[var(--text-tertiary)]">(optional)</span>
-			</label>
-			<p class="mt-1 text-xs text-[var(--text-secondary)]">
-				Further restrict this token to one or more pipelines (UUIDs, comma or space separated). Empty means all
-				pipelines in the projects above—or all projects if none are selected.
-			</p>
-			<textarea
-				id="pipeline-scope"
-				rows="2"
-				bind:value={newToken.pipelineIdsText}
-				placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
-				class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
-			></textarea>
-		</div>
-
-		<div>
-			<label for="expiration" class="block text-sm font-medium text-[var(--text-primary)]">
-				Expiration
-			</label>
-			<select
-				id="expiration"
-				bind:value={newToken.expiresIn}
-				class="
-					mt-1 w-full rounded-lg border border-[var(--border-primary)]
-					bg-[var(--bg-secondary)] px-3 py-2 text-sm
-					focus:outline-none focus:ring-2 focus:ring-primary-500
-				"
-			>
-				{#each expirationOptions as option (option.value)}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
-		</div>
-
-		<div class="flex justify-end gap-3 pt-4">
-			<Button variant="outline" onclick={() => (showCreateDialog = false)} disabled={creating}>
-				Cancel
-			</Button>
-			<Button
-				variant="primary"
-				type="submit"
-				disabled={!newToken.name || newToken.scopes.length === 0 || creating}
-			>
-				{creating ? 'Creating...' : 'Create Token'}
-			</Button>
-		</div>
-	</form>
-</Dialog>
-
-<Dialog bind:open={showNewTokenDialog} title="Token Created">
-	<div class="space-y-4">
-		<Alert variant="warning" title="Copy your token now">
-			This is the only time you'll see this token. Make sure to save it somewhere safe.
-		</Alert>
-
-		{#if newTokenValue}
-			<div class="flex items-center gap-2 rounded-lg bg-[var(--bg-tertiary)] p-3">
-				<code class="flex-1 break-all font-mono text-sm">{newTokenValue}</code>
-				<CopyButton text={newTokenValue} />
-			</div>
-		{/if}
-
-		<div class="flex justify-end">
-			<Button
-				variant="primary"
-				onclick={() => {
-					showNewTokenDialog = false;
-					newTokenValue = null;
-				}}
-			>
-				Done
-			</Button>
-		</div>
-	</div>
-</Dialog>
 
 <Dialog bind:open={showDeleteDialog} title="Delete API Token">
 	<div class="space-y-4">

@@ -128,7 +128,7 @@
 								text-[var(--text-primary)] outline-none
 								data-[highlighted]:bg-[var(--bg-hover)]
 							"
-							onclick={() => goto('/settings/security')}
+							onclick={() => goto('/settings?tab=security')}
 						>
 							<Shield class="h-4 w-4 text-[var(--text-secondary)]" />
 							Security

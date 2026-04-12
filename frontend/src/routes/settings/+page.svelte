@@ -1,14 +1,35 @@
 <script lang="ts">
+	import { get } from 'svelte/store';
+	import { page } from '$app/stores';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { Button, Card, Input, Tabs, Alert, Badge, Avatar } from '$components/ui';
 	import { auth, theme } from '$stores';
-	import { User, Bell, Palette, Camera, Users } from 'lucide-svelte';
+	import { User, Bell, Palette, Camera, Users, Shield } from 'lucide-svelte';
+	import SettingsSecurityTab from './SettingsSecurityTab.svelte';
 
-	let activeTab = $state('profile');
+	const VALID_TABS = new Set(['profile', 'security', 'notifications', 'appearance']);
+
+	function tabFromUrl(url: URL): string {
+		const t = url.searchParams.get('tab');
+		return t && VALID_TABS.has(t) ? t : 'profile';
+	}
+
+	let activeTab = $state(tabFromUrl(get(page).url));
+
+	afterNavigate(() => {
+		activeTab = tabFromUrl(get(page).url);
+	});
+
+	function onSettingsTabChange(id: string) {
+		goto(`/settings?tab=${id}`, { replaceState: true, noScroll: true, keepFocus: true });
+	}
+
 	let saving = $state(false);
 	let message = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 
 	const tabs = [
 		{ id: 'profile', label: 'Profile', icon: User },
+		{ id: 'security', label: 'Security', icon: Shield },
 		{ id: 'notifications', label: 'Notifications', icon: Bell },
 		{ id: 'appearance', label: 'Appearance', icon: Palette }
 	];
@@ -41,11 +62,6 @@
 		<p class="mt-1 text-[var(--text-secondary)]">
 			Manage your account settings and preferences.
 		</p>
-		<p class="mt-2 text-sm">
-			<a href="/settings/security" class="text-primary-600 hover:underline dark:text-primary-400">
-				API tokens and security settings
-			</a>
-		</p>
 	</div>
 
 	{#if message}
@@ -58,7 +74,7 @@
 		</Alert>
 	{/if}
 
-	<Tabs items={tabs} bind:value={activeTab} />
+	<Tabs items={tabs} bind:value={activeTab} onchange={onSettingsTabChange} />
 
 	{#if activeTab === 'profile'}
 		<Card>
@@ -157,6 +173,8 @@
 				</div>
 			</div>
 		</Card>
+	{:else if activeTab === 'security'}
+		<SettingsSecurityTab />
 	{:else if activeTab === 'notifications'}
 		<Card>
 			<div class="space-y-6">
