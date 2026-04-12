@@ -267,28 +267,26 @@ impl TestExecutor {
                     }
                 }
 
-                if let Some(condition) = &job.condition {
-                    let any_dep_failed = job.depends_on.iter().any(|dep_id| {
-                        futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
-                    });
+                let any_dep_failed = job.depends_on.iter().any(|dep_id| {
+                    futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
+                });
+                let allow_after_fail = job
+                    .condition
+                    .as_deref()
+                    .map(|c| {
+                        let t = c.trim();
+                        t == "always()" || t == "failure()"
+                    })
+                    .unwrap_or(false);
 
-                    if any_dep_failed && condition != "always()" {
-                        run_state
-                            .mark_job_skipped(&job.id, Some("Dependency failed".to_string()))
-                            .await;
-                        continue;
-                    }
-                } else {
-                    let any_dep_failed = job.depends_on.iter().any(|dep_id| {
-                        futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
-                    });
-
-                    if any_dep_failed {
-                        run_state
-                            .mark_job_skipped(&job.id, Some("Dependency failed".to_string()))
-                            .await;
-                        continue;
-                    }
+                if any_dep_failed && !allow_after_fail {
+                    run_state
+                        .mark_job_cancelled(
+                            &job.id,
+                            Some("Cancelled because an upstream job failed".to_string()),
+                        )
+                        .await;
+                    continue;
                 }
 
                 let job_run_id = JobRunId::new();
@@ -377,12 +375,12 @@ impl TestExecutor {
     async fn cancel_pending_jobs(&self, run_state: &RunState) {
         let pending = run_state.pending_jobs().await;
         for job_id in pending {
-            run_state.mark_job_cancelled(&job_id).await;
+            run_state.mark_job_cancelled(&job_id, None).await;
         }
 
         let queued = run_state.running_jobs().await;
         for job_id in queued {
-            run_state.mark_job_cancelled(&job_id).await;
+            run_state.mark_job_cancelled(&job_id, None).await;
         }
     }
 }
@@ -680,7 +678,7 @@ async fn test_diamond_dag_with_failure_propagation() {
     //    / \
     //   B   C (fails)
     //    \ /
-    //     D (should be skipped)
+    //     D (should be cancelled — upstream failure)
     let a = JobId::new();
     let b = JobId::new();
     let c = JobId::new();
@@ -711,8 +709,8 @@ async fn test_diamond_dag_with_failure_propagation() {
 
     assert_eq!(result.status, RunStatus::Failed);
     assert_eq!(result.jobs_succeeded, 2); // A and B
-    assert_eq!(result.jobs_failed, 1); // C
-    assert_eq!(result.jobs_skipped, 1); // D
+    assert_eq!(result.jobs_failed, 2); // C failed; D cancelled
+    assert_eq!(result.jobs_skipped, 0);
 }
 
 #[tokio::test]
@@ -888,12 +886,12 @@ async fn test_cancel_mid_run_marks_jobs_cancelled() {
 
     let pending = run_state.pending_jobs().await;
     for job_id in pending {
-        run_state.mark_job_cancelled(&job_id).await;
+        run_state.mark_job_cancelled(&job_id, None).await;
     }
 
     let queued_running = run_state.running_jobs().await;
     for job_id in queued_running {
-        run_state.mark_job_cancelled(&job_id).await;
+        run_state.mark_job_cancelled(&job_id, None).await;
     }
 
     let final_status = run_state.compute_final_status().await;

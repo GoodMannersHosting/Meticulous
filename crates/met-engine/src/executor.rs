@@ -62,9 +62,19 @@ impl Default for ExecutorConfig {
             poll_interval: Duration::from_secs(1),
             max_concurrent: 10,
             run_timeout: Duration::from_secs(3600 * 6),
-            fail_fast: false,
+            fail_fast: true,
         }
     }
+}
+
+/// Jobs with `failure()` or `always()` may still run when a dependency has failed.
+fn condition_allows_run_after_failed_deps(condition: Option<&str>) -> bool {
+    condition
+        .map(|c| {
+            let t = c.trim();
+            t == "always()" || t == "failure()"
+        })
+        .unwrap_or(false)
 }
 
 /// Result of a pipeline execution.
@@ -488,6 +498,26 @@ impl<C: CacheBackend> Executor<C> {
         run_state: &RunState,
         job: &JobIR,
     ) -> Result<()> {
+        let job_record = run_state
+            .get_job(&job.id)
+            .await
+            .ok_or_else(|| EngineError::JobNotFound(job.id))?;
+        let job_run_id = job_record.job_run_id;
+
+        let any_dep_failed = job.depends_on.iter().any(|dep_id| {
+            futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
+        });
+
+        if any_dep_failed && !condition_allows_run_after_failed_deps(job.condition.as_deref()) {
+            let msg = "Cancelled because an upstream job failed";
+            info!(job = %job.name, msg);
+            run_state
+                .mark_job_cancelled(&job.id, Some(msg.to_string()))
+                .await;
+            self.persistence.cancel_job(job_run_id, Some(msg)).await?;
+            return Ok(());
+        }
+
         if let Some(condition) = &job.condition {
             let cel_ctx = CelContext::from_state(ctx, run_state, &job.depends_on).await;
 
@@ -496,39 +526,27 @@ impl<C: CacheBackend> Executor<C> {
                     debug!(job = %job.name, condition, "condition evaluated to true");
                 }
                 Ok(false) => {
+                    let reason = format!("Condition '{condition}' evaluated to false");
                     info!(job = %job.name, condition, "job skipped due to condition");
                     run_state
-                        .mark_job_skipped(
-                            &job.id,
-                            Some(format!("Condition '{condition}' evaluated to false")),
-                        )
+                        .mark_job_skipped(&job.id, Some(reason.clone()))
                         .await;
+                    self.persistence.skip_job(job_run_id, Some(reason.as_str())).await?;
                     return Ok(());
                 }
                 Err(e) => {
                     if condition != "success()" {
+                        let reason = format!("Condition evaluation failed: {e}");
                         warn!(job = %job.name, condition, error = %e, "condition evaluation failed, skipping job");
                         run_state
-                            .mark_job_skipped(
-                                &job.id,
-                                Some(format!("Condition evaluation failed: {e}")),
-                            )
+                            .mark_job_skipped(&job.id, Some(reason.clone()))
                             .await;
+                        self.persistence
+                            .skip_job(job_run_id, Some(reason.as_str()))
+                            .await?;
                         return Ok(());
                     }
                 }
-            }
-        } else {
-            let any_dep_failed = job.depends_on.iter().any(|dep_id| {
-                futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
-            });
-
-            if any_dep_failed {
-                info!(job = %job.name, "job skipped due to dependency failure");
-                run_state
-                    .mark_job_skipped(&job.id, Some("Dependency failed".to_string()))
-                    .await;
-                return Ok(());
             }
         }
 
@@ -564,14 +582,9 @@ impl<C: CacheBackend> Executor<C> {
             }
         }
 
-        let job_state = run_state
-            .get_job(&job.id)
-            .await
-            .ok_or_else(|| EngineError::JobNotFound(job.id))?;
-
         match self
             .scheduler
-            .dispatch_job(ctx, run_state, job, job_state.job_run_id)
+            .dispatch_job(ctx, run_state, job, job_run_id)
             .await
         {
             Ok(()) => Ok(()),
@@ -639,7 +652,9 @@ impl<C: CacheBackend> Executor<C> {
                         .await;
                 }
                 JobStatus::Cancelled => {
-                    run_state.mark_job_cancelled(&js.job_id).await;
+                    run_state
+                        .mark_job_cancelled(&js.job_id, jr.error_message.clone())
+                        .await;
                 }
                 JobStatus::TimedOut => {
                     run_state.mark_job_timed_out(&js.job_id).await;
@@ -662,8 +677,15 @@ impl<C: CacheBackend> Executor<C> {
         run_state: &RunState,
     ) -> Result<()> {
         let pending = run_state.pending_jobs().await;
+        let msg = "Cancelled: pipeline stopped after a job failed";
         for job_id in pending {
-            run_state.mark_job_cancelled(&job_id).await;
+            let Some(js) = run_state.get_job(&job_id).await else {
+                continue;
+            };
+            run_state
+                .mark_job_cancelled(&job_id, Some(msg.to_string()))
+                .await;
+            self.persistence.cancel_job(js.job_run_id, Some(msg)).await?;
         }
         Ok(())
     }

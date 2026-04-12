@@ -12,6 +12,8 @@ use met_core::{
     ids::{JobId, JobRunId, PipelineId, ProjectId, RunId, StepRunId},
     models::{JobRun, Run, RunStatus},
 };
+use met_controller::rehydrate_job_logs_from_store;
+use met_objstore::ObjectStore;
 use met_store::{
     PgPool,
     repos::{
@@ -910,6 +912,19 @@ async fn get_job_logs(
     }
 
     let repo = LogCacheRepo::new(state.db());
+    if state.object_store.is_some() && repo.count_for_job_run(job_run_id).await? == 0 {
+        if let Some(store) = state.object_store.as_ref() {
+            let store_ref: &(dyn ObjectStore + Send + Sync) = &**store;
+            if let Err(e) = rehydrate_job_logs_from_store(state.db(), store_ref, job_run_id).await {
+                tracing::warn!(
+                    error = %e,
+                    %job_run_id,
+                    "failed to rehydrate job logs from object storage archive"
+                );
+            }
+        }
+    }
+
     let fetch_limit = (limit as i64).saturating_add(1);
     let entries = repo
         .list_for_job_run(

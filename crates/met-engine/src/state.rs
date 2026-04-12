@@ -285,10 +285,10 @@ impl RunState {
     }
 
     /// Mark a job as cancelled.
-    pub async fn mark_job_cancelled(&self, job_id: &JobId) {
+    pub async fn mark_job_cancelled(&self, job_id: &JobId, reason: Option<String>) {
         self.update_job(job_id, |job| {
             job.status = JobStatus::Cancelled;
-            job.error_message = Some("Job was cancelled".to_string());
+            job.error_message = Some(reason.unwrap_or_else(|| "Job was cancelled".to_string()));
             job.finished_at = Some(Utc::now());
         })
         .await;

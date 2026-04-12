@@ -86,6 +86,9 @@ pub trait RunPersistence: Send + Sync {
     /// Mark job as skipped.
     async fn skip_job(&self, job_run_id: JobRunId, reason: Option<&str>) -> Result<()>;
 
+    /// Mark job as cancelled (engine-initiated, e.g. fail-fast or upstream failure).
+    async fn cancel_job(&self, job_run_id: JobRunId, reason: Option<&str>) -> Result<()>;
+
     /// Record cache hit for a job.
     async fn set_job_cache_hit(&self, job_run_id: JobRunId, cache_key: &str) -> Result<()>;
 
@@ -423,6 +426,28 @@ impl RunPersistence for PostgresRunPersistence {
         .map_err(met_store::StoreError::from)?;
 
         debug!(%job_run_id, reason, "skipped job");
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn cancel_job(&self, job_run_id: JobRunId, reason: Option<&str>) -> Result<()> {
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            UPDATE job_runs
+            SET status = 'cancelled', error_message = $2, finished_at = $3
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .bind(reason)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(met_store::StoreError::from)?;
+
+        debug!(%job_run_id, reason, "cancelled job");
         Ok(())
     }
 
@@ -809,6 +834,16 @@ impl RunPersistence for MemoryRunPersistence {
         let mut jobs = self.job_runs.lock().unwrap();
         if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
             job.status = JobStatus::Skipped;
+            job.error_message = reason.map(|s| s.to_string());
+            job.finished_at = Some(Utc::now());
+        }
+        Ok(())
+    }
+
+    async fn cancel_job(&self, job_run_id: JobRunId, reason: Option<&str>) -> Result<()> {
+        let mut jobs = self.job_runs.lock().unwrap();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == job_run_id) {
+            job.status = JobStatus::Cancelled;
             job.error_message = reason.map(|s| s.to_string());
             job.finished_at = Some(Utc::now());
         }
