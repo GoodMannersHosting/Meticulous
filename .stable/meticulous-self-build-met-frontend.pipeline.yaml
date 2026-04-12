@@ -2,7 +2,6 @@
 # Import catalog workflows; set pipeline secrets per the repo-wide self-build docs.
 name: meticulous self-build — met-frontend
 agent-affinity:
-  default-group: ci
   share-workspace: true
 
 secrets:
@@ -24,6 +23,7 @@ vars:
 workflows:
   - name: Checkout Meticulous
     id: checkout
+    affinity-group: ci
     workflow: global/git-checkout
     version: "1.0.1"
     inputs:
@@ -32,6 +32,7 @@ workflows:
       clone_path: meticulous
   - name: Build and push met-frontend
     id: push-frontend
+    affinity-group: ci
     workflow: global/docker-buildx-push
     version: "1.0.1"
     depends-on: [checkout]
@@ -42,6 +43,7 @@ workflows:
       registry_host: harbor.cloud.danmanners.com
   - name: Trivy scan met-frontend (SBOM)
     id: scan-frontend
+    affinity-group: ci
     workflow: global/trivy-scan
     version: "1.1.2"
     depends-on: [push-frontend]

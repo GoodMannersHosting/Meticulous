@@ -659,3 +659,66 @@ workflows:
     assert_eq!(ir.secret_refs.len(), 1);
     assert!(ir.default_pool_selector.is_some());
 }
+
+#[tokio::test]
+async fn test_default_affinity_group_does_not_enable_share_workspace() {
+    let yaml = r#"
+name: Parallel default affinity
+triggers:
+  manual: {}
+agent-affinity:
+  default-group: ci
+  share-workspace: true
+workflows:
+  - name: Test A
+    id: a
+    workflow: global/test
+  - name: Test B
+    id: b
+    workflow: global/test
+"#;
+
+    let provider = create_provider();
+    let mut parser = PipelineParser::new(&provider);
+    let result = parser.parse(yaml).await;
+    assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    let ir = result.unwrap();
+    for j in &ir.jobs {
+        assert_eq!(j.affinity_group.as_deref(), Some("ci"));
+        assert!(
+            !j.share_workspace,
+            "default-group must not opt jobs into share_workspace"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_explicit_affinity_group_enables_share_workspace() {
+    let yaml = r#"
+name: Shared workspace chain
+triggers:
+  manual: {}
+agent-affinity:
+  share-workspace: true
+workflows:
+  - name: A
+    id: a
+    workflow: global/test
+    affinity-group: g
+  - name: B
+    id: b
+    workflow: global/test
+    depends-on: [a]
+    affinity-group: g
+"#;
+
+    let provider = create_provider();
+    let mut parser = PipelineParser::new(&provider);
+    let result = parser.parse(yaml).await;
+    assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    let ir = result.unwrap();
+    for j in &ir.jobs {
+        assert_eq!(j.affinity_group.as_deref(), Some("g"));
+        assert!(j.share_workspace);
+    }
+}

@@ -16,7 +16,6 @@
 #   - Pipeline secrets as listed below.
 name: meticulous agent E2E
 agent-affinity:
-  default-group: ci
   share-workspace: true
 
 triggers:
@@ -53,6 +52,7 @@ workflows:
   # ── Checkout (for met CLI binary + test pipeline definitions) ─────────────
   - name: Checkout Meticulous
     id: checkout
+    affinity-group: ci
     workflow: global/git-checkout
     version: "1.0.1"
     inputs:
@@ -62,6 +62,7 @@ workflows:
   # ── Provision a fresh join token ─────────────────────────────────────────
   - name: Create join token
     id: create-join-token
+    affinity-group: ci
     workflow: global/run-script
     version: "1.0.0"
     depends-on: [checkout]
@@ -71,6 +72,7 @@ workflows:
   # ── Pull + launch agent container ─────────────────────────────────────────
   - name: Launch test agent
     id: launch-agent
+    affinity-group: ci
     workflow: global/run-script
     version: "1.0.0"
     depends-on: [create-join-token]
@@ -80,6 +82,7 @@ workflows:
   # ── Run test pipelines and assert outcomes ────────────────────────────────
   - name: Run test pipelines
     id: run-test-pipelines
+    affinity-group: ci
     workflow: global/run-script
     version: "1.0.0"
     depends-on: [launch-agent]
@@ -89,6 +92,7 @@ workflows:
   # ── Cleanup: revoke token + stop agent container ──────────────────────────
   - name: Cleanup
     id: cleanup
+    affinity-group: ci
     workflow: global/run-script
     version: "1.0.0"
     depends-on: [run-test-pipelines]

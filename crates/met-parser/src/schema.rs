@@ -48,10 +48,13 @@ pub struct RawPipeline {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RawAgentAffinity {
-    /// When a workflow omits `affinity-group`, use this group name.
+    /// When a workflow omits `affinity-group`, pin to this group for same-agent scheduling only.
+    /// Does **not** enable a shared workspace; set `affinity-group` on each invocation that should
+    /// share a workspace when [`Self::share_workspace`] is true.
     #[serde(default)]
     pub default_group: Option<String>,
-    /// When true, jobs with an effective affinity group share one workspace directory per run (serial-only).
+    /// When true, invocations that **explicitly** set `affinity-group` share one workspace directory
+    /// for the run (serial-only within that group). Jobs using only `default-group` are not shared.
     #[serde(default)]
     pub share_workspace: bool,
 }
@@ -297,6 +300,7 @@ pub struct RawWorkflowInvocation {
     pub cache: Option<RawCacheConfig>,
 
     /// Same-agent affinity group (overrides pipeline `agent-affinity.default-group` when set).
+    /// When `agent-affinity.share-workspace` is true, this invocation opts into the shared workspace.
     #[serde(default)]
     pub affinity_group: Option<String>,
 

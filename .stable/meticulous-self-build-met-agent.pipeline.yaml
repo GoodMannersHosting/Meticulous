@@ -1,9 +1,8 @@
 # Build and push met-agent, then Trivy image scan + CycloneDX → sbom.cdx.json.
 # Import catalog workflows; set pipeline secrets per the repo-wide self-build docs.
-# share-workspace + agent-affinity: depends-on chain checkout → push → scan (no concurrent jobs in the group).
+# share-workspace + explicit affinity-group on each workflow: checkout → push → scan (serial).
 name: meticulous self-build — met-agent
 agent-affinity:
-  default-group: ci
   share-workspace: true
 
 secrets:
@@ -25,6 +24,7 @@ vars:
 workflows:
   - name: Checkout Meticulous
     id: checkout
+    affinity-group: ci
     workflow: global/git-checkout
     version: "1.0.1"
     inputs:
@@ -33,6 +33,7 @@ workflows:
       clone_path: meticulous
   - name: Build and push met-agent
     id: push-agent
+    affinity-group: ci
     workflow: global/docker-buildx-push
     version: "1.0.1"
     depends-on: [checkout]
@@ -43,6 +44,7 @@ workflows:
       registry_host: harbor.cloud.danmanners.com
   - name: Trivy scan met-agent (SBOM)
     id: scan-agent
+    affinity-group: ci
     workflow: global/trivy-scan
     version: "1.1.2"
     depends-on: [push-agent]

@@ -66,11 +66,13 @@
 >
 	<Icon class="h-5 w-5 flex-shrink-0 {iconColors[variant]}" />
 
-	<div class="flex-1">
+	<div class="min-w-0 flex-1">
 		{#if title}
 			<p class="font-medium text-[var(--text-primary)]">{title}</p>
 		{/if}
-		<div class="text-sm text-[var(--text-secondary)] {title ? 'mt-1' : ''}">
+		<div
+			class="text-sm text-[var(--text-secondary)] {title ? 'mt-2' : ''} [overflow-wrap:anywhere]"
+		>
 			{@render children?.()}
 		</div>
 	</div>

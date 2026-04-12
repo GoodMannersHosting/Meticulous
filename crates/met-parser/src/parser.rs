@@ -769,24 +769,40 @@ impl<'a> PipelineParser<'a> {
                     )
                     .collect();
 
-                let affinity_group = workflow
-                    .invocation
-                    .affinity_group
-                    .clone()
-                    .or_else(|| pipeline.agent_affinity.as_ref()?.default_group.clone())
-                    .and_then(|s| {
+                // `default-group` pins jobs to one agent but does not opt them into shared
+                // workspace; only an explicit `affinity-group` on the invocation does (together
+                // with `agent-affinity.share-workspace`). Otherwise parallel jobs would have to be
+                // totally ordered for a group that only meant "prefer same agent".
+                let invocation_affinity_explicit = workflow.invocation.affinity_group.as_ref().and_then(
+                    |s| {
                         let t = s.trim();
                         if t.is_empty() {
                             None
                         } else {
                             Some(t.to_string())
                         }
+                    },
+                );
+                let affinity_group = invocation_affinity_explicit
+                    .clone()
+                    .or_else(|| {
+                        pipeline.agent_affinity.as_ref().and_then(|a| {
+                            a.default_group.as_ref().and_then(|s| {
+                                let t = s.trim();
+                                if t.is_empty() {
+                                    None
+                                } else {
+                                    Some(t.to_string())
+                                }
+                            })
+                        })
                     });
                 let share_workspace = affinity_group.is_some()
                     && pipeline
                         .agent_affinity
                         .as_ref()
-                        .is_some_and(|a| a.share_workspace);
+                        .is_some_and(|a| a.share_workspace)
+                    && invocation_affinity_explicit.is_some();
 
                 JobIR {
                     id: make_job_id(&job_id),

@@ -1487,11 +1487,13 @@
 			ondismiss={() => (error = null)}
 		>
 			{#if pipelinePageErrorParsed}
-				<ul class="list-disc space-y-2 pl-5 [overflow-wrap:anywhere]">
-					{#each pipelinePageErrorParsed.bullets as line}
-						<li>{line}</li>
-					{/each}
-				</ul>
+				<div class="max-h-80 overflow-y-auto overscroll-y-contain pr-1">
+					<ul class="list-disc space-y-2.5 pl-5">
+						{#each pipelinePageErrorParsed.bullets as line}
+							<li class="leading-snug">{line}</li>
+						{/each}
+					</ul>
+				</div>
 			{:else}
 				{error}
 			{/if}
