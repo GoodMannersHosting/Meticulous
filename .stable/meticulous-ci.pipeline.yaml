@@ -10,7 +10,7 @@
 #     │   ├─ cargo-lint                   (fmt/clippy/check)
 #     │   │   └─ cargo-test              (unit+integration with services)
 #     │   └─ cargo-audit                 (SCA/CVE)
-#     └─ semgrep                          (SAST, container-based)
+#     └─ opengrep                         (SAST, container-based)
 #
 #   After all static checks pass:
 #     ├─ ci-seed  (start met-api in CI mode + seed data)
@@ -145,7 +145,7 @@ workflows:
     id: ci-seed
     workflow: global/meticulous-ci-seed
     version: "1.0.0"
-    depends-on: [cargo-test, cargo-audit, trufflehog, semgrep]
+    depends-on: [cargo-test, cargo-audit, trufflehog, opengrep]
     inputs:
       workspace_path: meticulous
       api_listen: "127.0.0.1:8081"
