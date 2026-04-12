@@ -86,8 +86,8 @@ pub use run_binary_executions::{
 pub use run_logs::{LogEntry, RunLogRepo};
 pub use run_network_connections::{RunNetworkConnectionRepo, RunNetworkConnectionRow};
 pub use runs::{
-    JobQueueItemRow, JobRunPipelineContext, JobRunRepo, RunRepo, RunWithJobs, RunWithPipelineName,
-    StepRunRepo,
+    JobQueueItemRow, JobRunPipelineContext, JobRunRepo, OidcJobIdentityRow, RunRepo, RunWithJobs,
+    RunWithPipelineName, StepRunRepo,
 };
 pub use secret_provider_configs::{
     SecretProviderConfigMeta, SecretProviderConfigRepo, SecretProviderConfigRow,

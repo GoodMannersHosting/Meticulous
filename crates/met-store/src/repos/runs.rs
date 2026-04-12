@@ -646,6 +646,22 @@ pub struct JobRunPipelineContext {
     pub definition: serde_json::Value,
 }
 
+/// Verified job/run context for OIDC workload identity tokens (ADR-017).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OidcJobIdentityRow {
+    pub org_id: Uuid,
+    pub org_slug: String,
+    pub project_id: Uuid,
+    pub project_slug: String,
+    pub pipeline_id: Uuid,
+    pub pipeline_name: String,
+    pub run_id: Uuid,
+    pub job_run_id: Uuid,
+    pub branch: Option<String>,
+    pub commit_sha: Option<String>,
+    pub environment_name: Option<String>,
+}
+
 /// Rows for the operator job queue: concrete `job_runs` waiting to start, or a **run** that is
 /// still `pending`/`queued` before any `job_runs` exist (engine has not scheduled jobs yet).
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -1284,6 +1300,48 @@ WHERE jr.run_id = r.id
         .await?;
 
         Ok(job_run)
+    }
+
+    /// Load org/project/pipeline/run metadata for OIDC workload JWTs. Only returns a row when the
+    /// job is **running** on the given agent (caller-controlled `agent_id` is not trusted until
+    /// matched against `job_runs.agent_id`).
+    pub async fn load_for_oidc_identity_token(
+        &self,
+        job_run_id: JobRunId,
+        agent_id: AgentId,
+    ) -> Result<Option<OidcJobIdentityRow>> {
+        sqlx::query_as::<_, OidcJobIdentityRow>(
+            r#"
+            SELECT
+                o.id AS org_id,
+                o.slug AS org_slug,
+                pr.id AS project_id,
+                pr.slug AS project_slug,
+                p.id AS pipeline_id,
+                p.name AS pipeline_name,
+                r.id AS run_id,
+                jr.id AS job_run_id,
+                r.branch,
+                r.commit_sha,
+                e.name AS environment_name
+            FROM job_runs jr
+            JOIN runs r ON r.id = jr.run_id
+            JOIN pipelines p ON p.id = r.pipeline_id
+            JOIN projects pr ON pr.id = p.project_id
+            JOIN organizations o ON o.id = COALESCE(r.org_id, pr.org_id)
+            LEFT JOIN environments e ON e.id = r.environment_id
+            WHERE jr.id = $1
+              AND jr.agent_id = $2
+              AND jr.status = 'running'
+              AND o.deleted_at IS NULL
+              AND pr.deleted_at IS NULL
+            "#,
+        )
+        .bind(job_run_id.as_uuid())
+        .bind(agent_id.as_uuid())
+        .fetch_optional(self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Load pipeline definition context for secret resolution (controller / jobs).

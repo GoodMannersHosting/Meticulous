@@ -117,6 +117,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| std::env::var("MET_NATS_ACCOUNT_ISSUER_PUBKEY").ok())
         .filter(|s| !s.trim().is_empty());
 
+    ctrl.oidc_issuer_url = std::env::var("MET_CONTROLLER_OIDC_ISSUER_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    ctrl.http_public_base_url = met_config.http.public_base_url.clone();
+    ctrl.http_cors_first_origin = met_config.http.cors_origins.first().cloned();
+    ctrl.oidc_id_token_ttl = std::env::var("MET_CONTROLLER_OIDC_ID_TOKEN_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&s| s >= 60 && s <= 3600)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(600));
+
     ctrl.validate()
         .map_err(|e| format!("invalid controller config: {e}"))?;
 

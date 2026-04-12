@@ -27,6 +27,7 @@ pub mod error;
 pub mod grpc;
 pub mod health;
 pub mod jwt;
+pub mod oidc_workload_token;
 pub mod log_archive;
 pub mod nats;
 pub mod nats_jwt;

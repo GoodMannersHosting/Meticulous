@@ -1382,9 +1382,38 @@ impl AgentService for AgentServiceImpl {
         // 4. Sign with active ES256 key (OidcSigningKeyRepo::active_key)
         // 5. Insert audit row (OidcSigningKeyRepo::audit_token)
         // 6. Return signed JWT + expiry
-        Err(Status::unimplemented(
-            "OIDC token minting is not yet implemented; signing key infrastructure is in place",
-        ))
+        let crypto = self.stored_secret_crypto.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "OIDC workload tokens require MET_BUILTIN_SECRETS_MASTER_KEY and an active signing key",
+            )
+        })?;
+
+        let agent_id: AgentId = req
+            .agent_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid agent_id"))?;
+        let job_run_id: JobRunId = req
+            .job_run_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid job_run_id"))?;
+
+        let (token, exp) = crate::oidc_workload_token::mint_workload_identity_token(
+            self.pool.as_ref(),
+            crypto.as_ref(),
+            &self.config,
+            agent_id,
+            job_run_id,
+            &req.audience,
+        )
+        .await?;
+
+        Ok(Response::new(IdTokenResponse {
+            token,
+            expires_at: Some(ProtoTimestamp {
+                seconds: exp.timestamp(),
+                nanos: exp.timestamp_subsec_nanos() as i32,
+            }),
+        }))
     }
 }
 

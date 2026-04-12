@@ -3,10 +3,11 @@
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use pkcs8::EncodePrivateKey;
 use rand_core::{OsRng, RngCore};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
+
+use pkcs8::{DecodePrivateKey, EncodePrivateKey};
 
 use crate::error::SecretsError;
 use crate::stored_crypto::BuiltinStoredCrypto;
@@ -24,6 +25,16 @@ pub fn encrypt_pkcs8_private_key(
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
     Ok(out)
+}
+
+/// PEM-encoded EC private key for `jsonwebtoken::EncodingKey::from_ec_pem`.
+pub fn ec_private_key_pem_from_pkcs8_der(pkcs8_der: &[u8]) -> Result<String, SecretsError> {
+    let secret = p256::SecretKey::from_pkcs8_der(pkcs8_der)
+        .map_err(|e| SecretsError::Crypto(format!("pkcs8 parse: {e}")))?;
+    let pem = secret
+        .to_pkcs8_pem(pkcs8::LineEnding::LF)
+        .map_err(|e| SecretsError::Crypto(format!("pkcs8 pem: {e}")))?;
+    Ok(pem.to_string())
 }
 
 /// Decrypt PKCS#8 DER bytes for ES256 signing.
@@ -125,5 +136,8 @@ mod tests {
 
         let pkcs8 = decrypt_pkcs8_private_key(&crypto, &generated.private_key_enc).unwrap();
         assert!(!pkcs8.is_empty());
+
+        let pem = ec_private_key_pem_from_pkcs8_der(&pkcs8).unwrap();
+        assert!(pem.contains("BEGIN PRIVATE KEY"));
     }
 }

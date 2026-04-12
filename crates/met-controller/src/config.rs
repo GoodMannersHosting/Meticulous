@@ -36,6 +36,15 @@ pub struct ControllerConfig {
     pub require_ntp_sync: bool,
     /// Allowed OS/arch combinations (empty = all allowed).
     pub allowed_platforms: Vec<String>,
+    /// Optional OIDC `iss` override for workload JWTs (ADR-017). When unset, uses
+    /// [`Self::http_public_base_url`] then the first CORS origin (dev fallback).
+    pub oidc_issuer_url: Option<String>,
+    /// Copy of `MET_HTTP__PUBLIC_BASE_URL` / `http.public_base_url` for issuer resolution.
+    pub http_public_base_url: Option<String>,
+    /// First HTTP CORS origin (dev fallback for issuer when public base URL is unset).
+    pub http_cors_first_origin: Option<String>,
+    /// Lifetime for workload identity JWTs (Vault, Artifactory OIDC, etc.). Default 10 minutes.
+    pub oidc_id_token_ttl: std::time::Duration,
 }
 
 impl Default for ControllerConfig {
@@ -56,6 +65,10 @@ impl Default for ControllerConfig {
             health_check_interval: Duration::from_secs(10),
             require_ntp_sync: true,
             allowed_platforms: Vec::new(),
+            oidc_issuer_url: None,
+            http_public_base_url: None,
+            http_cors_first_origin: None,
+            oidc_id_token_ttl: std::time::Duration::from_secs(600),
         }
     }
 }

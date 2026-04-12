@@ -122,8 +122,8 @@ pub use github_app::{
     parse_github_app_credentials,
 };
 pub use oidc_workload_keys::{
-    GeneratedOidcSigningKey, decrypt_pkcs8_private_key, encrypt_pkcs8_private_key,
-    generate_oidc_signing_key,
+    GeneratedOidcSigningKey, decrypt_pkcs8_private_key, ec_private_key_pem_from_pkcs8_der,
+    encrypt_pkcs8_private_key, generate_oidc_signing_key,
 };
 pub use providers::{
     AwsSecretsProvider, BuiltinSecretsProvider, KubernetesSecretsProvider, MultiProviderBroker,
