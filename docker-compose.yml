@@ -35,12 +35,14 @@ services:
 
   seaweedfs:
     image: docker.io/chrislusf/seaweedfs:4.17
-    command: "server -s3 -dir=/data -s3.port=8333"
+    # Static S3 identities (highest priority). Matches MET_STORAGE defaults (admin/admin) in .env.example.
+    command: "server -s3 -dir=/data -s3.port=8333 -s3.config=/etc/seaweed/s3-dev.json"
     ports:
       - "8333:8333"   # S3 API
       - "9333:9333"   # Master server
     volumes:
       - seaweeddata:/data
+      - ./deploy/seaweed/s3-dev.json:/etc/seaweed/s3-dev.json:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:9333/cluster/status"]
       interval: 10s

@@ -33,6 +33,13 @@ pub struct ObjectStoreConfig {
     pub multipart_part_size: usize,
     /// Threshold for using multipart upload in bytes.
     pub multipart_threshold: usize,
+    /// On startup, create the bucket if it does not exist (same credentials as the client).
+    #[serde(default = "default_auto_create_bucket")]
+    pub auto_create_bucket: bool,
+}
+
+fn default_auto_create_bucket() -> bool {
+    true
 }
 
 impl Default for ObjectStoreConfig {
@@ -50,6 +57,7 @@ impl Default for ObjectStoreConfig {
             presigned_url_expiry_secs: 3600,        // 1 hour
             multipart_part_size: 5 * 1024 * 1024,   // 5 MB (S3 minimum)
             multipart_threshold: 100 * 1024 * 1024, // 100 MB
+            auto_create_bucket: true,
         }
     }
 }
@@ -110,6 +118,7 @@ impl From<met_core::config::StorageConfig> for ObjectStoreConfig {
             secret_access_key: nonempty_opt(config.secret_key),
             region: config.region.unwrap_or_else(|| "us-east-1".to_string()),
             path_style: config.path_style,
+            auto_create_bucket: config.auto_create_bucket,
             ..Default::default()
         }
     }

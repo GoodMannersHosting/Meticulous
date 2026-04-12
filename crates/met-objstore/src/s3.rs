@@ -12,9 +12,14 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::{
     Client,
     config::{Credentials, Region},
+    error::SdkError,
+    operation::create_bucket::CreateBucketError,
     operation::get_object::GetObjectError,
+    operation::RequestId,
     primitives::ByteStream,
+    types::{BucketLocationConstraint, CreateBucketConfiguration},
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use bytes::Bytes;
 use std::time::Duration;
 use url::Url;
@@ -30,9 +35,13 @@ impl S3ObjectStore {
     /// Create a new S3 object store from configuration.
     pub async fn new(config: ObjectStoreConfig) -> Result<Self> {
         let client = create_s3_client(&config).await?;
+        let bucket = config.bucket.clone();
+        if config.auto_create_bucket {
+            ensure_bucket_exists(&client, &bucket, &config).await?;
+        }
         Ok(Self {
             client,
-            bucket: config.bucket.clone(),
+            bucket,
             config,
         })
     }
@@ -63,7 +72,27 @@ impl S3ObjectStore {
             .bucket(&self.bucket)
             .send()
             .await
-            .map_err(|e| map_sdk_error("head_bucket", e))?;
+            .map_err(|e| map_sdk_error_detailed("head_bucket", e))?;
+        Ok(())
+    }
+
+    /// Health-style reachability check for S3-compatible backends.
+    ///
+    /// Tries [`Self::head_bucket`] first, then a minimal `ListObjectsV2` (one key).
+    /// Some gateways (including certain SeaweedFS S3 configurations) return generic
+    /// "service" errors for `HeadBucket` while list still works.
+    pub async fn check_bucket_reachable(&self) -> Result<()> {
+        if self.head_bucket().await.is_ok() {
+            return Ok(());
+        }
+
+        self.client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .max_keys(1)
+            .send()
+            .await
+            .map_err(|e| map_sdk_error_detailed("list_objects_v2", e))?;
         Ok(())
     }
 }
@@ -187,6 +216,66 @@ async fn create_s3_client(config: &ObjectStoreConfig) -> Result<Client> {
     }
 
     Ok(Client::from_conf(s3_config_builder.build()))
+}
+
+/// Ensure the bucket exists, using the same credentials as [`create_s3_client`].
+///
+/// Tries [`HeadBucket`] first; if that fails (missing bucket or S3-compatible quirks), attempts
+/// [`CreateBucket`] and treats "already exists" responses as success.
+async fn ensure_bucket_exists(
+    client: &Client,
+    bucket: &str,
+    config: &ObjectStoreConfig,
+) -> Result<()> {
+    if client
+        .head_bucket()
+        .bucket(bucket)
+        .send()
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    let mut req = client.create_bucket().bucket(bucket);
+
+    // Real AWS requires `LocationConstraint` outside `us-east-1`. Custom endpoints (MinIO, SeaweedFS)
+    // typically reject or ignore extra XML; omit the constraint for those.
+    if config.endpoint.is_empty() {
+        let region = config.region.as_str();
+        if region != "us-east-1" {
+            let loc = BucketLocationConstraint::from(region);
+            let cbc = CreateBucketConfiguration::builder()
+                .location_constraint(loc)
+                .build();
+            req = req.create_bucket_configuration(cbc);
+        }
+    }
+
+    match req.send().await {
+        Ok(_) => {
+            tracing::info!(%bucket, "created object storage bucket");
+            Ok(())
+        }
+        Err(e) => {
+            let err = e.into_service_error();
+            if is_create_bucket_duplicate(&err) {
+                Ok(())
+            } else {
+                Err(map_sdk_error_inner("create_bucket", err))
+            }
+        }
+    }
+}
+
+fn is_create_bucket_duplicate(err: &CreateBucketError) -> bool {
+    if err.is_bucket_already_exists() || err.is_bucket_already_owned_by_you() {
+        return true;
+    }
+    matches!(
+        err.meta().code(),
+        Some("BucketAlreadyExists" | "BucketAlreadyOwnedByYou")
+    )
 }
 
 #[async_trait]
@@ -578,6 +667,33 @@ fn map_sdk_error<E: std::fmt::Display>(operation: &str, err: E) -> ObjectStoreEr
     ObjectStoreError::s3(format!("{operation}: {err}"))
 }
 
+/// Map AWS SDK errors with HTTP metadata (many S3-compatible servers return useful codes only here).
+fn map_sdk_error_detailed<E>(operation: &str, err: SdkError<E>) -> ObjectStoreError
+where
+    E: std::fmt::Display + ProvideErrorMetadata,
+{
+    let detail = match &err {
+        SdkError::ServiceError(se) => {
+            let meta = se.err().meta();
+            let code = meta.code().unwrap_or("Unknown");
+            let msg = meta.message().unwrap_or("");
+            let mut out = if msg.is_empty() {
+                code.to_string()
+            } else {
+                format!("{code}: {msg}")
+            };
+            if let Some(rid) = meta.request_id() {
+                if !rid.is_empty() {
+                    out.push_str(&format!(" (request_id={rid})"));
+                }
+            }
+            out
+        }
+        _ => err.to_string(),
+    };
+    ObjectStoreError::s3(format!("{operation}: {detail}"))
+}
+
 fn map_sdk_error_inner<E: std::fmt::Display>(operation: &str, err: E) -> ObjectStoreError {
     ObjectStoreError::s3(format!("{operation}: {err}"))
 }
@@ -593,5 +709,6 @@ mod tests {
 
         assert!(obj_config.path_style);
         assert_eq!(obj_config.bucket, "meticulous");
+        assert!(obj_config.auto_create_bucket);
     }
 }

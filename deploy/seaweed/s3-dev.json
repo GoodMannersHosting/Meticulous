@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "meticulous_dev",
+      "credentials": [
+        {
+          "accessKey": "admin",
+          "secretKey": "admin"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

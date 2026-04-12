@@ -282,6 +282,13 @@ pub struct StorageConfig {
     pub region: Option<String>,
     /// Use path-style URLs (required for some S3-compatible stores).
     pub path_style: bool,
+    /// On startup, create the bucket if it does not exist (same credentials as the client).
+    #[serde(default = "default_auto_create_bucket")]
+    pub auto_create_bucket: bool,
+}
+
+fn default_auto_create_bucket() -> bool {
+    true
 }
 
 impl Default for StorageConfig {
@@ -293,6 +300,7 @@ impl Default for StorageConfig {
             secret_key: None,
             region: None,
             path_style: true,
+            auto_create_bucket: true,
         }
     }
 }

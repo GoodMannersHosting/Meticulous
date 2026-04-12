@@ -150,9 +150,24 @@ pub async fn platform_health(
         .map_err(|e| ApiError::internal(format!("artifact totals failed: {e}")))?;
 
     let (reachable, reachability_error) = if let Some(store) = state.object_store.as_ref() {
-        match store.head_bucket().await {
+        match store.check_bucket_reachable().await {
             Ok(()) => (true, None),
-            Err(e) => (false, Some(e.to_string())),
+            Err(e) => {
+                let mut msg = e.to_string();
+                let lower = msg.to_lowercase();
+                if lower.contains("invalidaccesskeyid")
+                    || lower.contains("signaturedoesnotmatch")
+                    || lower.contains("access denied")
+                {
+                    msg.push_str(" — SeaweedFS (or your S3 gateway) is enforcing credentials that do not match this client. Use docker-compose with `deploy/seaweed/s3-dev.json` (admin/admin), or set `MET_STORAGE__ACCESS_KEY` / `MET_STORAGE__SECRET_KEY` to match your gateway. Restart the Seaweed container after changing S3 config.");
+                } else if lower.contains("nosuchbucket") || lower.contains("not found") {
+                    msg.push_str(&format!(
+                        " — Create the bucket if needed: `aws --endpoint-url {} s3 mb s3://{}` (with the same keys as Met).",
+                        state.object_storage.endpoint, state.object_storage.bucket
+                    ));
+                }
+                (false, Some(msg))
+            }
         }
     } else {
         (
