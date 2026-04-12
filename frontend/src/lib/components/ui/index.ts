@@ -36,3 +36,5 @@ export type { StatusBadgeProps, StatusType } from './status-badge.svelte';
 
 export { default as CopyButton } from './copy-button.svelte';
 export type { CopyButtonProps } from './copy-button.svelte';
+
+export { default as MarkdownBlock } from './MarkdownBlock.svelte';

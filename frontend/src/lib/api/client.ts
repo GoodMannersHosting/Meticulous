@@ -629,6 +629,58 @@ export const apiMethods = {
 		listAvailableForProject: (projectId: string) =>
 			api.get<import('./types').ProjectWorkflowsAvailable>(
 				`/api/v1/projects/${projectId}/workflows/available`
+			),
+		/** Bulk-import multiple workflows from one repo (org-level). */
+		bulkImportGitOrganization: (body: {
+			repository: string;
+			git_ref: string;
+			workflow_paths?: string[];
+			credentials_path: string;
+		}) =>
+			api.post<import('./types').BulkImportResult>(
+				'/api/v1/workflows/catalog/import-git-bulk',
+				body
+			),
+		/** Bulk-import multiple workflows from one repo (project-level). */
+		bulkImportGitProject: (
+			projectId: string,
+			body: {
+				repository: string;
+				git_ref: string;
+				workflow_paths?: string[];
+				credentials_path: string;
+			}
+		) =>
+			api.post<import('./types').BulkImportResult>(
+				`/api/v1/projects/${projectId}/workflows/catalog/import-git-bulk`,
+				body
+			),
+		/** Global org sync settings (interval_minutes). */
+		getSyncSettings: () =>
+			api.get<{ default_sync_interval_minutes: number | null }>(
+				'/api/v1/workflows/catalog/sync-settings'
+			),
+		putSyncSettings: (body: { default_sync_interval_minutes: number | null }) =>
+			api.put<{ default_sync_interval_minutes: number | null }>(
+				'/api/v1/workflows/catalog/sync-settings',
+				body
+			),
+		/** Per-workflow sync schedule. */
+		getWorkflowSyncSchedule: (workflowName: string) =>
+			api.get<import('./types').WorkflowSyncSchedule | null>(
+				`/api/v1/workflows/${encodeURIComponent(workflowName)}/sync-schedule`
+			),
+		putWorkflowSyncSchedule: (
+			workflowName: string,
+			body: { enabled: boolean; interval_minutes: number }
+		) =>
+			api.put<import('./types').WorkflowSyncSchedule>(
+				`/api/v1/workflows/${encodeURIComponent(workflowName)}/sync-schedule`,
+				body
+			),
+		syncNow: (workflowName: string) =>
+			api.post<{ message: string }>(
+				`/api/v1/workflows/${encodeURIComponent(workflowName)}/sync-now`
 			)
 	},
 
@@ -778,28 +830,45 @@ export const apiMethods = {
 			forceDelete: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/force-delete`)
 		},
 		workflows: {
-			approve: (workflowId: string) =>
+			approve: (workflowId: string, note?: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
 					`/api/v1/admin/workflows/${workflowId}/approve`,
-					{}
+					{ note }
 				),
-			reject: (workflowId: string) =>
+			reject: (workflowId: string, note?: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
 					`/api/v1/admin/workflows/${workflowId}/reject`,
-					{}
+					{ note }
 				),
-			trust: (workflowId: string) =>
+			trust: (workflowId: string, note?: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
 					`/api/v1/admin/workflows/${workflowId}/trust`,
-					{}
+					{ note }
 				),
-			untrust: (workflowId: string) =>
+			untrust: (workflowId: string, note?: string) =>
 				api.post<{ workflow: import('./types').CatalogWorkflow }>(
 					`/api/v1/admin/workflows/${workflowId}/untrust`,
-					{}
+					{ note }
 				),
 			delete: (workflowId: string) =>
-				api.post<{ ok: boolean }>(`/api/v1/admin/workflows/${workflowId}/delete`, {})
+				api.post<{ ok: boolean }>(`/api/v1/admin/workflows/${workflowId}/delete`, {}),
+			reImport: (workflowId: string) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/api/v1/admin/workflows/${workflowId}/re-import`,
+					{}
+				),
+			setDeprecation: (
+				workflowId: string,
+				body: { deprecated_after: string | null; deprecation_note?: string }
+			) =>
+				api.post<{ workflow: import('./types').CatalogWorkflow }>(
+					`/api/v1/admin/workflows/${workflowId}/set-deprecation`,
+					body
+				),
+			getModerationEvents: (workflowId: string) =>
+				api.get<import('./types').ModerationEventsResponse>(
+					`/api/v1/admin/workflows/${workflowId}/moderation-events`
+				)
 		},
 		// Auth provider management
 		authProviders: {

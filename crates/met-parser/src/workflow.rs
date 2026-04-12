@@ -44,6 +44,15 @@ pub enum WorkflowFetchError {
         version: String,
     },
 
+    /// Hard-blocked: the `deprecated_after` date has passed.
+    #[error("workflow {scope}/{name}@{version} has been deprecated since {deprecated_since} and is now blocked")]
+    HardDeprecated {
+        scope: String,
+        name: String,
+        version: String,
+        deprecated_since: String,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

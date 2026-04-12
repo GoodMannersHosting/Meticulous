@@ -49,6 +49,7 @@ pub mod triggers;
 pub mod variables;
 pub mod webhooks;
 pub mod websocket;
+pub mod workflow_sync;
 pub mod workflows;
 pub mod workflows_catalog;
 pub mod workspace_config;
@@ -88,6 +89,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(workspace_config::router())
         .merge(workflows::router())
         .merge(workflows_catalog::router())
+        .merge(workflow_sync::router())
         .merge(debug::router())
         .merge(artifacts::router())
         .merge(webhooks::router())

@@ -3,6 +3,16 @@
 	import { Button, Alert } from '$components/ui';
 	import { apiMethods } from '$api/client';
 
+	const SYNC_INTERVAL_OPTIONS = [
+		{ value: 0, label: 'Disabled (no global default)' },
+		{ value: 15, label: 'Every 15 minutes' },
+		{ value: 30, label: 'Every 30 minutes' },
+		{ value: 60, label: 'Every hour' },
+		{ value: 360, label: 'Every 6 hours' },
+		{ value: 720, label: 'Every 12 hours' },
+		{ value: 1440, label: 'Daily' }
+	];
+
 	const EXTERNAL_KIND_TOGGLES: { key: string; label: string; description: string }[] = [
 		{
 			key: 'aws_sm',
@@ -39,6 +49,13 @@
 	/** Merged policy (defaults true when unset). */
 	let extKindEnabled = $state<Record<string, boolean>>({});
 
+	// Global workflow sync default
+	let globalSyncInterval = $state(0);
+	let syncSettingsLoading = $state(false);
+	let syncSettingsSaving = $state(false);
+	let syncSettingsError = $state<string | null>(null);
+	let syncSettingsSuccess = $state<string | null>(null);
+
 	onMount(async () => {
 		try {
 			const settings = await apiMethods.platformSettings.get();
@@ -51,7 +68,34 @@
 		} finally {
 			loading = false;
 		}
+		// Load global sync settings
+		syncSettingsLoading = true;
+		try {
+			const res = await apiMethods.wfCatalog.getSyncSettings();
+			globalSyncInterval = res.default_sync_interval_minutes ?? 0;
+		} catch {
+			// not critical
+		} finally {
+			syncSettingsLoading = false;
+		}
 	});
+
+	async function saveGlobalSyncSettings() {
+		syncSettingsSaving = true;
+		syncSettingsError = null;
+		syncSettingsSuccess = null;
+		try {
+			const res = await apiMethods.wfCatalog.putSyncSettings({
+				default_sync_interval_minutes: globalSyncInterval === 0 ? null : globalSyncInterval
+			});
+			globalSyncInterval = res.default_sync_interval_minutes ?? 0;
+			syncSettingsSuccess = 'Global sync interval saved.';
+		} catch (e) {
+			syncSettingsError = e instanceof Error ? e.message : 'Failed to save';
+		} finally {
+			syncSettingsSaving = false;
+		}
+	}
 
 	async function save() {
 		saving = true;
@@ -92,6 +136,40 @@
 	{#if loading}
 		<p class="text-sm text-[var(--text-secondary)]">Loading...</p>
 	{:else}
+		<!-- Global workflow sync interval -->
+		<div class="max-w-xl rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6">
+			<h3 class="mb-1 text-sm font-medium text-[var(--text-primary)]">Workflow auto-sync</h3>
+			<p class="mb-4 text-xs text-[var(--text-secondary)]">
+				Default interval for automatically re-importing workflow catalog entries from source. Individual
+				workflows can override this on their detail page.
+			</p>
+
+			{#if syncSettingsError}
+				<Alert variant="error">{syncSettingsError}</Alert>
+			{/if}
+			{#if syncSettingsSuccess}
+				<Alert variant="success">{syncSettingsSuccess}</Alert>
+			{/if}
+
+			<div class="flex items-center gap-3">
+				{#if syncSettingsLoading}
+					<p class="text-sm text-[var(--text-secondary)]">Loading…</p>
+				{:else}
+					<select
+						bind:value={globalSyncInterval}
+						class="block rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					>
+						{#each SYNC_INTERVAL_OPTIONS as opt (opt.value)}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+					<Button variant="outline" size="sm" onclick={saveGlobalSyncSettings} loading={syncSettingsSaving}>
+						Save
+					</Button>
+				{/if}
+			</div>
+		</div>
+
 		<div
 			class="max-w-xl rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6"
 		>

@@ -3619,6 +3619,7 @@ name = "met-parser"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "glob",
  "humantime",
  "indexmap 2.13.0",

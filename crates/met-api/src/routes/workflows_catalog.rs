@@ -31,12 +31,20 @@ pub fn router() -> Router<AppState> {
             post(import_catalog_workflow_git_organization),
         )
         .route(
+            "/workflows/catalog/import-git-bulk",
+            post(bulk_import_catalog_workflow_git_organization),
+        )
+        .route(
             "/workflows/catalog/upstream-ref-search",
             post(catalog_upstream_ref_search_organization),
         )
         .route(
             "/projects/{project_id}/workflows/catalog/import-git",
             post(import_catalog_workflow_git),
+        )
+        .route(
+            "/projects/{project_id}/workflows/catalog/import-git-bulk",
+            post(bulk_import_catalog_workflow_git_project),
         )
         .route(
             "/projects/{project_id}/workflows/catalog/upstream-ref-search",
@@ -116,7 +124,7 @@ pub struct ImportCatalogWorkflowGitRequest {
 }
 
 /// Shared Git fetch + global catalog row insert.
-async fn import_catalog_workflow_git_execute(
+pub(crate) async fn import_catalog_workflow_git_execute(
     state: &AppState,
     submitted_by: UserId,
     org_id: OrganizationId,
@@ -517,6 +525,190 @@ async fn import_catalog_workflow_git(
         import_catalog_workflow_git_execute(&state, user.user_id, org_id, project_id, req).await?;
 
     Ok(Json(WorkflowResponse::from(row)))
+}
+
+// ============================================================================
+// Bulk Git Import
+// ============================================================================
+
+/// Request body for bulk catalog import from a single Git repo.
+///
+/// When `workflow_paths` is empty the API auto-discovers all `*.yaml` / `*.yml`
+/// files under `.stable/workflows/` in the repository.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BulkImportCatalogWorkflowGitRequest {
+    /// GitHub repository as `owner/name` or URL.
+    pub repository: String,
+    pub git_ref: String,
+    /// Explicit list of workflow paths. If empty, auto-discovers `.stable/workflows/`.
+    #[serde(default)]
+    pub workflow_paths: Vec<String>,
+    pub credentials_path: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BulkImportError {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BulkImportResult {
+    pub imported: Vec<WorkflowResponse>,
+    pub errors: Vec<BulkImportError>,
+}
+
+/// Shared execution logic for both org and project bulk import.
+async fn bulk_import_catalog_workflow_git_execute(
+    state: &AppState,
+    submitted_by: UserId,
+    org_id: OrganizationId,
+    project_id_for_secrets: ProjectId,
+    req: BulkImportCatalogWorkflowGitRequest,
+) -> ApiResult<BulkImportResult> {
+    let Some(crypto) = state.stored_secret_crypto.as_ref() else {
+        return Err(ApiError::unavailable(STORED_SECRETS_UNAVAILABLE));
+    };
+
+    let slug = github_scm::parse_github_repository(&req.repository)?;
+    let api_base = github_scm::github_api_base_for_credentials_path(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        true,
+    )
+    .await?;
+    let token = github_scm::github_app_installation_token_for_project_secret(
+        state.db(),
+        crypto.as_ref(),
+        org_id,
+        project_id_for_secrets,
+        &req.credentials_path,
+        true,
+    )
+    .await?;
+
+    // Resolve paths: use provided list or discover from .stable/workflows/
+    let paths = if req.workflow_paths.is_empty() {
+        github_scm::list_github_directory_yaml_files(
+            &token,
+            &slug.owner,
+            &slug.name,
+            ".stable/workflows",
+            &req.git_ref,
+            &api_base,
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        req.workflow_paths.clone()
+    };
+
+    if paths.is_empty() {
+        return Err(ApiError::bad_request(
+            "no workflow YAML files found; specify workflow_paths or ensure .stable/workflows/ exists",
+        ));
+    }
+
+    // Import each path; collect results independently so a single failure doesn't abort the batch.
+    let mut imported = Vec::new();
+    let mut errors = Vec::new();
+
+    for path in paths {
+        let single_req = ImportCatalogWorkflowGitRequest {
+            repository: req.repository.clone(),
+            git_ref: req.git_ref.clone(),
+            workflow_path: path.clone(),
+            credentials_path: req.credentials_path.clone(),
+        };
+        match import_catalog_workflow_git_execute(
+            state,
+            submitted_by,
+            org_id,
+            project_id_for_secrets,
+            single_req,
+        )
+        .await
+        {
+            Ok(row) => imported.push(WorkflowResponse::from(row)),
+            Err(e) => errors.push(BulkImportError {
+                path,
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(BulkImportResult { imported, errors })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/catalog/import-git-bulk",
+    request_body = BulkImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Bulk import results", body = BulkImportResult),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn bulk_import_catalog_workflow_git_organization(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Json(req): Json<BulkImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<BulkImportResult>> {
+    if !user.has_any_permission(&["*", "org:admin"]) {
+        return Err(ApiError::forbidden(
+            "organization catalog bulk import requires org:admin (or *) permission",
+        ));
+    }
+
+    let result = bulk_import_catalog_workflow_git_execute(
+        &state,
+        user.user_id,
+        user.org_id,
+        ProjectId::from_uuid(Uuid::nil()),
+        req,
+    )
+    .await?;
+
+    Ok(Json(result))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{project_id}/workflows/catalog/import-git-bulk",
+    request_body = BulkImportCatalogWorkflowGitRequest,
+    responses(
+        (status = 200, description = "Bulk import results", body = BulkImportResult),
+        (status = 400, description = "Bad request"),
+    ),
+    tag = "workflows",
+)]
+#[instrument(skip(state, req))]
+async fn bulk_import_catalog_workflow_git_project(
+    State(state): State<AppState>,
+    Auth(user): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<BulkImportCatalogWorkflowGitRequest>,
+) -> ApiResult<Json<BulkImportResult>> {
+    if !user.can_access_project(project_id) {
+        return Err(ApiError::forbidden("no access to this project"));
+    }
+
+    let project = met_store::repos::ProjectRepo::new(state.db())
+        .get(project_id)
+        .await?;
+    let org_id = project.org_id;
+
+    let result =
+        bulk_import_catalog_workflow_git_execute(&state, user.user_id, org_id, project_id, req)
+            .await?;
+
+    Ok(Json(result))
 }
 
 #[derive(Debug, Deserialize)]

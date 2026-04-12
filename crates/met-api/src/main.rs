@@ -240,6 +240,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         object_store,
     );
 
+    // Spawn background tasks
+    met_api::tasks::workflow_sync_task::spawn(state.clone());
+
     // Build router
     let router = routes::build_router(state);
 

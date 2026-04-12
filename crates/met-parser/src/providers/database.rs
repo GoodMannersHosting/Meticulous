@@ -101,9 +101,13 @@ impl DatabaseWorkflowProvider {
 
         debug!(name, version = %resolved_version, "fetching workflow from database");
 
-        let row: Option<(serde_json::Value, Option<String>)> = sqlx::query_as(
+        let row: Option<(
+            serde_json::Value,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
             r#"
-            SELECT rw.definition, rw.description
+            SELECT rw.definition, rw.description, rw.deprecated_after
             FROM reusable_workflows rw
             INNER JOIN organizations o ON o.id = rw.org_id
             WHERE rw.org_id = $1 AND rw.scope = 'global' AND rw.name = $2 AND rw.version = $3
@@ -120,7 +124,19 @@ impl DatabaseWorkflowProvider {
         .map_err(|e| WorkflowFetchError::Network(e.to_string()))?;
 
         match row {
-            Some((definition, description)) => {
+            Some((definition, description, deprecated_after)) => {
+                // Hard-block if the deprecation date has passed.
+                if let Some(da) = deprecated_after {
+                    if da <= chrono::Utc::now() {
+                        return Err(WorkflowFetchError::HardDeprecated {
+                            scope: "global".to_string(),
+                            name: name.to_string(),
+                            version: resolved_version.clone(),
+                            deprecated_since: da.format("%Y-%m-%d").to_string(),
+                        });
+                    }
+                }
+
                 let mut workflow: RawWorkflowDef = serde_json::from_value(definition)
                     .map_err(|e| WorkflowFetchError::Parse(e.to_string()))?;
 

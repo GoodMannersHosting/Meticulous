@@ -2,12 +2,14 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { auth } from '$stores';
-	import { Button, Card, Input, Alert, Badge, Dialog, Select } from '$components/ui';
+	import { Button, Card, Input, Alert, Badge, Dialog, Select, MarkdownBlock } from '$components/ui';
 	import { DataTable, EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type {
 		CatalogUpstreamRefSearchResponse,
 		CatalogWorkflow,
+		ModerationEvent,
+		WorkflowSyncSchedule,
 		WorkspaceStoredSecretListItem
 	} from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
@@ -19,13 +21,17 @@
 	import { stringify } from 'yaml';
 	import {
 		ArrowLeft,
+		Calendar,
+		CheckCircle,
+		Clock,
 		ExternalLink,
 		GitBranch,
 		GitCommit,
 		RefreshCw,
 		Search,
 		Shield,
-		Tag
+		Tag,
+		XCircle
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 
@@ -45,7 +51,38 @@
 	let sortKey = $state<string | null>('created_at');
 	let sortDirection = $state<SortDirection>('desc');
 
+	// Moderation events
+	let moderationEvents = $state<ModerationEvent[]>([]);
+	let moderationEventsLoading = $state(false);
+
+	// Moderation action dialog
+	let moderationDialogOpen = $state(false);
+	let moderationDialogAction = $state<'approve' | 'reject' | 'trust' | 'untrust' | null>(null);
+	let moderationNote = $state('');
+	let moderationNotePreview = $state(false);
+	let moderationDialogError = $state<string | null>(null);
+	let moderationDialogLoading = $state(false);
+
+	// Sync schedule
+	let syncSchedule = $state<WorkflowSyncSchedule | null>(null);
+	let syncScheduleLoading = $state(false);
+	let syncScheduleEditing = $state(false);
+	let syncScheduleEnabled = $state(false);
+	let syncScheduleInterval = $state(60);
+	let syncScheduleSaving = $state(false);
+	let syncNowLoading = $state(false);
+	let syncScheduleError = $state<string | null>(null);
+
+	// Deprecation
+	let deprecationDialogOpen = $state(false);
+	let deprecationAfterInput = $state('');
+	let deprecationNoteInput = $state('');
+	let deprecationDialogLoading = $state(false);
+	let deprecationDialogError = $state<string | null>(null);
+
 	const isAdmin = $derived(auth.user?.role === 'admin');
+	const isSecurityEngineer = $derived(auth.user?.role === 'security_engineer');
+	const isModerator = $derived(isAdmin || isSecurityEngineer);
 
 	const canSyncCatalogGit = $derived(
 		Boolean(
@@ -211,7 +248,11 @@
 		error = null;
 		try {
 			workflow = await apiMethods.wfCatalog.get(id);
-			await loadVersions(id, true);
+			await Promise.all([
+				loadVersions(id, true),
+				loadModerationEvents(id),
+				loadSyncSchedule(workflow?.name ?? '')
+			]);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load workflow';
 			workflow = null;
@@ -250,6 +291,36 @@
 		}
 	}
 
+	async function loadModerationEvents(id: string) {
+		if (!isModerator) return;
+		moderationEventsLoading = true;
+		try {
+			const res = await apiMethods.admin.workflows.getModerationEvents(id);
+			moderationEvents = res.events;
+		} catch {
+			moderationEvents = [];
+		} finally {
+			moderationEventsLoading = false;
+		}
+	}
+
+	async function loadSyncSchedule(name: string) {
+		if (!isAdmin || !name) return;
+		syncScheduleLoading = true;
+		try {
+			const res = await apiMethods.wfCatalog.getWorkflowSyncSchedule(name);
+			syncSchedule = res;
+			if (res) {
+				syncScheduleEnabled = res.enabled;
+				syncScheduleInterval = res.interval_minutes;
+			}
+		} catch {
+			syncSchedule = null;
+		} finally {
+			syncScheduleLoading = false;
+		}
+	}
+
 	function applyVersionSearch() {
 		versionSearchApplied = versionSearch;
 		if (workflowId) void loadVersions(workflowId, true);
@@ -260,35 +331,114 @@
 		await loadAll(workflowId);
 	}
 
-	async function runAdmin(
-		op: 'approve' | 'reject' | 'trust' | 'untrust' | 'delete',
-		id: string
-	) {
+	function openModerationDialog(op: 'approve' | 'reject' | 'trust' | 'untrust') {
+		moderationDialogAction = op;
+		moderationNote = '';
+		moderationNotePreview = false;
+		moderationDialogError = null;
+		moderationDialogOpen = true;
+	}
+
+	async function submitModerationAction() {
+		if (!moderationDialogAction || !workflow) return;
+		if (isSecurityEngineer && !moderationNote.trim()) {
+			moderationDialogError = 'Security engineers must provide a note for this action.';
+			return;
+		}
+		moderationDialogLoading = true;
+		moderationDialogError = null;
+		try {
+			const note = moderationNote.trim() || undefined;
+			const api = apiMethods.admin.workflows;
+			const res =
+				moderationDialogAction === 'approve'
+					? await api.approve(workflow.id, note)
+					: moderationDialogAction === 'reject'
+						? await api.reject(workflow.id, note)
+						: moderationDialogAction === 'trust'
+							? await api.trust(workflow.id, note)
+							: await api.untrust(workflow.id, note);
+			workflow = res.workflow;
+			moderationDialogOpen = false;
+			await Promise.all([loadVersions(workflowId!, true), loadModerationEvents(workflowId!)]);
+		} catch (e) {
+			moderationDialogError = e instanceof Error ? e.message : 'Action failed';
+		} finally {
+			moderationDialogLoading = false;
+		}
+	}
+
+	async function runDelete() {
+		if (!workflow) return;
+		if (!confirm('Remove this workflow version from the catalog? This cannot be undone.')) return;
 		actionLoading = true;
 		error = null;
 		try {
-			if (op === 'delete') {
-				await apiMethods.admin.workflows.delete(id);
-				goto('/workflows');
-				return;
-			}
-			const api = apiMethods.admin.workflows;
-			const res =
-				op === 'approve'
-					? await api.approve(id)
-					: op === 'reject'
-						? await api.reject(id)
-						: op === 'trust'
-							? await api.trust(id)
-							: await api.untrust(id);
-			if (workflowId === id) {
-				workflow = res.workflow;
-			}
-			await loadVersions(workflowId!, true);
+			await apiMethods.admin.workflows.delete(workflow.id);
+			goto('/workflows');
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Action failed';
-		} finally {
+			error = e instanceof Error ? e.message : 'Delete failed';
 			actionLoading = false;
+		}
+	}
+
+	async function saveSyncSchedule() {
+		if (!workflow?.name) return;
+		syncScheduleSaving = true;
+		syncScheduleError = null;
+		try {
+			const res = await apiMethods.wfCatalog.putWorkflowSyncSchedule(workflow.name, {
+				enabled: syncScheduleEnabled,
+				interval_minutes: syncScheduleInterval
+			});
+			syncSchedule = res;
+			syncScheduleEditing = false;
+		} catch (e) {
+			syncScheduleError = e instanceof Error ? e.message : 'Failed to save sync schedule';
+		} finally {
+			syncScheduleSaving = false;
+		}
+	}
+
+	async function triggerSyncNow() {
+		if (!workflow?.name) return;
+		syncNowLoading = true;
+		syncScheduleError = null;
+		try {
+			await apiMethods.wfCatalog.syncNow(workflow.name);
+			await loadSyncSchedule(workflow.name);
+		} catch (e) {
+			syncScheduleError = e instanceof Error ? e.message : 'Sync failed';
+		} finally {
+			syncNowLoading = false;
+		}
+	}
+
+	function openDeprecationDialog() {
+		if (!workflow) return;
+		deprecationAfterInput = workflow.deprecated_after
+			? workflow.deprecated_after.slice(0, 16)
+			: '';
+		deprecationNoteInput = workflow.deprecation_note ?? '';
+		deprecationDialogError = null;
+		deprecationDialogOpen = true;
+	}
+
+	async function submitDeprecation() {
+		if (!workflow) return;
+		deprecationDialogLoading = true;
+		deprecationDialogError = null;
+		try {
+			const res = await apiMethods.admin.workflows.setDeprecation(workflow.id, {
+				deprecated_after: deprecationAfterInput ? new Date(deprecationAfterInput).toISOString() : null,
+				deprecation_note: deprecationNoteInput.trim() || undefined
+			});
+			workflow = res.workflow;
+			deprecationDialogOpen = false;
+		} catch (e) {
+			deprecationDialogError = e instanceof Error ? e.message : 'Failed to set deprecation';
+		} finally {
+			deprecationDialogLoading = false;
 		}
 	}
 
@@ -317,6 +467,13 @@
 			sortDirection = direction;
 		}
 	}
+
+	const deprecationState = $derived.by((): 'none' | 'warning' | 'blocked' => {
+		if (!workflow?.deprecated_after) return 'none';
+		const d = new Date(workflow.deprecated_after);
+		if (isNaN(d.getTime())) return 'none';
+		return d <= new Date() ? 'blocked' : 'warning';
+	});
 
 	const versionColumns: Column<CatalogWorkflow>[] = [
 		{
@@ -355,6 +512,26 @@
 			}
 		},
 		{
+			key: 'deprecated_after',
+			label: 'Deprecation',
+			sortable: true,
+			render: (value, row) => {
+				if (!value) {
+					return row.deprecated
+						? `<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300">deprecated</span>`
+						: '<span class="text-[var(--text-tertiary)]">—</span>';
+				}
+				const d = new Date(String(value));
+				const blocked = d <= new Date();
+				const cls = blocked
+					? 'bg-error-100 text-error-800 dark:bg-error-900/30 dark:text-error-300'
+					: 'bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300';
+				const label = blocked ? 'blocked' : 'deprecating';
+				const date = d.toLocaleDateString();
+				return `<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${cls}" title="After ${date}">${label}</span>`;
+			}
+		},
+		{
 			key: 'scm_revision',
 			label: 'Commit',
 			sortable: true,
@@ -384,6 +561,24 @@
 	function handleVersionRowClick(row: CatalogWorkflow) {
 		goto(`/workflows/${row.id}`);
 	}
+
+	function moderationActionLabel(action: string) {
+		return { approve: 'Approve', reject: 'Reject', trust: 'Trust', untrust: 'Untrust' }[action] ?? action;
+	}
+
+	function moderationActionIcon(action: string): 'check' | 'x' | 'shield' | 'minus' {
+		return { approve: 'check', reject: 'x', trust: 'shield', untrust: 'minus' }[action] as 'check' | 'x' | 'shield' | 'minus';
+	}
+
+	const intervalOptions = [
+		{ value: '0', label: 'Disabled' },
+		{ value: '15', label: 'Every 15 minutes' },
+		{ value: '30', label: 'Every 30 minutes' },
+		{ value: '60', label: 'Every hour' },
+		{ value: '360', label: 'Every 6 hours' },
+		{ value: '720', label: 'Every 12 hours' },
+		{ value: '1440', label: 'Daily' }
+	];
 </script>
 
 <svelte:head>
@@ -439,10 +634,22 @@
 			<div class="flex flex-wrap gap-2">
 				<Badge variant="secondary">Review: {workflow.submission_status}</Badge>
 				<Badge variant="secondary">Trust: {workflow.trust_state}</Badge>
-				{#if workflow.deprecated}
+				{#if deprecationState === 'blocked'}
+					<Badge variant="error">Blocked (deprecated)</Badge>
+				{:else if deprecationState === 'warning'}
+					<Badge variant="warning">Deprecating {formatRelativeTime(workflow.deprecated_after!)}</Badge>
+				{:else if workflow.deprecated}
 					<Badge variant="warning">Deprecated</Badge>
 				{/if}
 			</div>
+
+			{#if workflow.deprecation_note && deprecationState !== 'none'}
+				<div class="rounded-lg border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-900/20">
+					<p class="mb-1 text-xs font-semibold text-warning-800 dark:text-warning-300">Deprecation note</p>
+					<MarkdownBlock source={workflow.deprecation_note} />
+				</div>
+			{/if}
+
 			{#if workflow.description}
 				<p class="text-sm text-[var(--text-secondary)]">{workflow.description}</p>
 			{/if}
@@ -459,21 +666,30 @@
 					<dt class="text-[var(--text-tertiary)]">Updated</dt>
 					<dd class="mt-0.5 text-[var(--text-primary)]">{formatRelativeTime(workflow.updated_at)}</dd>
 				</div>
+				{#if workflow.deprecated_after}
+					<div>
+						<dt class="text-[var(--text-tertiary)]">Deprecated after</dt>
+						<dd class="mt-0.5 text-[var(--text-primary)]">
+							{new Date(workflow.deprecated_after).toLocaleString()}
+						</dd>
+					</div>
+				{/if}
 			</dl>
 
-			{#if isAdmin}
+			<!-- Moderation panel (admin or security_engineer) -->
+			{#if isModerator}
 				<div
 					class="flex flex-wrap items-center gap-2 border-t border-[var(--border-primary)] pt-4"
 				>
 					<span class="flex items-center gap-1 text-sm font-medium text-[var(--text-secondary)]">
 						<Shield class="h-4 w-4" />
-						Admin
+						{isSecurityEngineer ? 'Security' : 'Admin'}
 					</span>
 					<Button
 						size="sm"
 						variant="outline"
 						disabled={actionLoading || workflow.submission_status === 'approved'}
-						onclick={() => runAdmin('approve', workflow!.id)}
+						onclick={() => openModerationDialog('approve')}
 					>
 						Approve
 					</Button>
@@ -481,7 +697,7 @@
 						size="sm"
 						variant="outline"
 						disabled={actionLoading || workflow.submission_status === 'rejected'}
-						onclick={() => runAdmin('reject', workflow!.id)}
+						onclick={() => openModerationDialog('reject')}
 					>
 						Reject
 					</Button>
@@ -489,7 +705,7 @@
 						size="sm"
 						variant="outline"
 						disabled={actionLoading || workflow.trust_state === 'trusted'}
-						onclick={() => runAdmin('trust', workflow!.id)}
+						onclick={() => openModerationDialog('trust')}
 					>
 						Trust
 					</Button>
@@ -497,22 +713,140 @@
 						size="sm"
 						variant="outline"
 						disabled={actionLoading || workflow.trust_state !== 'trusted'}
-						onclick={() => runAdmin('untrust', workflow!.id)}
+						onclick={() => openModerationDialog('untrust')}
 					>
 						Untrust
 					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						class="border-error-300 text-error-700 dark:border-error-800 dark:text-error-400"
-						disabled={actionLoading}
-						onclick={() => runAdmin('delete', workflow!.id)}
-					>
-						Remove from catalog
-					</Button>
+					{#if isModerator}
+						<Button
+							size="sm"
+							variant="outline"
+							onclick={openDeprecationDialog}
+						>
+							<Calendar class="h-4 w-4" />
+							{workflow.deprecated_after ? 'Edit deprecation' : 'Set deprecation'}
+						</Button>
+					{/if}
+					{#if isAdmin}
+						<Button
+							size="sm"
+							variant="outline"
+							class="border-error-300 text-error-700 dark:border-error-800 dark:text-error-400"
+							disabled={actionLoading}
+							onclick={runDelete}
+						>
+							Remove from catalog
+						</Button>
+					{/if}
 				</div>
 			{/if}
 		</Card>
+
+		<!-- Sync schedule panel (admin only) -->
+		{#if isAdmin}
+			<Card class="space-y-4 p-6">
+				<div class="flex items-center justify-between">
+					<div>
+						<h2 class="text-lg font-semibold text-[var(--text-primary)]">Auto-sync schedule</h2>
+						<p class="mt-0.5 text-xs text-[var(--text-tertiary)]">
+							Automatically re-import this workflow from source on a schedule.
+						</p>
+					</div>
+					<div class="flex items-center gap-2">
+						{#if syncSchedule && !syncScheduleEditing}
+							<Button size="sm" variant="outline" onclick={triggerSyncNow} loading={syncNowLoading}>
+								<RefreshCw class="h-4 w-4" />
+								Sync now
+							</Button>
+						{/if}
+						{#if !syncScheduleEditing}
+							<Button size="sm" variant="outline" onclick={() => (syncScheduleEditing = true)}>
+								{syncSchedule ? 'Edit schedule' : 'Configure'}
+							</Button>
+						{/if}
+					</div>
+				</div>
+
+				{#if syncScheduleError}
+					<Alert variant="error" dismissible ondismiss={() => (syncScheduleError = null)}>
+						{syncScheduleError}
+					</Alert>
+				{/if}
+
+				{#if syncScheduleLoading}
+					<Skeleton class="h-6 w-48" />
+				{:else if syncScheduleEditing}
+					<div class="space-y-4 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+						<div class="flex items-center gap-3">
+							<input
+								type="checkbox"
+								id="sync-enabled"
+								class="h-4 w-4 rounded border-[var(--border-primary)]"
+								bind:checked={syncScheduleEnabled}
+							/>
+							<label for="sync-enabled" class="text-sm font-medium text-[var(--text-primary)]">
+								Enable auto-sync
+							</label>
+						</div>
+						{#if syncScheduleEnabled}
+							<div>
+								<label for="sync-interval" class="block text-sm font-medium text-[var(--text-primary)]">
+									Sync interval
+								</label>
+								<select
+									id="sync-interval"
+									bind:value={syncScheduleInterval}
+									class="mt-1 block w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+								>
+									{#each intervalOptions.filter((o) => o.value !== '0') as opt}
+										<option value={parseInt(opt.value)}>{opt.label}</option>
+									{/each}
+								</select>
+							</div>
+						{/if}
+						<div class="flex gap-2 pt-2">
+							<Button size="sm" variant="primary" onclick={saveSyncSchedule} loading={syncScheduleSaving}>
+								Save
+							</Button>
+							<Button size="sm" variant="outline" onclick={() => (syncScheduleEditing = false)}>
+								Cancel
+							</Button>
+						</div>
+					</div>
+				{:else if syncSchedule}
+					<dl class="grid gap-3 text-sm sm:grid-cols-3">
+						<div>
+							<dt class="text-[var(--text-tertiary)]">Status</dt>
+							<dd class="mt-0.5">
+								<span class="inline-flex items-center gap-1 {syncSchedule.enabled ? 'text-success-700 dark:text-success-400' : 'text-[var(--text-tertiary)]'}">
+									{#if syncSchedule.enabled}
+										<CheckCircle class="h-3.5 w-3.5" />
+										Enabled
+									{:else}
+										<XCircle class="h-3.5 w-3.5" />
+										Disabled
+									{/if}
+								</span>
+							</dd>
+						</div>
+						<div>
+							<dt class="text-[var(--text-tertiary)]">Interval</dt>
+							<dd class="mt-0.5 text-[var(--text-primary)]">
+								{syncSchedule.interval_minutes === 0 ? 'N/A' : `Every ${syncSchedule.interval_minutes} min`}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-[var(--text-tertiary)]">Last synced</dt>
+							<dd class="mt-0.5 text-[var(--text-primary)]">
+								{syncSchedule.last_synced_at ? formatRelativeTime(syncSchedule.last_synced_at) : '—'}
+							</dd>
+						</div>
+					</dl>
+				{:else}
+					<p class="text-sm text-[var(--text-tertiary)]">No sync schedule configured.</p>
+				{/if}
+			</Card>
+		{/if}
 
 		<Card class="space-y-4 p-6">
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -540,6 +874,59 @@
 			</div>
 			<YamlCodeBlock source={workflowYamlSource} />
 		</Card>
+
+		<!-- Moderation events timeline -->
+		{#if isModerator}
+			<Card class="space-y-4 p-6">
+				<h2 class="text-lg font-semibold text-[var(--text-primary)]">Moderation history</h2>
+				{#if moderationEventsLoading}
+					<div class="space-y-3">
+						{#each Array(3) as _, i (i)}
+							<Skeleton class="h-12 w-full" />
+						{/each}
+					</div>
+				{:else if moderationEvents.length === 0}
+					<p class="text-sm text-[var(--text-tertiary)]">No moderation actions recorded.</p>
+				{:else}
+					<ol class="relative border-l border-[var(--border-primary)] pl-5 space-y-5">
+						{#each moderationEvents as ev (ev.id)}
+							{@const isGood = ev.action === 'approve' || ev.action === 'trust'}
+							{@const isBad = ev.action === 'reject' || ev.action === 'untrust' || ev.action === 'delete'}
+							<li class="relative">
+								<span
+									class="absolute -left-[1.125rem] flex h-5 w-5 items-center justify-center rounded-full ring-2 ring-[var(--bg-secondary)] {isGood
+										? 'bg-success-100 dark:bg-success-900/30'
+										: isBad
+											? 'bg-error-100 dark:bg-error-900/30'
+											: 'bg-secondary-100 dark:bg-secondary-800'}"
+								>
+									{#if isGood}
+										<CheckCircle class="h-3.5 w-3.5 text-success-600 dark:text-success-400" />
+									{:else if isBad}
+										<XCircle class="h-3.5 w-3.5 text-error-600 dark:text-error-400" />
+									{:else}
+										<Clock class="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+									{/if}
+								</span>
+								<div>
+									<p class="text-sm font-medium text-[var(--text-primary)]">
+										<span class="capitalize">{ev.action}</span>
+										<span class="ml-2 text-xs font-normal text-[var(--text-tertiary)]">
+											{formatRelativeTime(ev.created_at)}
+										</span>
+									</p>
+									{#if ev.note}
+										<div class="mt-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+											<MarkdownBlock source={ev.note} />
+										</div>
+									{/if}
+								</div>
+							</li>
+						{/each}
+					</ol>
+				{/if}
+			</Card>
+		{/if}
 	{/if}
 
 	<div>
@@ -603,6 +990,127 @@
 	</div>
 </div>
 
+<!-- Moderation action dialog -->
+{#if isModerator}
+	<Dialog
+		bind:open={moderationDialogOpen}
+		title="{moderationDialogAction ? moderationActionLabel(moderationDialogAction) : ''} workflow"
+		description="Optionally add a markdown note explaining your decision. Security engineers must provide a note."
+	>
+		{#if moderationDialogAction}
+			<div class="space-y-4">
+				{#if moderationDialogError}
+					<Alert variant="error" dismissible ondismiss={() => (moderationDialogError = null)}>
+						{moderationDialogError}
+					</Alert>
+				{/if}
+
+				<div>
+					<div class="mb-1.5 flex items-center justify-between">
+						<label for="mod-note" class="block text-sm font-medium text-[var(--text-primary)]">
+							Note {isSecurityEngineer ? '(required)' : '(optional)'}
+						</label>
+						<button
+							type="button"
+							class="text-xs text-primary-600 hover:underline dark:text-primary-400"
+							onclick={() => (moderationNotePreview = !moderationNotePreview)}
+						>
+							{moderationNotePreview ? 'Edit' : 'Preview'}
+						</button>
+					</div>
+					{#if moderationNotePreview}
+						<div class="min-h-[6rem] rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+							{#if moderationNote.trim()}
+								<MarkdownBlock source={moderationNote} />
+							{:else}
+								<p class="text-sm text-[var(--text-tertiary)]">Nothing to preview.</p>
+							{/if}
+						</div>
+					{:else}
+						<textarea
+							id="mod-note"
+							bind:value={moderationNote}
+							rows={6}
+							placeholder="Write your note in markdown…"
+							class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+						></textarea>
+						<p class="mt-1 text-xs text-[var(--text-tertiary)]">Supports markdown (bold, lists, code blocks, etc.)</p>
+					{/if}
+				</div>
+
+				<div class="flex justify-end gap-2 pt-2">
+					<Button variant="outline" onclick={() => (moderationDialogOpen = false)}>Cancel</Button>
+					<Button
+						variant="primary"
+						loading={moderationDialogLoading}
+						onclick={() => void submitModerationAction()}
+					>
+						{moderationActionLabel(moderationDialogAction)}
+					</Button>
+				</div>
+			</div>
+		{/if}
+	</Dialog>
+{/if}
+
+<!-- Set deprecation dialog -->
+{#if isModerator}
+	<Dialog
+		bind:open={deprecationDialogOpen}
+		title="Set deprecation period"
+		description="Pipelines that use this version will receive a warning before the date, and will be blocked after it."
+	>
+		<div class="space-y-4">
+			{#if deprecationDialogError}
+				<Alert variant="error" dismissible ondismiss={() => (deprecationDialogError = null)}>
+					{deprecationDialogError}
+				</Alert>
+			{/if}
+
+			<div>
+				<label for="deprecated-after" class="block text-sm font-medium text-[var(--text-primary)]">
+					Block pipelines after
+				</label>
+				<input
+					id="deprecated-after"
+					type="datetime-local"
+					bind:value={deprecationAfterInput}
+					class="mt-1 block w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+				/>
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					Leave blank to remove the deprecation period (or set as a simple deprecated flag only).
+				</p>
+			</div>
+
+			<div>
+				<label for="deprecation-note" class="block text-sm font-medium text-[var(--text-primary)]">
+					Deprecation note (optional, markdown)
+				</label>
+				<textarea
+					id="deprecation-note"
+					bind:value={deprecationNoteInput}
+					rows={4}
+					placeholder="Explain why this version is being deprecated and what to migrate to…"
+					class="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+				></textarea>
+			</div>
+
+			<div class="flex justify-end gap-2 pt-2">
+				<Button variant="outline" onclick={() => (deprecationDialogOpen = false)}>Cancel</Button>
+				<Button
+					variant="primary"
+					loading={deprecationDialogLoading}
+					onclick={() => void submitDeprecation()}
+				>
+					<Calendar class="h-4 w-4" />
+					Save deprecation
+				</Button>
+			</div>
+		</div>
+	</Dialog>
+{/if}
+
+<!-- "Sync new catalog version" dialog (admin only) -->
 {#if isAdmin}
 	<Dialog
 		bind:open={syncDialogOpen}
@@ -817,7 +1325,7 @@
 											</button>
 										{:else}
 											<p class="px-1 py-2 text-xs text-[var(--text-tertiary)]">
-												Set “Load commits from ref” and click Refresh (optional).
+												Set "Load commits from ref" and click Refresh (optional).
 											</p>
 										{/each}
 									</div>

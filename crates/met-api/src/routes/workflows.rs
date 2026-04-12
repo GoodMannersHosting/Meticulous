@@ -68,6 +68,12 @@ pub struct WorkflowResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
     pub catalog_metadata: serde_json::Value,
+    /// When set, pipelines warn before this date and are hard-blocked on/after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecated_after: Option<DateTime<Utc>>,
+    /// Markdown note explaining the reason for the deprecation period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecation_note: Option<String>,
 }
 
 impl From<ReusableWorkflow> for WorkflowResponse {
@@ -113,6 +119,8 @@ impl From<ReusableWorkflow> for WorkflowResponse {
             reviewed_at: w.reviewed_at,
             deleted_at: w.deleted_at,
             catalog_metadata: w.catalog_metadata,
+            deprecated_after: w.deprecated_after,
+            deprecation_note: w.deprecation_note,
         }
     }
 }
@@ -327,7 +335,8 @@ async fn get_workflow(
         r#"
         SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at,
                source, scm_repository, scm_ref, scm_path, scm_revision, submission_status, trust_state,
-               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata
+               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata,
+               deprecated_after, deprecation_note
         FROM reusable_workflows
         WHERE id = $1 AND org_id = $2
         "#,
@@ -372,7 +381,8 @@ async fn list_versions(
         r#"
         SELECT id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at,
                source, scm_repository, scm_ref, scm_path, scm_revision, submission_status, trust_state,
-               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata
+               submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata,
+               deprecated_after, deprecation_note
         FROM reusable_workflows
         WHERE id = $1 AND org_id = $2
         "#,

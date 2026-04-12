@@ -1783,6 +1783,15 @@ async fn list_roles(
                 .map(|s| (*s).to_string())
                 .collect(),
         },
+        RoleInfo {
+            name: "security_engineer".to_string(),
+            description: "Approve, reject, trust, and untrust global catalog workflows; notes required".to_string(),
+            permissions: PermissionRole::SecurityEngineer
+                .permissions()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        },
     ];
 
     Ok(Json(roles))
@@ -1855,6 +1864,7 @@ async fn assign_role(
         "auditor" => PermissionRole::Auditor,
         "security_lead" => PermissionRole::SecurityLead,
         "security_auditor" => PermissionRole::SecurityAuditor,
+        "security_engineer" => PermissionRole::SecurityEngineer,
         "user" => PermissionRole::User,
         _ => return Err(ApiError::bad_request("invalid role")),
     };
@@ -1893,6 +1903,7 @@ async fn revoke_role(
         "auditor" => PermissionRole::Auditor,
         "security_lead" => PermissionRole::SecurityLead,
         "security_auditor" => PermissionRole::SecurityAuditor,
+        "security_engineer" => PermissionRole::SecurityEngineer,
         "user" => PermissionRole::User,
         _ => return Err(ApiError::bad_request("invalid role")),
     };

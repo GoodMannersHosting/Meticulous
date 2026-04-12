@@ -503,6 +503,46 @@ pub async fn github_api_base_for_credentials_path(
     github_api_base_hint_from_encrypted_row(crypto, &row)
 }
 
+/// List YAML/YML file paths under `dir_path` in a repository at `git_ref`.
+///
+/// Uses the GitHub Contents API (directory listing). Returns paths relative to
+/// the repository root (no leading slash).
+#[instrument(skip(token), fields(owner = %owner, repo = %repo, dir = %dir_path))]
+pub async fn list_github_directory_yaml_files(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    dir_path: &str,
+    git_ref: &str,
+    api_base: &str,
+) -> ApiResult<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Entry {
+        name: String,
+        path: String,
+        #[serde(rename = "type")]
+        entry_type: String,
+    }
+
+    let base = api_base.trim_end_matches('/');
+    let clean_dir = dir_path.trim_start_matches('/').trim_end_matches('/');
+    let url = format!(
+        "{base}/repos/{owner}/{repo}/contents/{clean_dir}?ref={}",
+        urlencoding::encode(git_ref)
+    );
+
+    let entries = github_get_json_array::<Entry>(token, &url).await?;
+    let paths = entries
+        .into_iter()
+        .filter(|e| {
+            e.entry_type == "file"
+                && (e.name.ends_with(".yaml") || e.name.ends_with(".yml"))
+        })
+        .map(|e| e.path)
+        .collect();
+    Ok(paths)
+}
+
 pub fn yaml_file_to_json_value(yaml: &str) -> ApiResult<serde_json::Value> {
     let v: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| ApiError::bad_request(format!("YAML: {e}")))?;

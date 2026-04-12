@@ -1,5 +1,6 @@
 //! Resolve reusable workflow references in a pipeline definition and report catalog/trust status.
 
+use chrono::Utc;
 use met_core::ids::{OrganizationId, ProjectId};
 use met_core::models::Pipeline;
 use met_parser::ir::WorkflowScope as IrWorkflowScope;
@@ -187,6 +188,33 @@ async fn diagnose_global(
             "untrusted catalog workflow; enable org setting allow_untrusted_workflows or mark trusted"
                 .to_string(),
         );
+    }
+
+    // Date-gated deprecation: warn before the date, hard-block on/after.
+    if status == "ok" {
+        if let Some(da) = row.deprecated_after {
+            let note_suffix = row
+                .deprecation_note
+                .as_deref()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default();
+            if da <= Utc::now() {
+                status = "deprecated_blocked";
+                blocking = true;
+                detail = Some(format!(
+                    "this version was deprecated on {} and is now blocked{}",
+                    da.format("%Y-%m-%d"),
+                    note_suffix
+                ));
+            } else {
+                status = "deprecation_warning";
+                detail = Some(format!(
+                    "this version will be deprecated (blocked) after {}{}",
+                    da.format("%Y-%m-%d"),
+                    note_suffix
+                ));
+            }
+        }
     }
 
     let declared_outputs = declared_output_names_from_definition(&row.definition);

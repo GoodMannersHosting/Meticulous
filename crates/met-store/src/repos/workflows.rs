@@ -77,6 +77,11 @@ pub struct ReusableWorkflow {
     pub reviewed_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub catalog_metadata: serde_json::Value,
+    /// Date/time after which pipelines using this version are hard-blocked.
+    /// Before this date a warning diagnostic is emitted.
+    pub deprecated_after: Option<DateTime<Utc>>,
+    /// Human-readable markdown note explaining the deprecation reason.
+    pub deprecation_note: Option<String>,
 }
 
 /// Input for creating a workflow.
@@ -108,13 +113,15 @@ pub struct CreateGlobalCatalogGit {
 const WF_SELECT: &str = r#"
     id, org_id, project_id, scope, name, version, definition, description, deprecated, tags, created_at, updated_at,
     source, scm_repository, scm_ref, scm_path, scm_revision, submission_status, trust_state,
-    submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata
+    submitted_by, reviewed_by, reviewed_at, deleted_at, catalog_metadata,
+    deprecated_after, deprecation_note
 "#;
 
 const WF_RW: &str = r#"
     rw.id, rw.org_id, rw.project_id, rw.scope, rw.name, rw.version, rw.definition, rw.description, rw.deprecated, rw.tags, rw.created_at, rw.updated_at,
     rw.source, rw.scm_repository, rw.scm_ref, rw.scm_path, rw.scm_revision, rw.submission_status, rw.trust_state,
-    rw.submitted_by, rw.reviewed_by, rw.reviewed_at, rw.deleted_at, rw.catalog_metadata
+    rw.submitted_by, rw.reviewed_by, rw.reviewed_at, rw.deleted_at, rw.catalog_metadata,
+    rw.deprecated_after, rw.deprecation_note
 "#;
 
 /// Repository for workflow operations.
@@ -849,5 +856,59 @@ impl<'a> WorkflowRepo<'a> {
         }
 
         Ok(())
+    }
+
+    /// List all live global versions of a workflow that have SCM coordinates (for auto-sync).
+    pub async fn list_global_catalog_versions_with_scm(
+        &self,
+        org_id: OrganizationId,
+        workflow_name: &str,
+    ) -> Result<Vec<ReusableWorkflow>> {
+        sqlx::query_as::<_, ReusableWorkflow>(&format!(
+            r#"
+            SELECT {WF_SELECT}
+            FROM reusable_workflows
+            WHERE org_id = $1
+              AND scope = 'global'
+              AND project_id IS NULL
+              AND name = $2
+              AND deleted_at IS NULL
+              AND source = 'git'
+              AND scm_repository IS NOT NULL
+              AND scm_path IS NOT NULL
+            "#
+        ))
+        .bind(org_id.as_uuid())
+        .bind(workflow_name)
+        .fetch_all(self.pool)
+        .await
+        .map_err(StoreError::from)
+    }
+
+    /// Admin: set or clear the date-gated deprecation period and note.
+    pub async fn set_deprecation(
+        &self,
+        org_id: OrganizationId,
+        workflow_id: Uuid,
+        deprecated_after: Option<DateTime<Utc>>,
+        deprecation_note: Option<&str>,
+    ) -> Result<ReusableWorkflow> {
+        sqlx::query_as::<_, ReusableWorkflow>(&format!(
+            r#"
+            UPDATE reusable_workflows
+            SET deprecated_after = $1,
+                deprecation_note = $2,
+                updated_at = NOW()
+            WHERE id = $3 AND org_id = $4 AND deleted_at IS NULL
+            RETURNING {WF_SELECT}
+            "#
+        ))
+        .bind(deprecated_after)
+        .bind(deprecation_note)
+        .bind(workflow_id)
+        .bind(org_id.as_uuid())
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::not_found("workflow", workflow_id))
     }
 }

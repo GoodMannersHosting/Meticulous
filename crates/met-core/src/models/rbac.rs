@@ -29,6 +29,8 @@ pub enum PermissionRole {
     SecurityLead,
     /// Org-wide security search (blast radius); platform admins use `*`.
     SecurityAuditor,
+    /// Approve, reject, trust, and untrust global catalog workflows; must supply notes.
+    SecurityEngineer,
     /// Standard read/write for assigned projects.
     User,
 }
@@ -49,6 +51,14 @@ impl PermissionRole {
             Self::Auditor => vec!["read:*", "audit:read"],
             Self::SecurityLead => vec!["user:read", "user:write", "token:revoke", "audit:read"],
             Self::SecurityAuditor => vec!["security:blast-radius:org", "read:*"],
+            Self::SecurityEngineer => vec![
+                "read:*",
+                "audit:read",
+                "workflow:approve",
+                "workflow:reject",
+                "workflow:trust",
+                "workflow:untrust",
+            ],
             Self::User => vec!["pipeline:read", "run:read", "run:write", "agent:read"],
         }
     }

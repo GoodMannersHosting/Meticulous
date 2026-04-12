@@ -68,6 +68,9 @@ export interface CatalogWorkflow {
 	definition: Record<string, unknown>;
 	description?: string | null;
 	deprecated: boolean;
+	/** ISO-8601 datetime after which this version is hard-blocked. */
+	deprecated_after?: string | null;
+	deprecation_note?: string | null;
 	tags: string[];
 	created_at: string;
 	updated_at: string;
@@ -962,4 +965,47 @@ export interface GroupMappingResponse {
 	meticulous_group_id: string;
 	role: string;
 	created_at: string;
+}
+
+// ── Workflow bulk import ───────────────────────────────────────────────────────
+
+export interface BulkImportError {
+	path: string;
+	message: string;
+}
+
+export interface BulkImportResult {
+	imported: CatalogWorkflow[];
+	errors: BulkImportError[];
+}
+
+// ── Workflow sync schedules ───────────────────────────────────────────────────
+
+export interface WorkflowSyncSchedule {
+	id: string;
+	org_id: string;
+	workflow_name: string;
+	enabled: boolean;
+	interval_minutes: number;
+	last_synced_at?: string | null;
+	next_sync_at: string;
+	created_at: string;
+	updated_at: string;
+}
+
+// ── Workflow moderation events ────────────────────────────────────────────────
+
+export interface ModerationEvent {
+	id: string;
+	workflow_id: string;
+	org_id: string;
+	/** approve | reject | trust | untrust | delete */
+	action: string;
+	actor_user_id: string;
+	note?: string | null;
+	created_at: string;
+}
+
+export interface ModerationEventsResponse {
+	events: ModerationEvent[];
 }

@@ -5,6 +5,7 @@
 	import type { CatalogWorkflow } from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
 	import { Plus, Search, Layers } from 'lucide-svelte';
+	// Layers is used for bulk import button
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { goto } from '$app/navigation';
 
@@ -104,6 +105,21 @@
 		return data;
 	});
 
+	function deprecationBadge(row: CatalogWorkflow): string {
+		if (row.deprecated_after) {
+			const d = new Date(row.deprecated_after);
+			const blocked = d <= new Date();
+			if (blocked) {
+				return `<span class="ml-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-error-100 text-error-800 dark:bg-error-900/30 dark:text-error-300">blocked</span>`;
+			}
+			return `<span class="ml-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300">deprecating</span>`;
+		}
+		if (row.deprecated) {
+			return `<span class="ml-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300">deprecated</span>`;
+		}
+		return '';
+	}
+
 	const columns: Column<CatalogWorkflow>[] = [
 		{
 			key: 'name',
@@ -117,7 +133,7 @@
 						</svg>
 					</div>
 					<div>
-						<div class="font-medium text-[var(--text-primary)]">${row.name}</div>
+						<div class="font-medium text-[var(--text-primary)]">${row.name}${deprecationBadge(row)}</div>
 						<div class="text-sm text-[var(--text-secondary)]">v${row.version}</div>
 					</div>
 				</div>
@@ -188,10 +204,16 @@
 			</p>
 		</div>
 
-		<Button variant="primary" href="/workflows/new">
-			<Plus class="h-4 w-4" />
-			Import workflow
-		</Button>
+		<div class="flex gap-2">
+			<Button variant="outline" href="/workflows/new?mode=bulk">
+				<Layers class="h-4 w-4" />
+				Bulk import
+			</Button>
+			<Button variant="primary" href="/workflows/new">
+				<Plus class="h-4 w-4" />
+				Import workflow
+			</Button>
+		</div>
 	</div>
 
 	<div class="flex flex-wrap gap-4">

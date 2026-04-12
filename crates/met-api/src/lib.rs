@@ -11,6 +11,7 @@
 
 pub mod auth;
 pub mod ci_bootstrap;
+pub mod tasks;
 pub mod config;
 pub mod error;
 pub mod extractors;
