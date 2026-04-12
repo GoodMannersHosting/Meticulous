@@ -9,7 +9,8 @@
 		AppWindow,
 		Shield,
 		Archive,
-		Globe
+		Globe,
+		Activity
 	} from 'lucide-svelte';
 
 	interface AdminLink {
@@ -67,6 +68,12 @@
 			description: 'See pipeline jobs that are pending or queued for agents',
 			href: '/admin/job-queue',
 			icon: ListOrdered
+		},
+		{
+			title: 'Platform Health',
+			description: 'Database size, object storage, NATS JetStream, and engine status',
+			href: '/admin/platform-health',
+			icon: Activity
 		},
 		{
 			title: 'Platform settings',

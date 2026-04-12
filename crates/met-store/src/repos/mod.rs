@@ -26,6 +26,7 @@ mod organizations;
 mod pipeline_members;
 mod pipeline_run_workflow_outputs;
 mod pipelines;
+mod platform_health;
 mod platform_settings;
 mod project_members;
 mod projects;
@@ -69,6 +70,9 @@ pub use organizations::OrganizationRepo;
 pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipeline_members::{PipelineAccessRepo, PipelineMemberRow, PipelineRole};
 pub use pipelines::PipelineRepo;
+pub use platform_health::{
+    OrgArtifactStorageTotals, RelationSizeRow, database_disk_overview, org_artifact_storage_totals,
+};
 pub use platform_settings::PlatformSettingsRepo;
 pub use project_members::{ProjectAccessRepo, ProjectMemberRow, ProjectRole};
 pub use projects::ProjectRepo;

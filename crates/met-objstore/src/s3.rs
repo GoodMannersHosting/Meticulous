@@ -55,24 +55,129 @@ impl S3ObjectStore {
     pub fn config(&self) -> &ObjectStoreConfig {
         &self.config
     }
+
+    /// Verify the bucket exists and credentials allow `s3:ListBucket` / head access.
+    pub async fn head_bucket(&self) -> Result<()> {
+        self.client
+            .head_bucket()
+            .bucket(&self.bucket)
+            .send()
+            .await
+            .map_err(|e| map_sdk_error("head_bucket", e))?;
+        Ok(())
+    }
+}
+
+/// Credential strategy for the AWS SDK: static signing keys vs full AWS default chain (IAM/SSO/profile).
+enum ResolvedSigningCredentials {
+    Static(Credentials),
+    AwsDefaultChain,
+}
+
+fn static_pair_from_config(config: &ObjectStoreConfig) -> Option<(String, String)> {
+    let ak = config.access_key_id.as_ref()?.trim();
+    let sk = config.secret_access_key.as_ref()?.trim();
+    if ak.is_empty() || sk.is_empty() {
+        return None;
+    }
+    Some((ak.to_string(), sk.to_string()))
+}
+
+fn env_key_pair(access_var: &str, secret_var: &str) -> Option<(String, String)> {
+    let ak = std::env::var(access_var).ok()?.trim().to_string();
+    let sk = std::env::var(secret_var).ok()?.trim().to_string();
+    if ak.is_empty() || sk.is_empty() {
+        return None;
+    }
+    Some((ak, sk))
+}
+
+/// True when the endpoint URL host is a typical local S3-compatible dev target (SeaweedFS, MinIO).
+fn endpoint_host_is_local_dev(endpoint: &str) -> bool {
+    let Ok(url) = Url::parse(endpoint) else {
+        return endpoint.contains("127.0.0.1")
+            || endpoint.contains("localhost")
+            || endpoint.contains("[::1]");
+    };
+    matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "::1")
+    )
+}
+
+fn credentials_from_access_secret(ak: String, sk: String) -> Credentials {
+    let token = std::env::var("AWS_SESSION_TOKEN")
+        .ok()
+        .and_then(|t| {
+            let t = t.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+    Credentials::new(ak, sk, token, None, "meticulous-static")
+}
+
+/// Resolve credentials without touching the AWS profile/SSO chain when a custom `endpoint` is set.
+fn resolve_signing_credentials(config: &ObjectStoreConfig) -> Result<ResolvedSigningCredentials> {
+    let custom_endpoint = !config.endpoint.is_empty();
+
+    if let Some((ak, sk)) = static_pair_from_config(config) {
+        return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
+            ak, sk,
+        )));
+    }
+
+    if custom_endpoint {
+        if let Some((ak, sk)) = env_key_pair("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY") {
+            return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
+                ak, sk,
+            )));
+        }
+        if let Some((ak, sk)) =
+            env_key_pair("MET_STORAGE__ACCESS_KEY", "MET_STORAGE__SECRET_KEY")
+        {
+            return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
+                ak, sk,
+            )));
+        }
+        if endpoint_host_is_local_dev(&config.endpoint) {
+            tracing::debug!(
+                endpoint = %config.endpoint,
+                "S3-compatible local endpoint: using admin/admin signing credentials (override with MET_STORAGE__ACCESS_KEY / MET_STORAGE__SECRET_KEY or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)"
+            );
+            return Ok(ResolvedSigningCredentials::Static(Credentials::new(
+                "admin",
+                "admin",
+                None,
+                None,
+                "meticulous-local-s3-placeholder",
+            )));
+        }
+        return Err(ObjectStoreError::config(
+            "storage access_key and secret_key are required for this S3 endpoint \
+(set storage.access_key/secret_key, MET_STORAGE__ACCESS_KEY / MET_STORAGE__SECRET_KEY, or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)",
+        ));
+    }
+
+    Ok(ResolvedSigningCredentials::AwsDefaultChain)
 }
 
 async fn create_s3_client(config: &ObjectStoreConfig) -> Result<Client> {
-    let mut sdk_config_builder = aws_config::defaults(BehaviorVersion::latest());
+    let mut loader = aws_config::defaults(BehaviorVersion::latest())
+        .region(Region::new(config.region.clone()));
 
     if !config.endpoint.is_empty() {
-        sdk_config_builder = sdk_config_builder.endpoint_url(&config.endpoint);
+        loader = loader.endpoint_url(&config.endpoint);
     }
 
-    sdk_config_builder = sdk_config_builder.region(Region::new(config.region.clone()));
-
-    if let (Some(access_key), Some(secret_key)) = (&config.access_key_id, &config.secret_access_key)
-    {
-        let credentials = Credentials::new(access_key, secret_key, None, None, "meticulous-static");
-        sdk_config_builder = sdk_config_builder.credentials_provider(credentials);
-    }
-
-    let sdk_config = sdk_config_builder.load().await;
+    let sdk_config = match resolve_signing_credentials(config)? {
+        ResolvedSigningCredentials::Static(creds) => {
+            loader.credentials_provider(creds).load().await
+        }
+        ResolvedSigningCredentials::AwsDefaultChain => loader.load().await,
+    };
 
     let mut s3_config_builder =
         aws_sdk_s3::config::Builder::from(&sdk_config).force_path_style(config.path_style);

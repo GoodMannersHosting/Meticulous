@@ -814,7 +814,9 @@ export const apiMethods = {
 		},
 		ops: {
 			jobQueue: (params?: { limit?: number }) =>
-				api.get<{ count: number; data: JobQueueEntry[] }>('/api/v1/admin/ops/job-queue', { params })
+				api.get<{ count: number; data: JobQueueEntry[] }>('/api/v1/admin/ops/job-queue', { params }),
+			platformHealth: (params?: { deep_object_store?: boolean }) =>
+				api.get<PlatformHealthResponse>('/api/v1/admin/ops/platform-health', { params })
 		},
 		/** Meticulous Apps (machine / integration auth). */
 		meticulousApps: {
@@ -860,6 +862,42 @@ export const apiMethods = {
 		}
 	}
 };
+
+/** `GET /api/v1/admin/ops/platform-health` */
+export interface PlatformHealthResponse {
+	api_version: string;
+	engine_initialized: boolean;
+	engine_init_error?: string | null;
+	postgres: {
+		database_bytes: number;
+		top_relations: { schema: string; name: string; total_bytes: number }[];
+	};
+	org_artifacts: {
+		total_bytes: number;
+		artifact_count: number;
+	};
+	object_storage: {
+		endpoint_display: string;
+		bucket: string;
+		path_style: boolean;
+		client_initialized: boolean;
+		reachable: boolean;
+		reachability_error?: string | null;
+		deep_scan?: {
+			prefix: string;
+			bytes_summed: number;
+			objects_scanned: number;
+			list_pages: number;
+			truncated: boolean;
+			error?: string | null;
+		} | null;
+	};
+	nats_jetstream: {
+		available: boolean;
+		unavailable_reason?: string | null;
+		streams: { name: string; messages: number; bytes: number; error?: string | null }[];
+	};
+}
 
 /** Admin org policy (`GET/PATCH /api/v1/admin/policy`). */
 export interface OrgPolicyApiResponse {

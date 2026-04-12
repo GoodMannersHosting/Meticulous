@@ -40,6 +40,7 @@ pub mod paths;
 pub mod presigned;
 pub mod s3;
 pub mod traits;
+pub mod usage;
 
 pub use config::ObjectStoreConfig;
 pub use error::{ObjectStoreError, Result};
@@ -53,6 +54,7 @@ pub use s3::S3ObjectStore;
 pub use traits::{
     GetResult, ListOptions, ListResult, ObjectMeta, ObjectStore, ObjectStoreExt, PutResult,
 };
+pub use usage::{ObjectStoreUsageEstimate, estimate_prefix_size};
 
 #[cfg(test)]
 mod tests {

@@ -19,6 +19,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub mod admin;
+pub mod admin_platform_health;
 pub mod admin_workflows;
 pub mod agents;
 pub mod artifacts;

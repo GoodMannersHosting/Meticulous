@@ -3383,6 +3383,7 @@ dependencies = [
  "met-core",
  "met-engine",
  "met-lint",
+ "met-objstore",
  "met-parser",
  "met-secret-resolve",
  "met-secrets",

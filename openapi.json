@@ -18,10 +18,44 @@
     }
   ],
   "paths": {
-    "/admin/users/{id}/reset-password": {
+    "/api/v1/admin/ops/platform-health": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "platform_health",
+        "parameters": [
+          {
+            "name": "deep_object_store",
+            "in": "query",
+            "description": "Run capped object listing for org-prefix usage estimate",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Platform health snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformHealthResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not admin"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{id}/reset-password": {
       "post": {
         "tags": [
-          "auth"
+          "admin"
         ],
         "summary": "Admin endpoint to reset a user's password.",
         "operationId": "admin_reset_password",
@@ -66,7 +100,7 @@
         }
       }
     },
-    "/admin/workflows/{workflow_id}/approve": {
+    "/api/v1/admin/workflows/{workflow_id}/approve": {
       "post": {
         "tags": [
           "admin"
@@ -75,7 +109,7 @@
         "responses": {}
       }
     },
-    "/admin/workflows/{workflow_id}/delete": {
+    "/api/v1/admin/workflows/{workflow_id}/delete": {
       "post": {
         "tags": [
           "admin"
@@ -84,7 +118,7 @@
         "responses": {}
       }
     },
-    "/admin/workflows/{workflow_id}/reject": {
+    "/api/v1/admin/workflows/{workflow_id}/reject": {
       "post": {
         "tags": [
           "admin"
@@ -93,7 +127,7 @@
         "responses": {}
       }
     },
-    "/admin/workflows/{workflow_id}/trust": {
+    "/api/v1/admin/workflows/{workflow_id}/trust": {
       "post": {
         "tags": [
           "admin"
@@ -102,7 +136,7 @@
         "responses": {}
       }
     },
-    "/admin/workflows/{workflow_id}/untrust": {
+    "/api/v1/admin/workflows/{workflow_id}/untrust": {
       "post": {
         "tags": [
           "admin"
@@ -1304,31 +1338,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Project not found"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "projects"
-        ],
-        "operationId": "delete_project",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Project ID",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Project deleted"
           },
           "404": {
             "description": "Project not found"
@@ -3293,7 +3302,40 @@
         "tags": [
           "tokens"
         ],
-        "summary": "Revoke an API token.",
+        "operationId": "delete_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Token ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token deleted"
+          },
+          "400": {
+            "description": "Token must be deactivated first"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Token not found"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens/{id}/revoke": {
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Permanent revoke (instant kill switch).",
         "operationId": "revoke_token",
         "parameters": [
           {
@@ -4837,6 +4879,14 @@
               "null"
             ]
           },
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Scope this secret to a specific environment. NULL = global (all environments)."
+          },
           "kind": {
             "type": "string"
           },
@@ -4895,6 +4945,16 @@
           "name": {
             "type": "string",
             "description": "Display name for the token."
+          },
+          "pipeline_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Pipeline IDs this token can access (None = all pipelines in allowed projects)."
           },
           "project_ids": {
             "type": [
@@ -4965,6 +5025,13 @@
           "value"
         ],
         "properties": {
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "is_sensitive": {
             "type": "boolean"
           },
@@ -5441,6 +5508,35 @@
           }
         }
       },
+      "JetStreamStreamRow": {
+        "type": "object",
+        "required": [
+          "name",
+          "messages",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "JobAssignmentResponse": {
         "type": "object",
         "required": [
@@ -5778,6 +5874,26 @@
           }
         }
       },
+      "MeGroup": {
+        "type": "object",
+        "description": "Group membership summary on the current user profile.",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
       "MeResponse": {
         "type": "object",
         "description": "Current user response.",
@@ -5797,6 +5913,12 @@
           "email": {
             "type": "string"
           },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeGroup"
+            }
+          },
           "id": {
             "type": "string"
           },
@@ -5811,6 +5933,129 @@
           },
           "role": {
             "type": "string"
+          }
+        }
+      },
+      "NatsJetStreamHealthSection": {
+        "type": "object",
+        "required": [
+          "available",
+          "streams"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JetStreamStreamRow"
+            }
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ObjectStorageDeepScanSection": {
+        "type": "object",
+        "required": [
+          "prefix",
+          "bytes_summed",
+          "objects_scanned",
+          "list_pages",
+          "truncated"
+        ],
+        "properties": {
+          "bytes_summed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "list_pages": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "objects_scanned": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ObjectStorageHealthSection": {
+        "type": "object",
+        "required": [
+          "endpoint_display",
+          "bucket",
+          "path_style",
+          "client_initialized",
+          "reachable"
+        ],
+        "properties": {
+          "bucket": {
+            "type": "string"
+          },
+          "client_initialized": {
+            "type": "boolean"
+          },
+          "deep_scan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObjectStorageDeepScanSection"
+              }
+            ]
+          },
+          "endpoint_display": {
+            "type": "string"
+          },
+          "path_style": {
+            "type": "boolean"
+          },
+          "reachability_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reachable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OrgArtifactsSection": {
+        "type": "object",
+        "required": [
+          "total_bytes",
+          "artifact_count"
+        ],
+        "properties": {
+          "artifact_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5839,6 +6084,13 @@
                 {
                   "type": "object",
                   "properties": {
+                    "environment_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Display name for [`StoredSecretResponse::environment_id`] when present."
+                    },
                     "pipeline_name": {
                       "type": [
                         "string",
@@ -6018,6 +6270,62 @@
             "type": "object"
           }
         ]
+      },
+      "PlatformHealthResponse": {
+        "type": "object",
+        "required": [
+          "api_version",
+          "engine_initialized",
+          "postgres",
+          "org_artifacts",
+          "object_storage",
+          "nats_jetstream"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string"
+          },
+          "engine_init_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine_initialized": {
+            "type": "boolean"
+          },
+          "nats_jetstream": {
+            "$ref": "#/components/schemas/NatsJetStreamHealthSection"
+          },
+          "object_storage": {
+            "$ref": "#/components/schemas/ObjectStorageHealthSection"
+          },
+          "org_artifacts": {
+            "$ref": "#/components/schemas/OrgArtifactsSection"
+          },
+          "postgres": {
+            "$ref": "#/components/schemas/PostgresHealthSection"
+          }
+        }
+      },
+      "PostgresHealthSection": {
+        "type": "object",
+        "required": [
+          "database_bytes",
+          "top_relations"
+        ],
+        "properties": {
+          "database_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "top_relations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationSizeResponse"
+            }
+          }
+        }
       },
       "ProjectResponse": {
         "allOf": [
@@ -6231,6 +6539,26 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "RelationSizeResponse": {
+        "type": "object",
+        "required": [
+          "schema",
+          "name",
+          "total_bytes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -6777,6 +7105,13 @@
               "null"
             ]
           },
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -6840,6 +7175,12 @@
           "created_at": {
             "type": "string"
           },
+          "deactivated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -6864,6 +7205,15 @@
           "name": {
             "type": "string"
           },
+          "pipeline_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
           "prefix": {
             "type": "string"
           },
@@ -6875,6 +7225,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "scopes": {
             "type": "array",
@@ -7232,6 +7588,9 @@
           "password_must_change": {
             "type": "boolean"
           },
+          "service_account": {
+            "type": "boolean"
+          },
           "username": {
             "type": "string"
           }
@@ -7286,6 +7645,13 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "id": {
             "type": "string"
@@ -7594,6 +7960,13 @@
           {
             "type": "object",
             "properties": {
+              "environment_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Display name for [`StoredSecretResponse::environment_id`] when present."
+              },
               "pipeline_name": {
                 "type": [
                   "string",
@@ -7749,6 +8122,10 @@
     {
       "name": "debug",
       "description": "Debug session management"
+    },
+    {
+      "name": "admin",
+      "description": "Organization admin (users, groups, integrations)"
     }
   ]
 }

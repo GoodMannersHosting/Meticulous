@@ -21,6 +21,7 @@ met-lint = { path = "../met-lint" }
 met-store = { workspace = true }
 met-secrets = { workspace = true }
 met-engine = { workspace = true }
+met-objstore = { workspace = true }
 met-parser = { workspace = true, features = ["database"] }
 met-secret-resolve = { workspace = true }
 met-controller = { workspace = true }

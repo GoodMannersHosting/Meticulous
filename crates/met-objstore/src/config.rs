@@ -83,8 +83,22 @@ impl ObjectStoreConfig {
 
     /// Check if static credentials are configured.
     pub fn has_static_credentials(&self) -> bool {
-        self.access_key_id.is_some() && self.secret_access_key.is_some()
+        matches!(
+            (&self.access_key_id, &self.secret_access_key),
+            (Some(a), Some(s)) if !a.trim().is_empty() && !s.trim().is_empty()
+        )
     }
+}
+
+fn nonempty_opt(s: Option<String>) -> Option<String> {
+    s.and_then(|v| {
+        let t = v.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    })
 }
 
 impl From<met_core::config::StorageConfig> for ObjectStoreConfig {
@@ -92,8 +106,8 @@ impl From<met_core::config::StorageConfig> for ObjectStoreConfig {
         Self {
             endpoint: config.endpoint,
             bucket: config.bucket,
-            access_key_id: config.access_key,
-            secret_access_key: config.secret_key,
+            access_key_id: nonempty_opt(config.access_key),
+            secret_access_key: nonempty_opt(config.secret_key),
             region: config.region.unwrap_or_else(|| "us-east-1".to_string()),
             path_style: config.path_style,
             ..Default::default()

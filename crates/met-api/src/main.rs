@@ -4,7 +4,10 @@
 //! agents, and other resources, plus WebSocket streaming for logs.
 
 use clap::Parser;
-use met_api::{ApiDoc, config::ApiConfig, routes, state::AppState};
+use met_api::{
+    ApiDoc, config::ApiConfig, routes,
+    state::{AppState, ObjectStoragePublicConfig},
+};
 use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
 use met_store::repos::AgentRepo;
@@ -156,6 +159,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let object_storage = ObjectStoragePublicConfig {
+        endpoint: met_config.storage.endpoint.clone(),
+        bucket: met_config.storage.bucket.clone(),
+        path_style: met_config.storage.path_style,
+    };
+
+    let object_store = match met_objstore::S3ObjectStore::new(met_config.storage.clone().into()).await
+    {
+        Ok(s) => Some(std::sync::Arc::new(s)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "object store client not initialized; Platform Health will show degraded object storage status"
+            );
+            None
+        }
+    };
+
     let (engine, engine_init_error) = match met_engine::Engine::new(met_engine::EngineConfig {
         nats_url: met_config.nats.url.clone(),
         nats_credentials_file: met_config.nats.credentials_file.clone(),
@@ -187,6 +208,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine_init_error,
         api_config.max_concurrent_engine_runs,
         nats_ops,
+        object_storage,
+        object_store,
     );
 
     // Build router

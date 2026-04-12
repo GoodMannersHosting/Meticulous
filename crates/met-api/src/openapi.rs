@@ -5,6 +5,11 @@ use utoipa::OpenApi;
 use crate::error::{ErrorBody, ErrorResponse};
 use crate::extractors::pagination::PaginationMeta;
 use crate::routes::{
+    admin_platform_health::{
+        JetStreamStreamRow, NatsJetStreamHealthSection, ObjectStorageDeepScanSection,
+        ObjectStorageHealthSection, OrgArtifactsSection, PlatformHealthResponse,
+        PostgresHealthSection, RelationSizeResponse,
+    },
     admin_workflows::{AdminWorkflowDeleteResponse, AdminWorkflowOpResponse},
     agents::{AgentActionResponse, AgentResponse},
     artifacts::{ArtifactResponse, AttestationResponse, SbomArtifactEntry, SbomResponse},
@@ -98,6 +103,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         crate::routes::auth::setup,
         crate::routes::auth::change_password,
         crate::routes::admin::admin_reset_password,
+        crate::routes::admin_platform_health::platform_health,
         // Organizations
         crate::routes::orgs::list_orgs,
         crate::routes::orgs::create_org,
@@ -228,6 +234,9 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
             SetupStatusResponse, SetupRequest, SetupResponse,
             ChangePasswordRequest, ChangePasswordResponse,
             AdminResetPasswordRequest, AdminResetPasswordResponse,
+            PlatformHealthResponse, PostgresHealthSection, RelationSizeResponse,
+            OrgArtifactsSection, ObjectStorageHealthSection, ObjectStorageDeepScanSection,
+            NatsJetStreamHealthSection, JetStreamStreamRow,
             // Organizations
             OrgResponse, CreateOrgRequest, UpdateOrgRequest,
             // Projects

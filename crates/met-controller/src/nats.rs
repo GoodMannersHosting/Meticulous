@@ -13,6 +13,16 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::error::{ControllerError, Result};
 
+/// JetStream stream metrics snapshot for admin health dashboards.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct JetStreamStreamSnapshot {
+    pub name: String,
+    pub messages: u64,
+    pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// NATS subject hierarchy.
 pub mod subjects {
     use met_core::ids::OrganizationId;
@@ -193,6 +203,43 @@ impl NatsDispatcher {
         let _ = stream.delete_consumer(&consumer_name).await;
 
         Ok(out)
+    }
+
+    /// Summarize core JetStream streams (best-effort; per-stream errors do not fail the whole call).
+    pub async fn jetstream_streams_summary(&self) -> Vec<JetStreamStreamSnapshot> {
+        const NAMES: &[&str] = &[
+            subjects::JOBS_STREAM,
+            subjects::STATUS_STREAM,
+            subjects::CANCEL_STREAM,
+            subjects::COMPLETIONS_STREAM,
+            subjects::JOBS_DLQ_STREAM,
+        ];
+        let mut out = Vec::with_capacity(NAMES.len());
+        for name in NAMES {
+            match self.jetstream.get_stream(*name).await {
+                Ok(mut stream) => match stream.info().await {
+                    Ok(info) => out.push(JetStreamStreamSnapshot {
+                        name: (*name).to_string(),
+                        messages: info.state.messages,
+                        bytes: info.state.bytes,
+                        error: None,
+                    }),
+                    Err(e) => out.push(JetStreamStreamSnapshot {
+                        name: (*name).to_string(),
+                        messages: 0,
+                        bytes: 0,
+                        error: Some(e.to_string()),
+                    }),
+                },
+                Err(e) => out.push(JetStreamStreamSnapshot {
+                    name: (*name).to_string(),
+                    messages: 0,
+                    bytes: 0,
+                    error: Some(e.to_string()),
+                }),
+            }
+        }
+        out
     }
 
     /// Ensure required JetStream streams exist.
