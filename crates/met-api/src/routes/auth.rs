@@ -188,15 +188,9 @@ async fn login(
         .ok_or_else(|| ApiError::unauthorized("no organization configured - run setup first"))?;
 
     // Try to find user by username or email (scoped to "default" org: newest by created_at).
-    let user = match user_repo
-        .get_by_username(org.id, &req.username)
-        .await?
-    {
+    let user = match user_repo.get_by_username(org.id, &req.username).await? {
         Some(u) => u,
-        None => match user_repo
-            .get_by_email(org.id, &req.username)
-            .await?
-        {
+        None => match user_repo.get_by_email(org.id, &req.username).await? {
             Some(u) => u,
             None => return Err(ApiError::unauthorized("invalid credentials")),
         },
@@ -474,7 +468,7 @@ async fn setup(
             &req.email,
             None,
             Some(&password_hash),
-            true, // is_admin
+            true,  // is_admin
             false, // service_account
             false,
         )

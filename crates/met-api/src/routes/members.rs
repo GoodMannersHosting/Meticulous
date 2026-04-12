@@ -7,8 +7,8 @@ use axum::{
 };
 use met_core::ids::{PipelineId, ProjectId};
 use met_store::repos::{
-    PipelineAccessRepo, PipelineMemberRow, ProjectAccessRepo, ProjectMemberRow, ProjectRepo,
-    PipelineRepo,
+    PipelineAccessRepo, PipelineMemberRow, PipelineRepo, ProjectAccessRepo, ProjectMemberRow,
+    ProjectRepo,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -104,7 +104,9 @@ fn normalize_role_for_db(api_role: &str) -> Result<&'static str, ApiError> {
 
 fn validate_principal_type(pt: &str) -> Result<(), ApiError> {
     if !matches!(pt, "user" | "group") {
-        return Err(ApiError::bad_request("principal_type must be 'user' or 'group'"));
+        return Err(ApiError::bad_request(
+            "principal_type must be 'user' or 'group'",
+        ));
     }
     Ok(())
 }
@@ -122,7 +124,9 @@ async fn list_project_members(
         .list_members(project_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(members.into_iter().map(MemberResponse::from).collect()))
+    Ok(Json(
+        members.into_iter().map(MemberResponse::from).collect(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +236,9 @@ async fn list_pipeline_members(
         .list_members(pipeline_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(members.into_iter().map(MemberResponse::from).collect()))
+    Ok(Json(
+        members.into_iter().map(MemberResponse::from).collect(),
+    ))
 }
 
 #[instrument(skip(state, req))]
@@ -243,8 +249,7 @@ async fn add_pipeline_member(
     Json(req): Json<AddMemberRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-    let role =
-        effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
+    let role = effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
     if !role.can_manage_members() {
         return Err(ApiError::forbidden("requires pipeline admin"));
     }
@@ -267,8 +272,7 @@ async fn update_pipeline_member_role(
     Json(req): Json<UpdateRoleRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-    let role =
-        effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
+    let role = effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
     if !role.can_manage_members() {
         return Err(ApiError::forbidden("requires pipeline admin"));
     }
@@ -304,8 +308,7 @@ async fn remove_pipeline_member(
     Path((pipeline_id, principal_id)): Path<(PipelineId, Uuid)>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-    let role =
-        effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
+    let role = effective_pipeline_role(state.db(), &user, pipeline_id, pipeline.project_id).await?;
     if !role.can_manage_members() {
         return Err(ApiError::forbidden("requires pipeline admin"));
     }

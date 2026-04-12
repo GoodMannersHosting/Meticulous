@@ -8,8 +8,8 @@ use met_controller::config::ControllerConfig;
 use met_controller::grpc::AgentServiceImpl;
 use met_controller::nats::NatsDispatcher;
 use met_controller::registry::AgentRegistry;
-use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
+use met_core::redact::database_url_for_log;
 use met_objstore::ObjectStore;
 use met_proto::agent::v1::agent_service_server::AgentServiceServer;
 use met_store::{PoolConfig, create_pool};
@@ -137,6 +137,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|s| !s.trim().is_empty())
         .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
         .map(std::sync::Arc::new);
+
+    if let Some(crypto) = stored_secret_crypto.as_ref() {
+        match met_store::repos::ensure_initial_oidc_signing_key(pool.as_ref(), crypto).await {
+            Ok(()) => {}
+            Err(e) => warn!(
+                error = %e,
+                "OIDC workload signing key bootstrap failed; /.well-known/jwks.json may be empty until resolved"
+            ),
+        }
+    }
 
     let object_store: Option<Arc<dyn ObjectStore + Send + Sync>> =
         match met_objstore::S3ObjectStore::new(met_config.storage.clone().into()).await {

@@ -294,11 +294,7 @@ impl<'a> ApiTokenRepo<'a> {
     }
 
     pub async fn set_deactivated(&self, id: ApiTokenId, deactivate: bool) -> Result<()> {
-        let at = if deactivate {
-            Some(Utc::now())
-        } else {
-            None
-        };
+        let at = if deactivate { Some(Utc::now()) } else { None };
         let r = sqlx::query(
             r#"
             UPDATE api_tokens SET deactivated_at = $2

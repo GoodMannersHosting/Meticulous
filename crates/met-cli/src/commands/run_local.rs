@@ -1,7 +1,7 @@
 //! `met run --local` — run pipeline jobs locally in OCI containers (ADR-018).
 
-use crate::api_client::{ApiClient, Result, ApiError};
 use crate::OutputFormat;
+use crate::api_client::{ApiClient, ApiError, Result};
 use std::path::Path;
 
 pub async fn run_local(

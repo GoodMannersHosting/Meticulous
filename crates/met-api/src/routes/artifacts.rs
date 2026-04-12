@@ -309,11 +309,7 @@ fn inline_sbom_from_metadata(meta: &serde_json::Value) -> Option<serde_json::Val
 }
 
 fn sbom_format_hint_from_artifact(name: &str, storage_path: &str) -> String {
-    let s = format!(
-        "{} {}",
-        name.to_lowercase(),
-        storage_path.to_lowercase()
-    );
+    let s = format!("{} {}", name.to_lowercase(), storage_path.to_lowercase());
     if s.contains("cyclonedx") || s.contains(".cdx") {
         return "cyclonedx".to_string();
     }

@@ -28,10 +28,7 @@ pub fn admin_router() -> Router<AppState> {
             "/meticulous-apps/{application_id}",
             get(get_app).patch(patch_app_flags),
         )
-        .route(
-            "/meticulous-apps/{application_id}/keys",
-            post(add_app_key),
-        )
+        .route("/meticulous-apps/{application_id}/keys", post(add_app_key))
         .route(
             "/meticulous-apps/{application_id}/keys/{key_id}/revoke",
             post(revoke_app_key),

@@ -408,6 +408,20 @@ db-migrate-repair-v28:
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE _sqlx_migrations SET checksum = decode('ff882f9ea6dcf2cdfad95ae42b78ae4d4376caa90254d1af1262f17dd7f32804959b3e737e16848ca6e182b81719927e', 'hex') WHERE version = 28;"
     cargo sqlx migrate run --source crates/met-store/migrations
 
+# Fix "migration 49 was previously applied but has been modified" after a duplicate `049_*` filename
+# was removed (OIDC reconcile moved to `052_*`). The DB may still store the checksum for the wrong
+# file. `049_variables_environment_scope.sql` is idempotent (`ADD COLUMN IF NOT EXISTS`), so deleting
+# the row lets sqlx re-apply it and then run 052+.
+db-migrate-repair-v49:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        echo "DATABASE_URL is not set; set it or add it to .env (just loads .env when dotenv-load is on)." >&2
+        exit 1
+    fi
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DELETE FROM _sqlx_migrations WHERE version = 49;"
+    cargo sqlx migrate run --source crates/met-store/migrations
+
 # Reset database (drop and recreate)
 db-reset:
     cargo sqlx database reset --source crates/met-store/migrations -y

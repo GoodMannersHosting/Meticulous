@@ -276,9 +276,7 @@ pub async fn verify_app_installation_jwt(
     }
 
     if !app.enabled {
-        return Err(ApiError::unauthorized(
-            "meticulous application is disabled",
-        ));
+        return Err(ApiError::unauthorized("meticulous application is disabled"));
     }
 
     let project = ProjectRepo::new(db)

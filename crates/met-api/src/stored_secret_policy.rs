@@ -9,13 +9,8 @@ use sqlx::PgPool;
 pub const STORED_SECRET_EXTERNAL_KINDS_KEY: &str = "stored_secret_external_kinds";
 
 /// External provider kinds controlled by platform settings (must match `StoredSecretKind::as_str()`).
-pub const EXTERNAL_STORED_SECRET_KINDS: &[&str] = &[
-    "aws_sm",
-    "vault",
-    "gcp_sm",
-    "azure_kv",
-    "kubernetes",
-];
+pub const EXTERNAL_STORED_SECRET_KINDS: &[&str] =
+    &["aws_sm", "vault", "gcp_sm", "azure_kv", "kubernetes"];
 
 #[must_use]
 pub fn default_external_kind_policy() -> HashMap<String, bool> {
@@ -26,7 +21,9 @@ pub fn default_external_kind_policy() -> HashMap<String, bool> {
 }
 
 /// Merge stored JSON with defaults (all enabled when unset).
-pub async fn load_merged_external_kind_policy(pool: &PgPool) -> Result<HashMap<String, bool>, met_store::StoreError> {
+pub async fn load_merged_external_kind_policy(
+    pool: &PgPool,
+) -> Result<HashMap<String, bool>, met_store::StoreError> {
     let mut map = default_external_kind_policy();
     let repo = PlatformSettingsRepo::new(pool);
     if let Some(row) = repo.get(STORED_SECRET_EXTERNAL_KINDS_KEY).await? {

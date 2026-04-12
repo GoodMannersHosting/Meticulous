@@ -269,13 +269,8 @@ pub(crate) async fn create_api_token_for_user(
 
     let mut project_ids = req.project_ids;
     let pipeline_ids = req.pipeline_ids.clone();
-    validate_api_token_project_pipeline_scope(
-        state.db(),
-        org_id,
-        &mut project_ids,
-        &pipeline_ids,
-    )
-    .await?;
+    validate_api_token_project_pipeline_scope(state.db(), org_id, &mut project_ids, &pipeline_ids)
+        .await?;
 
     let expires_in_days = match req.expires_in_days {
         None => None,

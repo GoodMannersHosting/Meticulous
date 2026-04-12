@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::ids::{PipelineId, ProjectId};
 use super::project::{OwnerType, ResourceVisibility};
+use crate::ids::{PipelineId, ProjectId};
 
 /// A pipeline defines a CI/CD workflow with jobs and steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]

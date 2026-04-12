@@ -101,7 +101,7 @@ impl JwtValidator {
             name: claims.name,
             permissions: claims.permissions.into_iter().collect(),
             is_api_token: false,
-            project_ids: None,           // JWT tokens have access to all projects
+            project_ids: None, // JWT tokens have access to all projects
             pipeline_ids: None,
             password_must_change: false, // refreshed from DB in `finalize_authenticated_user`
             api_token_id: None,

@@ -1,7 +1,7 @@
 //! `met pipeline check` — remote pipeline validation (ADR-019).
 
-use crate::api_client::{ApiClient, Result};
 use crate::OutputFormat;
+use crate::api_client::{ApiClient, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

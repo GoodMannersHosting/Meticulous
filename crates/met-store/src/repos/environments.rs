@@ -198,8 +198,16 @@ impl<'a> EnvironmentRepo<'a> {
         .bind(require_approval.unwrap_or(existing.require_approval))
         .bind(required_approvers.unwrap_or(existing.required_approvers))
         .bind(approval_timeout_hours.unwrap_or(existing.approval_timeout_hours))
-        .bind(allowed_branches.map(|b| b.to_vec()).or(existing.allowed_branches))
-        .bind(auto_deploy_branch.map(String::from).or(existing.auto_deploy_branch))
+        .bind(
+            allowed_branches
+                .map(|b| b.to_vec())
+                .or(existing.allowed_branches),
+        )
+        .bind(
+            auto_deploy_branch
+                .map(String::from)
+                .or(existing.auto_deploy_branch),
+        )
         .bind(variables.unwrap_or(&existing.variables))
         .fetch_one(self.pool)
         .await?;
@@ -333,9 +341,18 @@ mod tests {
     #[test]
     fn test_branch_allowed_glob() {
         let env = env_with_branches(Some(vec!["release/*".into()]));
-        assert!(EnvironmentRepo::branch_allowed(&env, "refs/heads/release/1.0"));
-        assert!(!EnvironmentRepo::branch_allowed(&env, "refs/heads/feature/foo"));
-        assert!(!EnvironmentRepo::branch_allowed(&env, "refs/heads/release/1.0/hotfix"));
+        assert!(EnvironmentRepo::branch_allowed(
+            &env,
+            "refs/heads/release/1.0"
+        ));
+        assert!(!EnvironmentRepo::branch_allowed(
+            &env,
+            "refs/heads/feature/foo"
+        ));
+        assert!(!EnvironmentRepo::branch_allowed(
+            &env,
+            "refs/heads/release/1.0/hotfix"
+        ));
     }
 
     #[test]

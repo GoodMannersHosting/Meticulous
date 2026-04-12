@@ -1,5 +1,6 @@
 //! Repository for OIDC signing keys and token audit (ADR-017, Phase 2.2).
 
+use met_secrets::BuiltinStoredCrypto;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -144,4 +145,54 @@ impl<'a> OidcSigningKeyRepo<'a> {
         .await?;
         Ok(())
     }
+}
+
+/// Bootstrap a workload-identity signing key when none exists (ADR-017). Idempotent; uses a
+/// PostgreSQL advisory lock so concurrent `met-api` / `met-controller` startups do not race.
+pub async fn ensure_initial_oidc_signing_key(
+    pool: &PgPool,
+    crypto: &BuiltinStoredCrypto,
+) -> Result<()> {
+    const LOCK_K1: i32 = 884_291;
+    const LOCK_K2: i32 = 291_884;
+
+    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+        .bind(LOCK_K1)
+        .bind(LOCK_K2)
+        .fetch_one(pool)
+        .await?;
+
+    if !got {
+        return Ok(());
+    }
+
+    let inner = async {
+        let repo = OidcSigningKeyRepo::new(pool);
+        if repo.active_key().await?.is_some() {
+            return Ok(());
+        }
+
+        let generated = met_secrets::generate_oidc_signing_key(crypto, chrono::Duration::days(90))
+            .map_err(|e| StoreError::Validation(format!("OIDC signing key generation: {e}")))?;
+
+        repo.insert(
+            &generated.kid,
+            &generated.private_key_enc,
+            &generated.public_key_jwk,
+            generated.expires_at,
+        )
+        .await?;
+
+        tracing::info!(kid = %generated.kid, "bootstrapped OIDC workload signing key");
+        Ok(())
+    }
+    .await;
+
+    let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
+        .bind(LOCK_K1)
+        .bind(LOCK_K2)
+        .execute(pool)
+        .await;
+
+    inner
 }

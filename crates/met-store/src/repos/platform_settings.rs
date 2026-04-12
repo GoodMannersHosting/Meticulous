@@ -52,8 +52,6 @@ impl<'a> PlatformSettingsRepo<'a> {
     /// Whether unauthenticated access to public resources is allowed.
     pub async fn allow_unauthenticated_access(&self) -> Result<bool> {
         let setting = self.get("allow_unauthenticated_access").await?;
-        Ok(setting
-            .and_then(|s| s.value.as_bool())
-            .unwrap_or(false))
+        Ok(setting.and_then(|s| s.value.as_bool()).unwrap_or(false))
     }
 }

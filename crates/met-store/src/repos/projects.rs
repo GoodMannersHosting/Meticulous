@@ -50,9 +50,10 @@ impl<'a> ProjectRepo<'a> {
             OwnerType::User => "user",
             OwnerType::Group => "group",
         };
-        let owner_uuid: uuid::Uuid = input.owner_id.parse().map_err(|_| {
-            StoreError::validation("owner_id must be a valid UUID")
-        })?;
+        let owner_uuid: uuid::Uuid = input
+            .owner_id
+            .parse()
+            .map_err(|_| StoreError::validation("owner_id must be a valid UUID"))?;
         sqlx::query(
             r#"
             INSERT INTO project_members (project_id, principal_type, principal_id, role)

@@ -76,11 +76,7 @@ pub async fn effective_project_role(
     let project = ProjectRepo::new(pool).get(project_id).await?;
     let access = ProjectAccessRepo::new(pool);
     let role = access
-        .effective_role_for_user_with_visibility(
-            project_id,
-            Some(user.user_id),
-            project.visibility,
-        )
+        .effective_role_for_user_with_visibility(project_id, Some(user.user_id), project.visibility)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     match role {

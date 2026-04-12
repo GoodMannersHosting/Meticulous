@@ -11,11 +11,11 @@ use tracing::instrument;
 use utoipa::ToSchema;
 
 use crate::{
+    VERSION,
     error::{ApiError, ApiResult},
     extractors::Auth,
     routes::admin::require_admin,
     state::AppState,
-    VERSION,
 };
 
 pub fn router() -> Router<AppState> {
@@ -131,10 +131,9 @@ pub async fn platform_health(
 ) -> ApiResult<Json<PlatformHealthResponse>> {
     require_admin(&admin)?;
 
-    let (database_bytes, top) =
-        met_store::repos::database_disk_overview(state.db()).await.map_err(|e| {
-            ApiError::internal(format!("postgres disk overview failed: {e}"))
-        })?;
+    let (database_bytes, top) = met_store::repos::database_disk_overview(state.db())
+        .await
+        .map_err(|e| ApiError::internal(format!("postgres disk overview failed: {e}")))?;
 
     let top_relations: Vec<RelationSizeResponse> = top
         .into_iter()

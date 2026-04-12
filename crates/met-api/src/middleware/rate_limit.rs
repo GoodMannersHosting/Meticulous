@@ -19,6 +19,12 @@ use std::{
 };
 use tower::{Layer, Service};
 
+/// Public OIDC discovery paths must not consume the global per-IP rate limit bucket.
+#[inline]
+fn path_exempt_from_rate_limit(path: &str) -> bool {
+    path.starts_with("/.well-known/")
+}
+
 struct Bucket {
     tokens: f64,
     last_refill: Instant,
@@ -130,6 +136,12 @@ where
     }
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
+        // OIDC discovery and JWKS are unauthenticated public endpoints; do not burn the global bucket.
+        if path_exempt_from_rate_limit(request.uri().path()) {
+            let future = self.inner.call(request);
+            return Box::pin(future);
+        }
+
         let client_ip = extract_client_ip(&request);
         let capacity = self.config.burst_size;
         let rate = self.config.requests_per_second;
@@ -192,6 +204,15 @@ mod tests {
         config.enabled = false;
         let layer = rate_limit_layer(&config);
         assert!(layer.is_none());
+    }
+
+    #[test]
+    fn well_known_paths_exempt_from_rate_limit() {
+        assert!(path_exempt_from_rate_limit(
+            "/.well-known/openid-configuration"
+        ));
+        assert!(path_exempt_from_rate_limit("/.well-known/jwks.json"));
+        assert!(!path_exempt_from_rate_limit("/api/v1/projects"));
     }
 
     #[test]

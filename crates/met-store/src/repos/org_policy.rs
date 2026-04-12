@@ -60,7 +60,11 @@ impl<'a> OrgPolicyRepo<'a> {
         }))
     }
 
-    pub async fn upsert(&self, org_id: OrganizationId, patch: &OrgPolicyPatch) -> Result<OrgPolicy> {
+    pub async fn upsert(
+        &self,
+        org_id: OrganizationId,
+        patch: &OrgPolicyPatch,
+    ) -> Result<OrgPolicy> {
         let cur = self.get(org_id).await?;
         let max_api_token_ttl_days = patch
             .max_api_token_ttl_days
@@ -70,7 +74,10 @@ impl<'a> OrgPolicyRepo<'a> {
             .user_rl_primary_period_secs
             .unwrap_or(cur.user_rl_primary_period_secs)
             .max(1);
-        let user_rl_primary_max = patch.user_rl_primary_max.unwrap_or(cur.user_rl_primary_max).max(1);
+        let user_rl_primary_max = patch
+            .user_rl_primary_max
+            .unwrap_or(cur.user_rl_primary_max)
+            .max(1);
         let user_rl_secondary_period_secs = patch
             .user_rl_secondary_period_secs
             .unwrap_or(cur.user_rl_secondary_period_secs)
@@ -83,7 +90,10 @@ impl<'a> OrgPolicyRepo<'a> {
             .app_rl_primary_period_secs
             .unwrap_or(cur.app_rl_primary_period_secs)
             .max(1);
-        let app_rl_primary_max = patch.app_rl_primary_max.unwrap_or(cur.app_rl_primary_max).max(1);
+        let app_rl_primary_max = patch
+            .app_rl_primary_max
+            .unwrap_or(cur.app_rl_primary_max)
+            .max(1);
         let app_rl_secondary_period_secs = patch
             .app_rl_secondary_period_secs
             .unwrap_or(cur.app_rl_secondary_period_secs)

@@ -1,14 +1,17 @@
 //! Meticulous App repository (integrations + installations).
 
 use chrono::{DateTime, Utc};
-use met_core::ids::{AppInstallationId, AppKeyId, MeticulousAppId, OrganizationId, ProjectId, UserId};
+use met_core::ids::{
+    AppInstallationId, AppKeyId, MeticulousAppId, OrganizationId, ProjectId, UserId,
+};
 use met_core::models::{MeticulousApp, MeticulousAppInstallation, MeticulousAppKey};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{Result, StoreError};
 
-const APP_ROW: &str = "id, application_id, name, description, enabled, created_by, created_at, updated_at";
+const APP_ROW: &str =
+    "id, application_id, name, description, enabled, created_by, created_at, updated_at";
 
 /// Public catalog fields for enabled apps in an org (project settings UI).
 #[derive(Debug, Clone, sqlx::FromRow)]

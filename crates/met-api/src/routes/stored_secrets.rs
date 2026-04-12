@@ -10,11 +10,11 @@ use axum::{
 use chrono::{DateTime, Utc};
 use met_core::ids::{OrganizationId, PipelineId, ProjectId};
 use met_secrets::parse_github_app_credentials;
+use met_store::StoreError;
 use met_store::repos::{
     BuiltinSecretMetaRow, BuiltinSecretsRepo, EnvironmentRepo, PipelineRepo, ProjectRepo,
     StoredSecretKind,
 };
-use met_store::StoreError;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -140,7 +140,10 @@ impl From<BuiltinSecretMetaRow> for StoredSecretResponse {
 fn dedupe_latest(rows: Vec<BuiltinSecretMetaRow>) -> Vec<BuiltinSecretMetaRow> {
     let mut best: HashMap<String, BuiltinSecretMetaRow> = HashMap::new();
     for r in rows {
-        let k = format!("{}|{:?}|{:?}|{:?}", r.path, r.project_id, r.pipeline_id, r.environment_id);
+        let k = format!(
+            "{}|{:?}|{:?}|{:?}",
+            r.path, r.project_id, r.pipeline_id, r.environment_id
+        );
         match best.get_mut(&k) {
             Some(e) => {
                 if r.version > e.version {
@@ -199,8 +202,7 @@ async fn list_stored_secrets(
             if pl.project_id.as_uuid() != project_id.as_uuid() {
                 return Err(ApiError::bad_request("pipeline does not belong to project"));
             }
-            repo
-                .list_for_pipeline(org_id, project_id, pid, env_filter)
+            repo.list_for_pipeline(org_id, project_id, pid, env_filter)
                 .await?
         }
         (None, Some(eid)) => repo.list_for_environment(org_id, project_id, eid).await?,
@@ -356,10 +358,9 @@ async fn create_stored_secret(
     let kind =
         StoredSecretKind::parse(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    let kind_policy =
-        crate::stored_secret_policy::load_merged_external_kind_policy(state.db())
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let kind_policy = crate::stored_secret_policy::load_merged_external_kind_policy(state.db())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     if !crate::stored_secret_policy::is_external_kind_allowed(&kind_policy, kind) {
         return Err(ApiError::bad_request(format!(
             "stored secret kind '{}' is disabled by platform administrators",
@@ -583,7 +584,9 @@ async fn patch_stored_secret(
                 ApiError::internal("stored secret row missing project_id for pipeline scope")
             })?;
             if pl.project_id.as_uuid() != proj_uuid {
-                return Err(ApiError::bad_request("pipeline does not belong to secret's project"));
+                return Err(ApiError::bad_request(
+                    "pipeline does not belong to secret's project",
+                ));
             }
             Some(pid.as_uuid())
         }
@@ -709,10 +712,9 @@ async fn rotate_stored_secret(
     let kind = StoredSecretKind::parse(&existing.kind)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    let kind_policy =
-        crate::stored_secret_policy::load_merged_external_kind_policy(state.db())
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let kind_policy = crate::stored_secret_policy::load_merged_external_kind_policy(state.db())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     if !crate::stored_secret_policy::is_external_kind_allowed(&kind_policy, kind) {
         return Err(ApiError::bad_request(format!(
             "stored secret kind '{}' is disabled by platform administrators",

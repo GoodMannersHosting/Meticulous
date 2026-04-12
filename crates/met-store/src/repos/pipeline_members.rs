@@ -96,13 +96,19 @@ mod tests {
     #[test]
     fn test_max_pipeline_role_readonly_developer() {
         let roles = vec![PipelineRole::Readonly, PipelineRole::Developer];
-        assert_eq!(max_pipeline_role(roles.into_iter()), Some(PipelineRole::Developer));
+        assert_eq!(
+            max_pipeline_role(roles.into_iter()),
+            Some(PipelineRole::Developer)
+        );
     }
 
     #[test]
     fn test_max_pipeline_role_readonly_admin() {
         let roles = vec![PipelineRole::Readonly, PipelineRole::Admin];
-        assert_eq!(max_pipeline_role(roles.into_iter()), Some(PipelineRole::Admin));
+        assert_eq!(
+            max_pipeline_role(roles.into_iter()),
+            Some(PipelineRole::Admin)
+        );
     }
 
     #[test]
@@ -309,10 +315,7 @@ impl<'a> PipelineAccessRepo<'a> {
     }
 
     /// List all members of a pipeline with display names.
-    pub async fn list_members(
-        &self,
-        pipeline_id: PipelineId,
-    ) -> Result<Vec<PipelineMemberRow>> {
+    pub async fn list_members(&self, pipeline_id: PipelineId) -> Result<Vec<PipelineMemberRow>> {
         let rows = sqlx::query_as::<_, PipelineMemberRow>(
             r#"
             SELECT pm.id, pm.pipeline_id, pm.principal_type::text, pm.principal_id,

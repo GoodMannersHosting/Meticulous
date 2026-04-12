@@ -214,9 +214,9 @@ impl ExecutionBackend for NativeBackend {
         // (FIFO O_RDWR avoids open deadlock but never signals EOF on read — see workflow-invocation-outputs.md.)
         #[cfg(unix)]
         let ipc_ends: Option<(std::fs::File, std::os::fd::OwnedFd)> = {
-            use nix::fcntl::{fcntl, FcntlArg, FdFlag};
             #[cfg(target_os = "linux")]
             use nix::fcntl::OFlag;
+            use nix::fcntl::{FcntlArg, FdFlag, fcntl};
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
 

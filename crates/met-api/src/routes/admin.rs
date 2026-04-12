@@ -56,10 +56,7 @@ pub fn router() -> Router<AppState> {
             post(admin_create_service_account_token),
         )
         .route("/users/{id}/delete", post(delete_user))
-        .route(
-            "/users/{id}/resource-access",
-            get(get_user_resource_access),
-        )
+        .route("/users/{id}/resource-access", get(get_user_resource_access))
         // Group management
         .route("/groups", get(list_groups).post(create_group))
         .route(
@@ -80,10 +77,7 @@ pub fn router() -> Router<AppState> {
         )
         // Role management
         .route("/roles", get(list_roles))
-        .route(
-            "/users/{id}/roles",
-            get(get_user_roles).post(assign_role),
-        )
+        .route("/users/{id}/roles", get(get_user_roles).post(assign_role))
         .route("/users/{id}/roles/{role}", delete(revoke_role))
         // Project admin operations
         .route(
@@ -94,15 +88,15 @@ pub fn router() -> Router<AppState> {
             "/projects/{id}/cancel-deletion",
             post(cancel_project_deletion),
         )
-        .route(
-            "/projects/{id}/force-delete",
-            post(force_delete_project),
-        )
+        .route("/projects/{id}/force-delete", post(force_delete_project))
         .route("/archive", get(list_org_archive))
         .route("/projects/{id}/unarchive", post(admin_unarchive_project))
         .route("/pipelines/{id}/unarchive", post(admin_unarchive_pipeline))
         .route("/pipelines/{id}/purge", post(admin_purge_archived_pipeline))
-        .route("/policy", get(get_admin_org_policy).patch(patch_admin_org_policy))
+        .route(
+            "/policy",
+            get(get_admin_org_policy).patch(patch_admin_org_policy),
+        )
         .route("/tokens", get(list_admin_org_api_tokens))
         .route(
             "/projects/{id}/members",
@@ -119,14 +113,8 @@ pub fn router() -> Router<AppState> {
                 .patch(update_auth_provider)
                 .delete(delete_auth_provider),
         )
-        .route(
-            "/auth-providers/{id}/enable",
-            post(enable_auth_provider),
-        )
-        .route(
-            "/auth-providers/{id}/disable",
-            post(disable_auth_provider),
-        )
+        .route("/auth-providers/{id}/enable", post(enable_auth_provider))
+        .route("/auth-providers/{id}/disable", post(disable_auth_provider))
         // OIDC group mapping management
         .route(
             "/auth-providers/{id}/group-mappings",
@@ -430,9 +418,7 @@ async fn get_admin_org_policy(
     Auth(admin): Auth,
 ) -> ApiResult<Json<OrgPolicyApiResponse>> {
     require_admin(&admin)?;
-    let p = OrgPolicyRepo::new(state.db())
-        .get(admin.org_id)
-        .await?;
+    let p = OrgPolicyRepo::new(state.db()).get(admin.org_id).await?;
     Ok(Json(OrgPolicyApiResponse::from(p)))
 }
 
@@ -575,7 +561,9 @@ async fn admin_unarchive_pipeline(
         ));
     }
     prepo.unarchive(pipeline_id).await?;
-    Ok(Json(serde_json::json!({ "message": "pipeline unarchived" })))
+    Ok(Json(
+        serde_json::json!({ "message": "pipeline unarchived" }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -641,7 +629,9 @@ enum ProjectPrincipalTarget {
     Group(GroupId),
 }
 
-fn resolve_add_project_member_principal(req: &AddProjectMemberRequest) -> ApiResult<ProjectPrincipalTarget> {
+fn resolve_add_project_member_principal(
+    req: &AddProjectMemberRequest,
+) -> ApiResult<ProjectPrincipalTarget> {
     let pt = req
         .principal_type
         .as_deref()
@@ -662,12 +652,14 @@ fn resolve_add_project_member_principal(req: &AddProjectMemberRequest) -> ApiRes
             Ok(ProjectPrincipalTarget::User(uid))
         }
         "group" => {
-            let gid = req.principal_id.ok_or_else(|| {
-                ApiError::bad_request("group principal requires `principal_id`")
-            })?;
+            let gid = req
+                .principal_id
+                .ok_or_else(|| ApiError::bad_request("group principal requires `principal_id`"))?;
             Ok(ProjectPrincipalTarget::Group(GroupId::from_uuid(gid)))
         }
-        _ => Err(ApiError::bad_request("principal_type must be user or group")),
+        _ => Err(ApiError::bad_request(
+            "principal_type must be user or group",
+        )),
     }
 }
 
@@ -725,7 +717,9 @@ async fn add_project_member(
     .execute(state.db())
     .await
     .map_err(met_store::StoreError::from)?;
-    Ok(Json(serde_json::json!({ "message": "project member saved" })))
+    Ok(Json(
+        serde_json::json!({ "message": "project member saved" }),
+    ))
 }
 
 #[instrument(skip(state))]
@@ -940,7 +934,10 @@ async fn get_user_resource_access(
         })
         .collect();
 
-    Ok(Json(UserResourceAccessResponse { projects, pipelines }))
+    Ok(Json(UserResourceAccessResponse {
+        projects,
+        pipelines,
+    }))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -1055,7 +1052,10 @@ async fn get_group_resource_access(
         })
         .collect();
 
-    Ok(Json(GroupResourceAccessResponse { projects, pipelines }))
+    Ok(Json(GroupResourceAccessResponse {
+        projects,
+        pipelines,
+    }))
 }
 
 #[derive(Debug, Deserialize)]

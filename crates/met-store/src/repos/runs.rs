@@ -393,7 +393,10 @@ impl<'a> RunRepo<'a> {
             .await?
         };
 
-        Ok(rows.into_iter().map(RunWithPipelineAndProjectName::from).collect())
+        Ok(rows
+            .into_iter()
+            .map(RunWithPipelineAndProjectName::from)
+            .collect())
     }
 
     /// List runs for any pipeline whose project is in `project_ids`.
@@ -454,7 +457,10 @@ impl<'a> RunRepo<'a> {
             .await?
         };
 
-        Ok(rows.into_iter().map(RunWithPipelineAndProjectName::from).collect())
+        Ok(rows
+            .into_iter()
+            .map(RunWithPipelineAndProjectName::from)
+            .collect())
     }
 
     /// Update run status.

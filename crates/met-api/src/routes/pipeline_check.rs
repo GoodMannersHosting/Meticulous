@@ -135,7 +135,9 @@ async fn check_pipeline(
                 diagnostics.push(CheckDiagnostic {
                     code: "CHK-003".into(),
                     severity: "error".into(),
-                    message: format!("secret '{name}' not found in project scope (referenced as {env_name})"),
+                    message: format!(
+                        "secret '{name}' not found in project scope (referenced as {env_name})"
+                    ),
                     location: None,
                     suggestion: fuzzy::format_suggestions(&suggestions),
                     doc_url: Some("https://docs.meticulous.example.com/diagnostics/CHK-003".into()),
@@ -200,7 +202,10 @@ async fn check_pipeline(
 
 fn build_response(diagnostics: Vec<CheckDiagnostic>) -> CheckResponse {
     let errors = diagnostics.iter().filter(|d| d.severity == "error").count() as u32;
-    let warnings = diagnostics.iter().filter(|d| d.severity == "warning").count() as u32;
+    let warnings = diagnostics
+        .iter()
+        .filter(|d| d.severity == "warning")
+        .count() as u32;
     let info = diagnostics.iter().filter(|d| d.severity == "info").count() as u32;
     let valid = errors == 0;
     CheckResponse {

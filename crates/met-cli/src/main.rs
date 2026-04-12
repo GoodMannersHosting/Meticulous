@@ -791,11 +791,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // ── Run Local ───────────────────────────────────────
-        Commands::RunLocal {
-            path,
-            job,
-            network,
-        } => {
+        Commands::RunLocal { path, job, network } => {
             commands::run_local::run_local(&client, &path, job.as_deref(), network, format).await
         }
     };

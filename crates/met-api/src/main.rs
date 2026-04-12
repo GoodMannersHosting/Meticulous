@@ -5,11 +5,13 @@
 
 use clap::Parser;
 use met_api::{
-    ApiDoc, config::ApiConfig, routes,
+    ApiDoc,
+    config::ApiConfig,
+    routes,
     state::{AppState, ObjectStoragePublicConfig},
 };
-use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
+use met_core::redact::database_url_for_log;
 use met_store::repos::AgentRepo;
 use met_store::{PoolConfig, create_pool};
 use std::net::SocketAddr;
@@ -141,23 +143,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    if let Some(crypto) = stored_secret_crypto.as_ref() {
+        match met_store::repos::ensure_initial_oidc_signing_key(&db, crypto).await {
+            Ok(()) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "OIDC workload signing key bootstrap failed; /.well-known/jwks.json may be empty until resolved"
+            ),
+        }
+    }
+
     let nats_creds = met_config.nats.credentials_file.as_deref();
 
-    let nats_ops = match met_controller::nats::NatsDispatcher::connect(
-        &met_config.nats.url,
-        nats_creds,
-    )
-    .await
-    {
-        Ok(n) => Some(Arc::new(n)),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "NATS ops client not connected; admin JOBS_DLQ preview disabled"
-            );
-            None
-        }
-    };
+    let nats_ops =
+        match met_controller::nats::NatsDispatcher::connect(&met_config.nats.url, nats_creds).await
+        {
+            Ok(n) => Some(Arc::new(n)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "NATS ops client not connected; admin JOBS_DLQ preview disabled"
+                );
+                None
+            }
+        };
 
     let object_storage = ObjectStoragePublicConfig {
         endpoint: met_config.storage.endpoint.clone(),
@@ -165,7 +174,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         path_style: met_config.storage.path_style,
     };
 
-    let object_store = match met_objstore::S3ObjectStore::new(met_config.storage.clone().into()).await
+    let object_store = match met_objstore::S3ObjectStore::new(met_config.storage.clone().into())
+        .await
     {
         Ok(s) => Some(std::sync::Arc::new(s)),
         Err(e) => {

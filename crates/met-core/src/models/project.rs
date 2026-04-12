@@ -221,7 +221,10 @@ mod tests {
 
     #[test]
     fn test_resource_visibility_default_is_authenticated() {
-        assert_eq!(ResourceVisibility::default(), ResourceVisibility::Authenticated);
+        assert_eq!(
+            ResourceVisibility::default(),
+            ResourceVisibility::Authenticated
+        );
     }
 
     #[test]

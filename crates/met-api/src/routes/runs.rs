@@ -205,12 +205,8 @@ async fn list_runs(
             return Err(ApiError::bad_request("`run_number` requires `pipeline_id`"));
         };
         let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-        effective_project_role_session_or_app_in_user_org(
-            state.db(),
-            &caller,
-            pipeline.project_id,
-        )
-        .await?;
+        effective_project_role_session_or_app_in_user_org(state.db(), &caller, pipeline.project_id)
+            .await?;
         let mut items: Vec<RunResponse> = repo
             .find_by_pipeline_and_run_number(pipeline_id, run_number)
             .await?
@@ -380,12 +376,8 @@ async fn get_run(
     let repo = RunRepo::new(state.db());
     let run = repo.get(id).await?;
     let pipeline = PipelineRepo::new(state.db()).get(run.pipeline_id).await?;
-    effective_project_role_session_or_app_in_user_org(
-        state.db(),
-        &caller,
-        pipeline.project_id,
-    )
-    .await?;
+    effective_project_role_session_or_app_in_user_org(state.db(), &caller, pipeline.project_id)
+        .await?;
     ensure_session_or_app_pipeline_scope(&caller, run.pipeline_id, pipeline.project_id)?;
     let parent_run_number = match run.parent_run_id {
         Some(pid) => repo.get(pid).await.ok().map(|p| p.run_number),

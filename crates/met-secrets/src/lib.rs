@@ -102,6 +102,7 @@ pub mod error;
 pub mod github_app;
 pub mod masking;
 pub mod oidc;
+pub mod oidc_workload_keys;
 pub mod pki;
 pub mod providers;
 pub mod rbac;
@@ -119,6 +120,10 @@ pub use types::{ProviderType, SecretBytes, SecretMetadata, SecretPath, SecretVal
 pub use github_app::{
     GithubAppCredentials, GithubAppError, create_app_jwt, installation_access_token,
     parse_github_app_credentials,
+};
+pub use oidc_workload_keys::{
+    GeneratedOidcSigningKey, decrypt_pkcs8_private_key, encrypt_pkcs8_private_key,
+    generate_oidc_signing_key,
 };
 pub use providers::{
     AwsSecretsProvider, BuiltinSecretsProvider, KubernetesSecretsProvider, MultiProviderBroker,

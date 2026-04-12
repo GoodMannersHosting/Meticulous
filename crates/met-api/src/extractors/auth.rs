@@ -128,8 +128,7 @@ where
                     .validate(token)
                     .await
                     .map_err(|e| ApiError::unauthorized(e.to_string()))?;
-                let user =
-                    finalize_authenticated_user(&app_state, user, &method, &path).await?;
+                let user = finalize_authenticated_user(&app_state, user, &method, &path).await?;
                 return Ok(Auth(user));
             }
 
@@ -396,13 +395,19 @@ mod tests {
     fn test_is_password_change_exempt_allowed_routes() {
         assert!(is_password_change_exempt(&Method::GET, "/auth/me"));
         assert!(is_password_change_exempt(&Method::POST, "/auth/logout"));
-        assert!(is_password_change_exempt(&Method::POST, "/auth/change-password"));
+        assert!(is_password_change_exempt(
+            &Method::POST,
+            "/auth/change-password"
+        ));
     }
 
     #[test]
     fn test_is_password_change_exempt_blocked_routes() {
         assert!(!is_password_change_exempt(&Method::GET, "/projects"));
         assert!(!is_password_change_exempt(&Method::POST, "/pipelines"));
-        assert!(!is_password_change_exempt(&Method::GET, "/auth/change-password"));
+        assert!(!is_password_change_exempt(
+            &Method::GET,
+            "/auth/change-password"
+        ));
     }
 }

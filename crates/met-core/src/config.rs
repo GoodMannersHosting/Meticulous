@@ -249,6 +249,10 @@ pub struct HttpConfig {
     pub pagination_default_limit: u32,
     /// Maximum page size the API will return for list endpoints (client `limit` is clamped).
     pub pagination_max_limit: u32,
+    /// Public base URL of this deployment (HTTPS in production), used as the OIDC `issuer`
+    /// for workload identity (ADR-017). When unset, the first CORS origin is used as a dev fallback.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
 }
 
 impl Default for HttpConfig {
@@ -262,6 +266,7 @@ impl Default for HttpConfig {
             agent_stale_sweep_interval_secs: 30,
             pagination_default_limit: 10_000,
             pagination_max_limit: 10_000,
+            public_base_url: None,
         }
     }
 }
@@ -424,10 +429,7 @@ mod tests {
             .try_deserialize()
             .unwrap();
 
-        assert_eq!(
-            config.database.url,
-            "postgres://u:pw@pg.example:5432/app"
-        );
+        assert_eq!(config.database.url, "postgres://u:pw@pg.example:5432/app");
     }
 
     #[test]
@@ -473,6 +475,36 @@ mod tests {
         assert_eq!(
             config.http.cors_origins,
             vec!["https://a.example", "https://b.example"]
+        );
+    }
+
+    #[test]
+    fn test_http_public_base_url_env() {
+        use config::Environment;
+        use std::collections::HashMap;
+
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "MET_HTTP__PUBLIC_BASE_URL".to_string(),
+            "https://issuer.example.com".to_string(),
+        );
+        let config: MetConfig = Config::builder()
+            .add_source(
+                Environment::default()
+                    .prefix("MET")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true)
+                    .source(Some(env_map)),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(
+            config.http.public_base_url.as_deref(),
+            Some("https://issuer.example.com")
         );
     }
 }

@@ -19,7 +19,9 @@ pub mod app_permissions {
 
 #[must_use]
 pub fn installation_has_read_access(permissions: &[String]) -> bool {
-    permissions.iter().any(|p| p == "*" || p == app_permissions::READ)
+    permissions
+        .iter()
+        .any(|p| p == "*" || p == app_permissions::READ)
 }
 
 /// DB row: registered app.

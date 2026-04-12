@@ -481,9 +481,8 @@ fn get_all_pids_macos() -> std::result::Result<Vec<u32>, std::io::Error> {
     let mut pids: Vec<libc::pid_t> = vec![0; cap];
     let buf_bytes = (cap * mem::size_of::<libc::pid_t>()) as libc::c_int;
 
-    let wrote = unsafe {
-        libc::proc_listallpids(pids.as_mut_ptr().cast::<libc::c_void>(), buf_bytes)
-    };
+    let wrote =
+        unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<libc::c_void>(), buf_bytes) };
     if wrote <= 0 {
         return Err(Error::last_os_error());
     }

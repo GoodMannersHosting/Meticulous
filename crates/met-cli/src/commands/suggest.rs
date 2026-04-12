@@ -1,7 +1,7 @@
 //! `met suggest --assess` — AI-assisted pipeline security assessment (ADR-009).
 
-use crate::api_client::{ApiError, Result};
 use crate::OutputFormat;
+use crate::api_client::{ApiError, Result};
 use std::path::Path;
 
 const ASSESS_SYSTEM_PROMPT: &str = r#"You are a security auditor reviewing a CI/CD pipeline definition for Meticulous.

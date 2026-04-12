@@ -17,11 +17,10 @@ use met_logging::{Redactor, RedactorConfig};
 use met_objstore::ObjectStore;
 use met_proto::agent::v1::{
     DeregisterRequest, DeregisterResponse, EncryptedSecretValue, HeartbeatAction, HeartbeatRequest,
-    HeartbeatResponse, IdTokenRequest, IdTokenResponse,
-    JobExecutionMetadata as ProtoJobExecMeta, JobKeyExchange, JobSecretsPayload,
-    JobStatusAck, JobStatusUpdate, LogAck, LogChunk, LogStream, RegisterRequest, RegisterResponse,
-    SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
-    agent_service_server::AgentService,
+    HeartbeatResponse, IdTokenRequest, IdTokenResponse, JobExecutionMetadata as ProtoJobExecMeta,
+    JobKeyExchange, JobSecretsPayload, JobStatusAck, JobStatusUpdate, LogAck, LogChunk, LogStream,
+    RegisterRequest, RegisterResponse, SecretMaterialKind, SecurityBundle, StepStatusAck,
+    StepStatusUpdate, agent_service_server::AgentService,
 };
 use met_proto::common::v1::RunStatus as ProtoRunStatus;
 use met_proto::common::v1::Timestamp as ProtoTimestamp;
@@ -31,8 +30,8 @@ use met_secrets::pki::encryption::HybridEncryption;
 use met_store::PgPool;
 use met_store::StoreError;
 use met_store::repos::{
-    AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo,
-    PipelineRepo, PipelineRunWorkflowOutputsRepo, ProjectRepo, StepRunRepo, UserRepo,
+    AgentHeartbeatRepo, AgentRepo, JobRunRepo, JoinTokenRepo, LogCacheRepo, PipelineRepo,
+    PipelineRunWorkflowOutputsRepo, ProjectRepo, StepRunRepo, UserRepo,
     reenroll_agent_with_exhausted_join_token, register_agent_with_join_token,
 };
 use sha2::{Digest, Sha256};

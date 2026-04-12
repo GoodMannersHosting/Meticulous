@@ -312,8 +312,7 @@ async fn sync_pipeline_from_git(
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
-    let role =
-        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden(
             "project administrator role is required to sync pipelines from Git",
@@ -462,8 +461,7 @@ async fn update_pipeline(
 ) -> ApiResult<Json<PipelineResponse>> {
     let repo = PipelineRepo::new(state.db());
     let existing = repo.get(id).await?;
-    let role =
-        effective_project_role_in_user_org(state.db(), &user, existing.project_id).await?;
+    let role = effective_project_role_in_user_org(state.db(), &user, existing.project_id).await?;
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden(
             "project administrator role is required to update pipelines",
@@ -507,8 +505,7 @@ async fn delete_pipeline(
 ) -> ApiResult<()> {
     let repo = PipelineRepo::new(state.db());
     let pipeline = repo.get(id).await?;
-    let role =
-        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden(
             "project administrator role is required to delete pipelines",
@@ -598,8 +595,7 @@ async fn trigger_pipeline(
     let pipeline_repo = PipelineRepo::new(state.db());
     let pipeline = pipeline_repo.get(id).await?;
 
-    let role =
-        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    let role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
     if !role.can_trigger_pipelines() {
         return Err(ApiError::forbidden(
             "developer or administrator project role is required to trigger pipelines",

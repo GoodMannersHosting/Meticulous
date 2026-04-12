@@ -48,7 +48,11 @@ pub struct AdminWorkflowOpResponse {
     pub workflow: WorkflowResponse,
 }
 
-#[utoipa::path(post, path = "/api/v1/admin/workflows/{workflow_id}/approve", tag = "admin")]
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/workflows/{workflow_id}/approve",
+    tag = "admin"
+)]
 #[instrument(skip(state))]
 async fn approve_catalog_workflow(
     State(state): State<AppState>,
@@ -68,7 +72,11 @@ async fn approve_catalog_workflow(
     }))
 }
 
-#[utoipa::path(post, path = "/api/v1/admin/workflows/{workflow_id}/reject", tag = "admin")]
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/workflows/{workflow_id}/reject",
+    tag = "admin"
+)]
 #[instrument(skip(state))]
 async fn reject_catalog_workflow(
     State(state): State<AppState>,
@@ -88,7 +96,11 @@ async fn reject_catalog_workflow(
     }))
 }
 
-#[utoipa::path(post, path = "/api/v1/admin/workflows/{workflow_id}/trust", tag = "admin")]
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/workflows/{workflow_id}/trust",
+    tag = "admin"
+)]
 #[instrument(skip(state))]
 async fn trust_catalog_workflow(
     State(state): State<AppState>,
@@ -108,7 +120,11 @@ async fn trust_catalog_workflow(
     }))
 }
 
-#[utoipa::path(post, path = "/api/v1/admin/workflows/{workflow_id}/untrust", tag = "admin")]
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/workflows/{workflow_id}/untrust",
+    tag = "admin"
+)]
 #[instrument(skip(state))]
 async fn untrust_catalog_workflow(
     State(state): State<AppState>,
@@ -138,7 +154,11 @@ pub struct AdminWorkflowDeleteResponse {
     pub ok: bool,
 }
 
-#[utoipa::path(post, path = "/api/v1/admin/workflows/{workflow_id}/delete", tag = "admin")]
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/workflows/{workflow_id}/delete",
+    tag = "admin"
+)]
 #[instrument(skip(state))]
 async fn soft_delete_catalog_workflow(
     State(state): State<AppState>,

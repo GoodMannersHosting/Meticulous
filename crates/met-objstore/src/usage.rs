@@ -60,8 +60,8 @@ pub async fn estimate_prefix_size(
             out.bytes_summed = out.bytes_summed.saturating_add(obj.size);
             out.objects_scanned = out.objects_scanned.saturating_add(1);
             if out.objects_scanned >= max_objects {
-                out.truncated = list_result.is_truncated
-                    || list_result.next_continuation_token.is_some();
+                out.truncated =
+                    list_result.is_truncated || list_result.next_continuation_token.is_some();
                 return Ok(out);
             }
         }

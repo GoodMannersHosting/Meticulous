@@ -71,8 +71,7 @@ async fn pipeline_matrix(
     Path(pipeline_id): Path<PipelineId>,
 ) -> ApiResult<Json<MatrixResponse>> {
     let pipeline = PipelineRepo::new(state.db()).get(pipeline_id).await?;
-    let _role =
-        effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
+    let _role = effective_project_role_in_user_org(state.db(), &user, pipeline.project_id).await?;
 
     let envs = EnvironmentRepo::new(state.db())
         .list_by_project(pipeline.project_id)
@@ -135,16 +134,16 @@ async fn pipeline_matrix(
         }
     }
 
-    let env_name_map: std::collections::HashMap<Uuid, String> = envs
-        .iter()
-        .map(|e| (e.id, e.name.clone()))
-        .collect();
+    let env_name_map: std::collections::HashMap<Uuid, String> =
+        envs.iter().map(|e| (e.id, e.name.clone())).collect();
 
     let cells: Vec<MatrixCell> = cell_rows
         .into_iter()
         .map(|row| MatrixCell {
             workflow: row.workflow_invocation_id.unwrap_or_default(),
-            environment: row.environment_id.and_then(|eid| env_name_map.get(&eid).cloned()),
+            environment: row
+                .environment_id
+                .and_then(|eid| env_name_map.get(&eid).cloned()),
             run_id: Some(row.run_id.to_string()),
             run_number: Some(row.run_number),
             status: Some(row.status),

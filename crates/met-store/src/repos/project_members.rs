@@ -81,12 +81,11 @@ impl<'a> ProjectAccessRepo<'a> {
     }
 
     async fn row_count(&self, project_id: ProjectId) -> Result<i64> {
-        let (c,): (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*)::bigint FROM project_members WHERE project_id = $1"#,
-        )
-        .bind(project_id.as_uuid())
-        .fetch_one(self.pool)
-        .await?;
+        let (c,): (i64,) =
+            sqlx::query_as(r#"SELECT COUNT(*)::bigint FROM project_members WHERE project_id = $1"#)
+                .bind(project_id.as_uuid())
+                .fetch_one(self.pool)
+                .await?;
         Ok(c)
     }
 
@@ -142,9 +141,7 @@ impl<'a> ProjectAccessRepo<'a> {
         if visibility == ResourceVisibility::Public {
             if let Some(uid) = user_id {
                 let explicit = self.effective_role_for_user(project_id, uid).await?;
-                return Ok(Some(
-                    explicit.unwrap_or(ProjectRole::Readonly),
-                ));
+                return Ok(Some(explicit.unwrap_or(ProjectRole::Readonly)));
             }
             return Ok(Some(ProjectRole::Readonly));
         }
@@ -227,10 +224,7 @@ impl<'a> ProjectAccessRepo<'a> {
     }
 
     /// List all members of a project with display names.
-    pub async fn list_members(
-        &self,
-        project_id: ProjectId,
-    ) -> Result<Vec<ProjectMemberRow>> {
+    pub async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMemberRow>> {
         let rows = sqlx::query_as::<_, ProjectMemberRow>(
             r#"
             SELECT pm.id, pm.project_id, pm.principal_type::text, pm.principal_id,
@@ -287,13 +281,19 @@ mod tests {
     #[test]
     fn test_max_project_role_readonly_developer() {
         let roles = vec![ProjectRole::Readonly, ProjectRole::Developer];
-        assert_eq!(max_project_role(roles.into_iter()), Some(ProjectRole::Developer));
+        assert_eq!(
+            max_project_role(roles.into_iter()),
+            Some(ProjectRole::Developer)
+        );
     }
 
     #[test]
     fn test_max_project_role_readonly_admin() {
         let roles = vec![ProjectRole::Readonly, ProjectRole::Admin];
-        assert_eq!(max_project_role(roles.into_iter()), Some(ProjectRole::Admin));
+        assert_eq!(
+            max_project_role(roles.into_iter()),
+            Some(ProjectRole::Admin)
+        );
     }
 
     #[test]

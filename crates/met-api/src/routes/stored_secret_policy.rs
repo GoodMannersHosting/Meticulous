@@ -5,12 +5,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use tracing::instrument;
 
-use crate::{
-    error::ApiResult,
-    extractors::Auth,
-    state::AppState,
-    stored_secret_policy,
-};
+use crate::{error::ApiResult, extractors::Auth, state::AppState, stored_secret_policy};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/stored-secret-policy", get(get_stored_secret_policy))

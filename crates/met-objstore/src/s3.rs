@@ -13,9 +13,9 @@ use aws_sdk_s3::{
     Client,
     config::{Credentials, Region},
     error::SdkError,
+    operation::RequestId,
     operation::create_bucket::CreateBucketError,
     operation::get_object::GetObjectError,
-    operation::RequestId,
     primitives::ByteStream,
     types::{BucketLocationConstraint, CreateBucketConfiguration},
 };
@@ -128,23 +128,14 @@ fn endpoint_host_is_local_dev(endpoint: &str) -> bool {
             || endpoint.contains("localhost")
             || endpoint.contains("[::1]");
     };
-    matches!(
-        url.host_str(),
-        Some("localhost" | "127.0.0.1" | "::1")
-    )
+    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
 fn credentials_from_access_secret(ak: String, sk: String) -> Credentials {
-    let token = std::env::var("AWS_SESSION_TOKEN")
-        .ok()
-        .and_then(|t| {
-            let t = t.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
+    let token = std::env::var("AWS_SESSION_TOKEN").ok().and_then(|t| {
+        let t = t.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
     Credentials::new(ak, sk, token, None, "meticulous-static")
 }
 
@@ -153,23 +144,21 @@ fn resolve_signing_credentials(config: &ObjectStoreConfig) -> Result<ResolvedSig
     let custom_endpoint = !config.endpoint.is_empty();
 
     if let Some((ak, sk)) = static_pair_from_config(config) {
-        return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
-            ak, sk,
-        )));
+        return Ok(ResolvedSigningCredentials::Static(
+            credentials_from_access_secret(ak, sk),
+        ));
     }
 
     if custom_endpoint {
         if let Some((ak, sk)) = env_key_pair("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY") {
-            return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
-                ak, sk,
-            )));
+            return Ok(ResolvedSigningCredentials::Static(
+                credentials_from_access_secret(ak, sk),
+            ));
         }
-        if let Some((ak, sk)) =
-            env_key_pair("MET_STORAGE__ACCESS_KEY", "MET_STORAGE__SECRET_KEY")
-        {
-            return Ok(ResolvedSigningCredentials::Static(credentials_from_access_secret(
-                ak, sk,
-            )));
+        if let Some((ak, sk)) = env_key_pair("MET_STORAGE__ACCESS_KEY", "MET_STORAGE__SECRET_KEY") {
+            return Ok(ResolvedSigningCredentials::Static(
+                credentials_from_access_secret(ak, sk),
+            ));
         }
         if endpoint_host_is_local_dev(&config.endpoint) {
             tracing::debug!(
@@ -194,8 +183,8 @@ fn resolve_signing_credentials(config: &ObjectStoreConfig) -> Result<ResolvedSig
 }
 
 async fn create_s3_client(config: &ObjectStoreConfig) -> Result<Client> {
-    let mut loader = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(config.region.clone()));
+    let mut loader =
+        aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
     if !config.endpoint.is_empty() {
         loader = loader.endpoint_url(&config.endpoint);
@@ -227,13 +216,7 @@ async fn ensure_bucket_exists(
     bucket: &str,
     config: &ObjectStoreConfig,
 ) -> Result<()> {
-    if client
-        .head_bucket()
-        .bucket(bucket)
-        .send()
-        .await
-        .is_ok()
-    {
+    if client.head_bucket().bucket(bucket).send().await.is_ok() {
         return Ok(());
     }
 

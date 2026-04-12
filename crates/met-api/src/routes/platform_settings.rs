@@ -86,10 +86,9 @@ async fn update_platform_settings(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     }
     if let Some(partial) = req.stored_secret_external_kinds {
-        let mut merged =
-            stored_secret_policy::load_merged_external_kind_policy(state.db())
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+        let mut merged = stored_secret_policy::load_merged_external_kind_policy(state.db())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         for (k, v) in partial {
             merged.insert(k, v);
         }

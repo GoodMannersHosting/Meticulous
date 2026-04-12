@@ -73,6 +73,8 @@ hkdf = "0.12"
 rand = "0.8"
 hex = "0.4"
 hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+pkcs8 = { version = "0.10" }
 
 # OpenAPI
 utoipa = { version = "5", features = ["chrono", "uuid"] }

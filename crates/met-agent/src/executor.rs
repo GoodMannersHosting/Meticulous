@@ -715,7 +715,11 @@ impl JobExecutor {
         }
 
         let secret_values: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
-            secrets.values().filter(|v| !v.is_empty()).cloned().collect(),
+            secrets
+                .values()
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .collect(),
         );
 
         // Convert to backend step spec
@@ -737,10 +741,7 @@ impl JobExecutor {
         {
             let safe_command =
                 crate::backend::native::redact_secrets(&step.command, &secret_values);
-            let banner = format!(
-                "::group::Step {} — {}",
-                step.sequence, safe_command
-            );
+            let banner = format!("::group::Step {} — {}", step.sequence, safe_command);
             let _ = log_pipe.send_stdout_line(&banner).await;
         }
 

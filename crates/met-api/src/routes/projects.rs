@@ -29,10 +29,7 @@ use std::collections::HashSet;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list_projects).post(create_project))
-        .route(
-            "/projects/{id}",
-            get(get_project).patch(update_project),
-        )
+        .route("/projects/{id}", get(get_project).patch(update_project))
         .route("/projects/by-slug/{slug}", get(get_project_by_slug))
         .route("/projects/{id}/archive", post(archive_project))
         .route("/projects/{id}/unarchive", post(unarchive_project))
@@ -81,12 +78,10 @@ async fn list_projects(
         }
         SessionOrApp::User(user) => {
             if user.has_permission("*") {
-                repo
-                    .list_by_org(user.org_id, pagination.sql_limit(), 0)
+                repo.list_by_org(user.org_id, pagination.sql_limit(), 0)
                     .await?
             } else {
-                repo
-                    .list_by_org_for_user(user.org_id, user.user_id, pagination.sql_limit(), 0)
+                repo.list_by_org_for_user(user.org_id, user.user_id, pagination.sql_limit(), 0)
                     .await?
             }
         }
@@ -410,8 +405,7 @@ async fn list_meticulous_apps_available_for_project(
         .list_enabled_catalog_for_org(user.org_id)
         .await?;
     Ok(Json(
-        apps
-            .into_iter()
+        apps.into_iter()
             .map(|a| MeticulousAppCatalogEntry {
                 application_id: a.application_id,
                 name: a.name,
@@ -436,8 +430,7 @@ async fn list_project_meticulous_installations(
         .list_installation_summaries_for_project(project_id)
         .await?;
     Ok(Json(
-        rows
-            .into_iter()
+        rows.into_iter()
             .map(|r| ProjectMeticulousInstallationResponse {
                 installation_id: r.id.to_string(),
                 application_id: r.application_id,

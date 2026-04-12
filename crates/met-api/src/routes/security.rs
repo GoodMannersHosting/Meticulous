@@ -61,9 +61,7 @@ fn blast_radius_mode(user: &crate::extractors::CurrentUser) -> OrgSearchMode {
     if user.is_api_token {
         if let Some(ref pl) = user.pipeline_ids {
             if !pl.is_empty() {
-                return OrgSearchMode::PipelineAllowList(
-                    pl.iter().map(|p| p.as_uuid()).collect(),
-                );
+                return OrgSearchMode::PipelineAllowList(pl.iter().map(|p| p.as_uuid()).collect());
             }
         }
     }
@@ -443,9 +441,7 @@ async fn blast_radius_search(
     };
 
     for (rid, _pipe_id, commit, pipe_name) in run_rows {
-        let detail = commit
-            .filter(|s| !s.trim().is_empty())
-            .or(pipe_name);
+        let detail = commit.filter(|s| !s.trim().is_empty()).or(pipe_name);
         push_hit(
             &mut hits,
             &mut seen,
@@ -623,16 +619,12 @@ async fn blast_radius_search(
     }
 
     // Runs linked by execution footprint (binary path or SHA256 substring).
-    let binary_rows =
-        blast_radius_runs_from_binary_footprint(state.db(), org_uuid, &mode, &like)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let binary_rows = blast_radius_runs_from_binary_footprint(state.db(), org_uuid, &mode, &like)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     for (rid, commit_opt, pipe_name_opt, sample_path) in binary_rows {
         let foot = format!("footprint (binary): {sample_path}");
-        let detail = match (
-            commit_opt.filter(|s| !s.trim().is_empty()),
-            pipe_name_opt,
-        ) {
+        let detail = match (commit_opt.filter(|s| !s.trim().is_empty()), pipe_name_opt) {
             (Some(c), Some(p)) => Some(format!("{c} · {p} · {foot}")),
             (Some(c), None) => Some(format!("{c} · {foot}")),
             (None, Some(p)) => Some(format!("{p} · {foot}")),
@@ -655,10 +647,7 @@ async fn blast_radius_search(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
         for (rid, commit_opt, pipe_name_opt, sample_dst) in egress_rows {
             let foot = format!("footprint (egress): {sample_dst}");
-            let detail = match (
-                commit_opt.filter(|s| !s.trim().is_empty()),
-                pipe_name_opt,
-            ) {
+            let detail = match (commit_opt.filter(|s| !s.trim().is_empty()), pipe_name_opt) {
                 (Some(c), Some(p)) => Some(format!("{c} · {p} · {foot}")),
                 (Some(c), None) => Some(format!("{c} · {foot}")),
                 (None, Some(p)) => Some(format!("{p} · {foot}")),

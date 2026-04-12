@@ -48,6 +48,10 @@ pub struct ApiConfig {
     /// Maximum list page size (client requests are clamped to this).
     pub pagination_max_limit: u32,
 
+    /// Public base URL for OIDC issuer / discovery (ADR-017). Overrides [`met_core::config::HttpConfig::public_base_url`] when set from layered config.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+
     /// Emit `Strict-Transport-Security` on responses (enable behind HTTPS / TLS-terminating proxies).
     #[serde(default)]
     pub enable_hsts: bool,
@@ -69,6 +73,7 @@ impl Default for ApiConfig {
             max_concurrent_engine_runs: 8,
             pagination_default_limit: 10_000,
             pagination_max_limit: 10_000,
+            public_base_url: None,
             enable_hsts: false,
         }
     }
@@ -87,6 +92,7 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             max_concurrent_engine_runs: 8,
             pagination_default_limit: http.pagination_default_limit,
             pagination_max_limit: http.pagination_max_limit,
+            public_base_url: http.public_base_url.clone(),
             enable_hsts: false,
             ..Default::default()
         }

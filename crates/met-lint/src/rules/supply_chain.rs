@@ -49,10 +49,7 @@ pub fn check_job_environment(job: &RawJob, diags: &mut Vec<Diagnostic>) {
 
 /// Check workflow invocation for pinning (SC-005 placeholder — future rule for
 /// broad registry credential patterns).
-pub fn check_workflow_invocation(
-    _wf: &RawWorkflowInvocation,
-    _diags: &mut Vec<Diagnostic>,
-) {
+pub fn check_workflow_invocation(_wf: &RawWorkflowInvocation, _diags: &mut Vec<Diagnostic>) {
     // Workflow-level supply chain checks will be added as rules mature.
 }
 
@@ -103,11 +100,7 @@ mod tests {
 
     #[test]
     fn sc006_no_verify() {
-        let job = make_job(
-            "build",
-            "ghcr.io/acme/build@sha256:abcdef1234567890",
-            None,
-        );
+        let job = make_job("build", "ghcr.io/acme/build@sha256:abcdef1234567890", None);
         let mut diags = Vec::new();
         check_job_environment(&job, &mut diags);
         assert!(diags.iter().any(|d| d.rule_id == "SC-006"));

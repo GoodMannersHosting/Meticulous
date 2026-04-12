@@ -125,13 +125,9 @@ async fn connect_nats_client(
             let opts = async_nats::ConnectOptions::with_credentials_file(path)
                 .await
                 .map_err(|e| e.to_string())?;
-            opts.connect(url)
-                .await
-                .map_err(|e| e.to_string())
+            opts.connect(url).await.map_err(|e| e.to_string())
         }
-        None => async_nats::connect(url)
-            .await
-            .map_err(|e| e.to_string()),
+        None => async_nats::connect(url).await.map_err(|e| e.to_string()),
     }
 }
 

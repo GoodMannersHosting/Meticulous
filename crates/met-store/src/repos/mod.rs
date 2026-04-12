@@ -32,10 +32,10 @@ mod project_members;
 mod projects;
 mod roles;
 mod run_binary_executions;
-mod secret_provider_configs;
 mod run_logs;
 mod run_network_connections;
 mod runs;
+mod secret_provider_configs;
 mod triggers;
 mod users;
 mod webhooks;
@@ -64,11 +64,14 @@ pub use log_cache::{
     LazyCacheLine, LogArchiveRow, LogCacheEntry, LogCacheRepo, project_run_for_job_run,
 };
 pub use meticulous_apps::{MeticulousAppInstallationSummary, MeticulousAppRepo};
-pub use oidc_signing_keys::{OidcPublicKeyRow, OidcSigningKeyRepo, OidcSigningKeyRow, OidcTokenAuditRow};
+pub use oidc_signing_keys::{
+    OidcPublicKeyRow, OidcSigningKeyRepo, OidcSigningKeyRow, OidcTokenAuditRow,
+    ensure_initial_oidc_signing_key,
+};
 pub use org_policy::{OrgPolicy, OrgPolicyPatch, OrgPolicyRepo};
 pub use organizations::OrganizationRepo;
-pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipeline_members::{PipelineAccessRepo, PipelineMemberRow, PipelineRole};
+pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;
 pub use pipelines::PipelineRepo;
 pub use platform_health::{
     OrgArtifactStorageTotals, RelationSizeRow, database_disk_overview, org_artifact_storage_totals,
@@ -77,7 +80,6 @@ pub use platform_settings::PlatformSettingsRepo;
 pub use project_members::{ProjectAccessRepo, ProjectMemberRow, ProjectRole};
 pub use projects::ProjectRepo;
 pub use roles::RoleRepo;
-pub use secret_provider_configs::{SecretProviderConfigMeta, SecretProviderConfigRepo, SecretProviderConfigRow};
 pub use run_binary_executions::{
     RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunBinaryFootprintRow,
 };
@@ -86,6 +88,9 @@ pub use run_network_connections::{RunNetworkConnectionRepo, RunNetworkConnection
 pub use runs::{
     JobQueueItemRow, JobRunPipelineContext, JobRunRepo, RunRepo, RunWithJobs, RunWithPipelineName,
     StepRunRepo,
+};
+pub use secret_provider_configs::{
+    SecretProviderConfigMeta, SecretProviderConfigRepo, SecretProviderConfigRow,
 };
 pub use triggers::{PipelineTriggerListEntry, TriggerRepo, get_trigger_for_webhook_dispatch};
 pub use users::UserRepo;

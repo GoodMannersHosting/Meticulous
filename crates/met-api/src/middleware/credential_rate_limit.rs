@@ -61,9 +61,14 @@ impl CredentialRateLimiter {
         } else {
             format!("ujwt:{}", user.user_id)
         };
-        let (p_cap, p_rate) = Self::window(policy.user_rl_primary_max, policy.user_rl_primary_period_secs);
-        let (s_cap, s_rate) =
-            Self::window(policy.user_rl_secondary_max, policy.user_rl_secondary_period_secs);
+        let (p_cap, p_rate) = Self::window(
+            policy.user_rl_primary_max,
+            policy.user_rl_primary_period_secs,
+        );
+        let (s_cap, s_rate) = Self::window(
+            policy.user_rl_secondary_max,
+            policy.user_rl_secondary_period_secs,
+        );
         let mut map = self.user_buckets.lock().unwrap_or_else(|e| e.into_inner());
         let entry = map
             .entry(key)
@@ -74,11 +79,18 @@ impl CredentialRateLimiter {
     }
 
     /// Meticulous App installation JWT (`/api/v1/integration/*`).
-    pub fn check_app(&self, installation_id: AppInstallationId, policy: &OrgPolicy) -> Result<(), ()> {
+    pub fn check_app(
+        &self,
+        installation_id: AppInstallationId,
+        policy: &OrgPolicy,
+    ) -> Result<(), ()> {
         let key = format!("appi:{installation_id}");
-        let (p_cap, p_rate) = Self::window(policy.app_rl_primary_max, policy.app_rl_primary_period_secs);
-        let (s_cap, s_rate) =
-            Self::window(policy.app_rl_secondary_max, policy.app_rl_secondary_period_secs);
+        let (p_cap, p_rate) =
+            Self::window(policy.app_rl_primary_max, policy.app_rl_primary_period_secs);
+        let (s_cap, s_rate) = Self::window(
+            policy.app_rl_secondary_max,
+            policy.app_rl_secondary_period_secs,
+        );
         let mut map = self.app_buckets.lock().unwrap_or_else(|e| e.into_inner());
         let entry = map
             .entry(key)

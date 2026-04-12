@@ -7,8 +7,8 @@ use crate::config::ApiConfig;
 use crate::middleware::CredentialRateLimiter;
 use met_controller::nats::NatsDispatcher;
 use met_engine::Engine;
-use met_secrets::BuiltinStoredCrypto;
 use met_objstore::S3ObjectStore;
+use met_secrets::BuiltinStoredCrypto;
 use met_store::PgPool;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -63,7 +63,10 @@ impl std::fmt::Debug for AppState {
             .field("engine_initialized", &self.engine.is_some())
             .field("nats_ops", &self.nats_ops.is_some())
             .field("object_store", &self.object_store.is_some())
-            .field("credential_rate_limit", &self.credential_rate_limit.is_some())
+            .field(
+                "credential_rate_limit",
+                &self.credential_rate_limit.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }

@@ -6,8 +6,8 @@ use axum::{
     routing::{get, post},
 };
 use met_core::ids::ProjectId;
-use met_store::repos::{EnvironmentRepo, EnvironmentRow, ProjectRepo, RunRepo};
 use met_store::StoreError;
+use met_store::repos::{EnvironmentRepo, EnvironmentRow, ProjectRepo, RunRepo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -51,7 +51,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/projects/{project_id}/environments/{env_id}",
-            get(get_environment).patch(update_environment).delete(delete_environment),
+            get(get_environment)
+                .patch(update_environment)
+                .delete(delete_environment),
         )
         .route(
             "/runs/{run_id}/environments/{env_name}/approve",
@@ -113,7 +115,9 @@ async fn list_environments(
         .list_by_project(project_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(rows.into_iter().map(EnvironmentResponse::from).collect()))
+    Ok(Json(
+        rows.into_iter().map(EnvironmentResponse::from).collect(),
+    ))
 }
 
 #[instrument(skip(state))]
@@ -263,7 +267,9 @@ async fn delete_environment(
         .delete(env_id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "message": "environment deleted" })))
+    Ok(Json(
+        serde_json::json!({ "message": "environment deleted" }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,7 +287,13 @@ async fn approve_deployment(
     let env_id = resolve_environment_for_run(state.db(), run_id, &env_name).await?;
     let repo = EnvironmentRepo::new(state.db());
     let approval = repo
-        .record_approval(run_id, env_id, user.user_id, "approved", req.comment.as_deref())
+        .record_approval(
+            run_id,
+            env_id,
+            user.user_id,
+            "approved",
+            req.comment.as_deref(),
+        )
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(serde_json::json!({
@@ -301,7 +313,13 @@ async fn reject_deployment(
     let env_id = resolve_environment_for_run(state.db(), run_id, &env_name).await?;
     let repo = EnvironmentRepo::new(state.db());
     let approval = repo
-        .record_approval(run_id, env_id, user.user_id, "rejected", req.comment.as_deref())
+        .record_approval(
+            run_id,
+            env_id,
+            user.user_id,
+            "rejected",
+            req.comment.as_deref(),
+        )
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(serde_json::json!({

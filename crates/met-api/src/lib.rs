@@ -19,9 +19,9 @@ pub mod openapi;
 pub mod pipeline_execution;
 pub mod project_access;
 pub mod routes;
-pub mod stored_secret_policy;
 pub mod scheduling_hints;
 pub mod state;
+pub mod stored_secret_policy;
 pub mod trigger_sync;
 pub mod workflow_diagnostics;
 
