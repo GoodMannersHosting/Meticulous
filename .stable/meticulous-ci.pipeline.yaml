@@ -49,9 +49,6 @@ secrets:
   REGISTRY_USERNAME:
     stored:
       name: harbor-mar-operator-username
-  KUBECONFIG_B64:
-    stored:
-      name: kubeconfig-meticulous
   MET_CI_BOOTSTRAP_PASSWORD:
     stored:
       name: ci-bootstrap-password
