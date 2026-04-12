@@ -181,6 +181,59 @@ export interface UpdateMemberRoleInput {
 	role: MemberRole;
 }
 
+/** Batch save for project/pipeline access controls (applied when the user clicks Save). */
+export interface AccessControlSaveBatch {
+	removePrincipalIds: string[];
+	roleUpdates: { principalId: string; role: MemberRole }[];
+	adds: AddMemberInput[];
+}
+
+/** GET /api/v1/admin/users/{id}/resource-access */
+export interface AdminUserResourceProjectRow {
+	project_id: string;
+	project_name: string;
+	role: MemberRole;
+	via: 'direct' | 'group';
+	group_name?: string | null;
+}
+
+export interface AdminUserResourcePipelineRow {
+	pipeline_id: string;
+	pipeline_name: string;
+	project_id: string;
+	project_name: string;
+	role: MemberRole;
+	inherited: boolean;
+	via: 'direct' | 'group';
+	group_name?: string | null;
+}
+
+export interface AdminUserResourceAccessResponse {
+	projects: AdminUserResourceProjectRow[];
+	pipelines: AdminUserResourcePipelineRow[];
+}
+
+/** GET /api/v1/admin/groups/{id}/resource-access */
+export interface AdminGroupResourceProjectRow {
+	project_id: string;
+	project_name: string;
+	role: MemberRole;
+}
+
+export interface AdminGroupResourcePipelineRow {
+	pipeline_id: string;
+	pipeline_name: string;
+	project_id: string;
+	project_name: string;
+	role: MemberRole;
+	inherited: boolean;
+}
+
+export interface AdminGroupResourceAccessResponse {
+	projects: AdminGroupResourceProjectRow[];
+	pipelines: AdminGroupResourcePipelineRow[];
+}
+
 /** Search result for users and groups. */
 export interface PrincipalSearchResult {
 	id: string;
@@ -192,6 +245,13 @@ export interface PrincipalSearchResult {
 /** Platform-wide settings (super_admin only). */
 export interface PlatformSettings {
 	allow_unauthenticated_access: boolean;
+	/** When `false`, create/rotate for that external kind is rejected (`aws_sm`, `vault`, …). */
+	stored_secret_external_kinds?: Record<string, boolean>;
+}
+
+/** `GET /api/v1/stored-secret-policy` — readable by any authenticated user. */
+export interface StoredSecretPolicy {
+	stored_secret_external_kinds: Record<string, boolean>;
 }
 
 /** Pipeline environment (ADR-016). */
@@ -222,6 +282,8 @@ export interface CreateEnvironmentInput {
 }
 
 export interface UpdateEnvironmentInput {
+	/** URL-safe slug; must remain unique within the project. */
+	name?: string;
 	display_name?: string;
 	description?: string;
 	tier?: EnvironmentTier;
@@ -239,11 +301,38 @@ export interface ProjectWorkflowsAvailable {
 	project_workflows: CatalogWorkflow[];
 }
 
+/** Matrix view cell for pipeline environment dashboard. */
+export interface MatrixResponse {
+	workflows: string[];
+	environments: MatrixEnvironment[];
+	cells: MatrixCell[];
+}
+
+export interface MatrixEnvironment {
+	id: string | null;
+	name: string;
+	tier: string;
+}
+
+export interface MatrixCell {
+	workflow: string;
+	environment: string | null;
+	run_id: string | null;
+	run_number: number | null;
+	status: string | null;
+	started_at: string | null;
+	finished_at: string | null;
+	duration_ms: number | null;
+	branch: string | null;
+	triggered_by: string | null;
+}
+
 /** Metadata for a platform-stored secret (no plaintext). */
 export interface StoredSecret {
 	id: string;
 	project_id?: string | null;
 	pipeline_id?: string | null;
+	environment_id?: string | null;
 	path: string;
 	kind: string;
 	version: number;
@@ -463,6 +552,7 @@ export interface WorkspaceStoredSecretListItem extends StoredSecret {
 	project_name?: string | null;
 	project_slug?: string | null;
 	pipeline_name?: string | null;
+	environment_name?: string | null;
 }
 
 // Run Types

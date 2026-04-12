@@ -142,6 +142,7 @@ impl<'a> EnvironmentRepo<'a> {
     pub async fn update(
         &self,
         id: Uuid,
+        name: Option<&str>,
         display_name: Option<&str>,
         description: Option<&str>,
         tier: Option<&str>,
@@ -153,18 +154,34 @@ impl<'a> EnvironmentRepo<'a> {
         variables: Option<&serde_json::Value>,
     ) -> Result<EnvironmentRow> {
         let existing = self.get(id).await?;
+        let new_name: &str = name.unwrap_or(&existing.name);
+        if let Some(n) = name {
+            if n != existing.name {
+                if let Some(other) = self
+                    .get_by_name(ProjectId::from_uuid(existing.project_id), n)
+                    .await?
+                {
+                    if other.id != id {
+                        return Err(StoreError::validation(format!(
+                            "environment name '{n}' is already in use in this project"
+                        )));
+                    }
+                }
+            }
+        }
         let row = sqlx::query_as::<_, EnvironmentRow>(
             r#"
             UPDATE environments SET
-                display_name = $2,
-                description = $3,
-                tier = $4,
-                require_approval = $5,
-                required_approvers = $6,
-                approval_timeout_hours = $7,
-                allowed_branches = $8,
-                auto_deploy_branch = $9,
-                variables = $10,
+                name = $2,
+                display_name = $3,
+                description = $4,
+                tier = $5,
+                require_approval = $6,
+                required_approvers = $7,
+                approval_timeout_hours = $8,
+                allowed_branches = $9,
+                auto_deploy_branch = $10,
+                variables = $11,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, org_id, project_id, name, display_name, description,
@@ -174,6 +191,7 @@ impl<'a> EnvironmentRepo<'a> {
             "#,
         )
         .bind(id)
+        .bind(new_name)
         .bind(display_name.unwrap_or(&existing.display_name))
         .bind(description.or(existing.description.as_deref()))
         .bind(tier.unwrap_or(&existing.tier))

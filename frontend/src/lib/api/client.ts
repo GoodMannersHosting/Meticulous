@@ -329,6 +329,11 @@ export const apiMethods = {
 			api.patch<import('./types').PlatformSettings>('/api/v1/platform/settings', data)
 	},
 
+	/** Which external stored-secret kinds are enabled (any authenticated user). */
+	storedSecretPolicy: {
+		get: () => api.get<import('./types').StoredSecretPolicy>('/api/v1/stored-secret-policy')
+	},
+
 	/** Pipeline environments (ADR-016). */
 	environments: {
 		list: (projectId: string) =>
@@ -401,18 +406,24 @@ export const apiMethods = {
 
 	// Platform stored secrets (encrypted at rest; values never returned)
 	storedSecrets: {
-		list: (projectId: string, params?: { pipeline_id?: string }) =>
+		list: (projectId: string, params?: { pipeline_id?: string; environment_id?: string }) =>
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secrets`, {
 				params
 			}),
 		listVersions: (
 			projectId: string,
-			params: { path: string; pipeline_id?: string; organization_wide?: boolean }
+			params: {
+				path: string;
+				pipeline_id?: string;
+				environment_id?: string;
+				organization_wide?: boolean;
+			}
 		) =>
 			api.get<StoredSecret[]>(`/api/v1/projects/${projectId}/stored-secret-versions`, {
 				params: {
 					path: params.path,
 					...(params.pipeline_id ? { pipeline_id: params.pipeline_id } : {}),
+					...(params.environment_id ? { environment_id: params.environment_id } : {}),
 					...(params.organization_wide ? { organization_wide: true } : {})
 				}
 			}),
@@ -424,6 +435,7 @@ export const apiMethods = {
 				value: string;
 				description?: string;
 				pipeline_id?: string;
+				environment_id?: string;
 				/** `"organization"` for org-wide secrets (requires org admin) */
 				scope?: string;
 				/** Org-wide only; default true. When false, secret is not exposed to pipelines/projects (e.g. workflow catalog import from source code only). */
@@ -439,6 +451,15 @@ export const apiMethods = {
 				activated: StoredSecret;
 			}>(`/api/v1/stored-secrets/${id}/activate`, {}),
 		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}`),
+		patch: (
+			id: string,
+			body: {
+				pipeline_id?: string | null;
+				environment_id?: string | null;
+				description?: string | null;
+				propagate_to_projects?: boolean;
+			}
+		) => api.patch<StoredSecret>(`/api/v1/stored-secrets/${id}`, body),
 		purgeVersionPermanent: (id: string) =>
 			api.delete<{ message: string }>(`/api/v1/stored-secrets/${id}/permanent`)
 	},
@@ -521,6 +542,8 @@ export const apiMethods = {
 			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/unarchive`, {}),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
 			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
+		matrix: (id: string) =>
+			api.get<import('./types').MatrixResponse>(`/api/v1/pipelines/${id}/matrix`),
 		workflowDiagnostics: (
 			id: string,
 			params?: { commit_sha?: string; branch?: string }
@@ -711,7 +734,11 @@ export const apiMethods = {
 						pipeline_ids?: string[];
 					};
 					plain_token: string;
-				}>(`/api/v1/admin/users/${userId}/tokens`, body)
+				}>(`/api/v1/admin/users/${userId}/tokens`, body),
+			resourceAccess: (id: string) =>
+				api.get<import('./types').AdminUserResourceAccessResponse>(
+					`/api/v1/admin/users/${id}/resource-access`
+				)
 		},
 		// Group management
 		groups: {
@@ -730,7 +757,11 @@ export const apiMethods = {
 			updateMember: (groupId: string, userId: string, role: string) =>
 				api.patch<import('./types').GroupMember>(`/api/v1/admin/groups/${groupId}/members/${userId}`, { role }),
 			removeMember: (groupId: string, userId: string) =>
-				api.delete<{ message: string }>(`/api/v1/admin/groups/${groupId}/members/${userId}`)
+				api.delete<{ message: string }>(`/api/v1/admin/groups/${groupId}/members/${userId}`),
+			resourceAccess: (id: string) =>
+				api.get<import('./types').AdminGroupResourceAccessResponse>(
+					`/api/v1/admin/groups/${id}/resource-access`
+				)
 		},
 		// Role management
 		roles: {

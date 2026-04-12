@@ -55,6 +55,10 @@ pub fn router() -> Router<AppState> {
             post(admin_create_service_account_token),
         )
         .route("/users/{id}/delete", post(delete_user))
+        .route(
+            "/users/{id}/resource-access",
+            get(get_user_resource_access),
+        )
         // Group management
         .route("/groups", get(list_groups).post(create_group))
         .route(
@@ -68,6 +72,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{id}/members/{user_id}",
             delete(remove_group_member).patch(update_group_member),
+        )
+        .route(
+            "/groups/{id}/resource-access",
+            get(get_group_resource_access),
         )
         // Role management
         .route("/roles", get(list_roles))
@@ -761,6 +769,292 @@ async fn get_user(
     }
 
     Ok(Json(UserResponse::from(&user)))
+}
+
+fn normalize_acl_role_for_api(db_role: &str) -> String {
+    match db_role {
+        "developer" => "operator".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct UserProjectAclRow {
+    project_id: Uuid,
+    project_name: String,
+    role: String,
+    via: String,
+    group_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct UserPipelineAclRow {
+    pipeline_id: Uuid,
+    pipeline_name: String,
+    project_id: Uuid,
+    project_name: String,
+    role: String,
+    inherited: bool,
+    via: String,
+    group_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserResourceAccessResponse {
+    projects: Vec<serde_json::Value>,
+    pipelines: Vec<serde_json::Value>,
+}
+
+#[instrument(skip(state))]
+async fn get_user_resource_access(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(user_id): Path<UserId>,
+) -> ApiResult<Json<UserResourceAccessResponse>> {
+    require_admin(&admin)?;
+
+    let user_repo = UserRepo::new(state.db());
+    let user = user_repo.get(user_id).await?;
+    if user.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot access users in other organizations",
+        ));
+    }
+
+    let org_id = admin.org_id.as_uuid();
+    let uid = user_id.as_uuid();
+
+    let project_rows: Vec<UserProjectAclRow> = sqlx::query_as(
+        r#"
+        SELECT * FROM (
+            SELECT p.id AS project_id,
+                   p.name AS project_name,
+                   pm.role::text AS role,
+                   'direct'::text AS via,
+                   NULL::text AS group_name
+            FROM project_members pm
+            INNER JOIN projects p ON p.id = pm.project_id
+            WHERE p.org_id = $1
+              AND p.deleted_at IS NULL
+              AND pm.principal_type = 'user'
+              AND pm.principal_id = $2
+            UNION ALL
+            SELECT p.id,
+                   p.name,
+                   pm.role::text,
+                   'group'::text,
+                   g.name
+            FROM project_members pm
+            INNER JOIN projects p ON p.id = pm.project_id
+            INNER JOIN group_memberships gm ON gm.group_id = pm.principal_id
+            INNER JOIN groups g ON g.id = pm.principal_id
+            WHERE p.org_id = $1
+              AND p.deleted_at IS NULL
+              AND pm.principal_type = 'group'
+              AND gm.user_id = $2
+        ) t
+        ORDER BY project_name, via, group_name NULLS LAST
+        "#,
+    )
+    .bind(org_id)
+    .bind(uid)
+    .fetch_all(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let pipeline_rows: Vec<UserPipelineAclRow> = sqlx::query_as(
+        r#"
+        SELECT * FROM (
+            SELECT pl.id AS pipeline_id,
+                   pl.name AS pipeline_name,
+                   pl.project_id,
+                   pr.name AS project_name,
+                   pm.role::text AS role,
+                   pm.inherited AS inherited,
+                   'direct'::text AS via,
+                   NULL::text AS group_name
+            FROM pipeline_members pm
+            INNER JOIN pipelines pl ON pl.id = pm.pipeline_id
+            INNER JOIN projects pr ON pr.id = pl.project_id
+            WHERE pr.org_id = $1
+              AND pr.deleted_at IS NULL
+              AND pl.deleted_at IS NULL
+              AND pm.principal_type = 'user'
+              AND pm.principal_id = $2
+            UNION ALL
+            SELECT pl.id,
+                   pl.name,
+                   pl.project_id,
+                   pr.name,
+                   pm.role::text,
+                   pm.inherited,
+                   'group'::text,
+                   g.name
+            FROM pipeline_members pm
+            INNER JOIN pipelines pl ON pl.id = pm.pipeline_id
+            INNER JOIN projects pr ON pr.id = pl.project_id
+            INNER JOIN group_memberships gm ON gm.group_id = pm.principal_id
+            INNER JOIN groups g ON g.id = pm.principal_id
+            WHERE pr.org_id = $1
+              AND pr.deleted_at IS NULL
+              AND pl.deleted_at IS NULL
+              AND pm.principal_type = 'group'
+              AND gm.user_id = $2
+        ) t
+        ORDER BY project_name, pipeline_name, via, group_name NULLS LAST
+        "#,
+    )
+    .bind(org_id)
+    .bind(uid)
+    .fetch_all(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let projects: Vec<serde_json::Value> = project_rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "project_id": r.project_id.to_string(),
+                "project_name": r.project_name,
+                "role": normalize_acl_role_for_api(&r.role),
+                "via": r.via,
+                "group_name": r.group_name,
+            })
+        })
+        .collect();
+
+    let pipelines: Vec<serde_json::Value> = pipeline_rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "pipeline_id": r.pipeline_id.to_string(),
+                "pipeline_name": r.pipeline_name,
+                "project_id": r.project_id.to_string(),
+                "project_name": r.project_name,
+                "role": normalize_acl_role_for_api(&r.role),
+                "inherited": r.inherited,
+                "via": r.via,
+                "group_name": r.group_name,
+            })
+        })
+        .collect();
+
+    Ok(Json(UserResourceAccessResponse { projects, pipelines }))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct GroupProjectAclRow {
+    project_id: Uuid,
+    project_name: String,
+    role: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct GroupPipelineAclRow {
+    pipeline_id: Uuid,
+    pipeline_name: String,
+    project_id: Uuid,
+    project_name: String,
+    role: String,
+    inherited: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupResourceAccessResponse {
+    projects: Vec<serde_json::Value>,
+    pipelines: Vec<serde_json::Value>,
+}
+
+#[instrument(skip(state))]
+async fn get_group_resource_access(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(group_id): Path<GroupId>,
+) -> ApiResult<Json<GroupResourceAccessResponse>> {
+    require_admin(&admin)?;
+
+    let group_repo = GroupRepo::new(state.db());
+    let group = group_repo.get(group_id).await?;
+    if group.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot access groups in other organizations",
+        ));
+    }
+
+    let org_id = admin.org_id.as_uuid();
+    let gid = group_id.as_uuid();
+
+    let project_rows: Vec<GroupProjectAclRow> = sqlx::query_as(
+        r#"
+        SELECT p.id AS project_id,
+               p.name AS project_name,
+               pm.role::text AS role
+        FROM project_members pm
+        INNER JOIN projects p ON p.id = pm.project_id
+        WHERE p.org_id = $1
+          AND p.deleted_at IS NULL
+          AND pm.principal_type = 'group'
+          AND pm.principal_id = $2
+        ORDER BY p.name
+        "#,
+    )
+    .bind(org_id)
+    .bind(gid)
+    .fetch_all(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let pipeline_rows: Vec<GroupPipelineAclRow> = sqlx::query_as(
+        r#"
+        SELECT pl.id AS pipeline_id,
+               pl.name AS pipeline_name,
+               pl.project_id,
+               pr.name AS project_name,
+               pm.role::text AS role,
+               pm.inherited AS inherited
+        FROM pipeline_members pm
+        INNER JOIN pipelines pl ON pl.id = pm.pipeline_id
+        INNER JOIN projects pr ON pr.id = pl.project_id
+        WHERE pr.org_id = $1
+          AND pr.deleted_at IS NULL
+          AND pl.deleted_at IS NULL
+          AND pm.principal_type = 'group'
+          AND pm.principal_id = $2
+        ORDER BY pr.name, pl.name
+        "#,
+    )
+    .bind(org_id)
+    .bind(gid)
+    .fetch_all(state.db())
+    .await
+    .map_err(met_store::StoreError::from)?;
+
+    let projects: Vec<serde_json::Value> = project_rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "project_id": r.project_id.to_string(),
+                "project_name": r.project_name,
+                "role": normalize_acl_role_for_api(&r.role),
+            })
+        })
+        .collect();
+
+    let pipelines: Vec<serde_json::Value> = pipeline_rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "pipeline_id": r.pipeline_id.to_string(),
+                "pipeline_name": r.pipeline_name,
+                "project_id": r.project_id.to_string(),
+                "project_name": r.project_name,
+                "role": normalize_acl_role_for_api(&r.role),
+                "inherited": r.inherited,
+            })
+        })
+        .collect();
+
+    Ok(Json(GroupResourceAccessResponse { projects, pipelines }))
 }
 
 #[derive(Debug, Deserialize)]

@@ -3,6 +3,7 @@
 	import { EmptyState, Skeleton } from '$components/data';
 	import { apiMethods } from '$api/client';
 	import type {
+		Environment,
 		Pipeline,
 		Project,
 		WorkspaceScopeLevel,
@@ -10,7 +11,24 @@
 		WorkspaceVariableListItem
 	} from '$api/types';
 	import { formatRelativeTime } from '$utils/format';
-	import { Braces, KeyRound, Search, ExternalLink, RefreshCw, Plus } from 'lucide-svelte';
+	import {
+		getSecretRefFromMetadata,
+		isRemoteRefSecretKind,
+		kindAllowedByExternalPolicy,
+		storedSecretValueFieldLabel,
+		storedSecretValueHelpLine,
+		storedSecretValuePlaceholder
+	} from '$lib/utils/storedSecretUi';
+	import {
+		Braces,
+		KeyRound,
+		Search,
+		ExternalLink,
+		RefreshCw,
+		Plus,
+		Edit,
+		Trash2
+	} from 'lucide-svelte';
 
 	let kind = $state<'variables' | 'secrets'>('variables');
 	let scopeLevel = $state<WorkspaceScopeLevel>('all');
@@ -59,12 +77,31 @@
 	let hubSecGhExtraJson = $state('');
 	let hubSecPipelines = $state<Pipeline[]>([]);
 	let hubSecPipelinesLoading = $state(false);
+	let hubSecEnvironmentId = $state('');
+	let hubSecEnvironments = $state<Environment[]>([]);
 	let hubSecretActionLoading = $state(false);
 	let hubSecretError = $state<string | null>(null);
+	let storedExternalKindPolicy = $state<Record<string, boolean> | null>(null);
+
+	let showHubRotateSecret = $state(false);
+	let hubRotateTarget = $state<WorkspaceStoredSecretListItem | null>(null);
+	let hubRotateValue = $state('');
+
+	let showHubDeleteSecret = $state(false);
+	let hubDeleteTarget = $state<WorkspaceStoredSecretListItem | null>(null);
+
+	let showHubEditScope = $state(false);
+	let hubEditScopeTarget = $state<WorkspaceStoredSecretListItem | null>(null);
+	let hubEditScopePipelineId = $state('');
+	let hubEditScopeEnvironmentId = $state('');
+	let hubEditScopeDescription = $state('');
+	let hubEditScopePropagate = $state(true);
+	let hubEditScopePipelines = $state<Pipeline[]>([]);
+	let hubEditScopeEnvironments = $state<Environment[]>([]);
 
 	const kindTabs = [
 		{ id: 'variables' as const, label: 'Variables', icon: Braces },
-		{ id: 'secrets' as const, label: 'Stored secrets', icon: KeyRound }
+		{ id: 'secrets' as const, label: 'Secrets', icon: KeyRound }
 	];
 
 	const scopeOptions: { value: WorkspaceScopeLevel; label: string }[] = [
@@ -99,13 +136,46 @@
 		...hubSecPipelines.map((p) => ({ value: p.id, label: p.name }))
 	]);
 
-	const kindOptions = [
+	const allStoredSecretKindOptions = [
 		{ value: 'kv', label: 'Key / value (kv)' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
 		{ value: 'github_app', label: 'GitHub App' },
-		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' }
+		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' },
+		{ value: 'registry', label: 'Container registry' },
+		{ value: 'aws_sm', label: 'AWS Secrets Manager' },
+		{ value: 'vault', label: 'HashiCorp Vault' },
+		{ value: 'gcp_sm', label: 'GCP Secret Manager' },
+		{ value: 'azure_kv', label: 'Azure Key Vault' },
+		{ value: 'kubernetes', label: 'Kubernetes Secret' }
 	];
+
+	const kindOptions = $derived(
+		allStoredSecretKindOptions.filter((o) =>
+			kindAllowedByExternalPolicy(o.value, storedExternalKindPolicy)
+		)
+	);
+
+	const hubSecEnvOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...hubSecEnvironments.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
+
+	const hubEditScopePipelineOptions = $derived([
+		{ value: '', label: 'Project-wide (all pipelines)' },
+		...hubEditScopePipelines.map((p) => ({ value: p.id, label: p.name }))
+	]);
+
+	const hubEditScopeEnvSelectOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...hubEditScopeEnvironments.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
 
 	$effect(() => {
 		void loadProjects();
@@ -224,6 +294,43 @@
 		};
 	});
 
+	$effect(() => {
+		if (!showHubCreateSecret || !hubSecProjectId || hubSecOrgWide) {
+			if (!showHubCreateSecret || hubSecOrgWide) {
+				hubSecEnvironments = [];
+				hubSecEnvironmentId = '';
+			}
+			return;
+		}
+		const pid = hubSecProjectId;
+		let cancelled = false;
+		void apiMethods.environments
+			.list(pid)
+			.then((list) => {
+				if (cancelled) return;
+				hubSecEnvironments = list;
+				if (hubSecEnvironmentId && !list.some((e) => e.id === hubSecEnvironmentId)) {
+					hubSecEnvironmentId = '';
+				}
+			})
+			.catch(() => {
+				if (!cancelled) hubSecEnvironments = [];
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	async function ensureStoredSecretPolicy() {
+		if (storedExternalKindPolicy !== null) return;
+		try {
+			const p = await apiMethods.storedSecretPolicy.get();
+			storedExternalKindPolicy = p.stored_secret_external_kinds;
+		} catch {
+			storedExternalKindPolicy = {};
+		}
+	}
+
 	function hubParams(cursor?: string) {
 		return {
 			...(appliedSearch.trim() ? { q: appliedSearch.trim() } : {}),
@@ -245,6 +352,7 @@
 				variableRows = r.data;
 				nextCursor = r.pagination.next_cursor ?? null;
 			} else {
+				await ensureStoredSecretPolicy();
 				const r = await apiMethods.workspaceConfig.listStoredSecrets(hubParams());
 				secretRows = r.data;
 				nextCursor = r.pagination.next_cursor ?? null;
@@ -268,6 +376,7 @@
 				variableRows = [...variableRows, ...r.data];
 				nextCursor = r.pagination.next_cursor ?? null;
 			} else {
+				await ensureStoredSecretPolicy();
 				const r = await apiMethods.workspaceConfig.listStoredSecrets(hubParams(nextCursor));
 				secretRows = [...secretRows, ...r.data];
 				nextCursor = r.pagination.next_cursor ?? null;
@@ -333,6 +442,7 @@
 		hubSecretError = null;
 		hubSecProjectId = projectId || '';
 		hubSecPipelineId = projectId && pipelineId ? pipelineId : '';
+		hubSecEnvironmentId = '';
 		hubSecPath = '';
 		hubSecKind = 'kv';
 		hubSecValue = '';
@@ -431,6 +541,8 @@
 				value,
 				description: hubSecDescription.trim() || undefined,
 				pipeline_id: hubSecOrgWide ? undefined : hubSecPipelineId || undefined,
+				environment_id:
+					hubSecOrgWide || !hubSecEnvironmentId ? undefined : hubSecEnvironmentId,
 				...(hubSecOrgWide
 					? { scope: 'organization', propagate_to_projects: hubSecPropagateToProjects }
 					: {})
@@ -446,9 +558,123 @@
 
 	function secretScopeLabel(s: WorkspaceStoredSecretListItem): string {
 		if (s.project_id == null || s.project_id === '') return 'Organization';
-		if (s.pipeline_id) return 'Pipeline';
-		return 'Project';
+		let base: string;
+		if (s.pipeline_id) base = s.pipeline_name ?? 'Pipeline';
+		else base = 'Project';
+		const envPart =
+			s.environment_id && s.environment_name
+				? ` · ${s.environment_name}`
+				: s.environment_id
+					? ' · Environment'
+					: '';
+		return base + envPart;
 	}
+
+	async function openHubEditScope(s: WorkspaceStoredSecretListItem) {
+		hubEditScopeTarget = s;
+		hubEditScopePipelineId = s.pipeline_id ?? '';
+		hubEditScopeEnvironmentId = s.environment_id ?? '';
+		hubEditScopeDescription = s.description ?? '';
+		hubEditScopePropagate = s.propagate_to_projects !== false;
+		hubEditScopePipelines = [];
+		hubEditScopeEnvironments = [];
+		if (s.project_id) {
+			hubEditScopePipelines = await fetchAllPipelines(s.project_id);
+			try {
+				hubEditScopeEnvironments = await apiMethods.environments.list(s.project_id);
+			} catch {
+				hubEditScopeEnvironments = [];
+			}
+		}
+		showHubEditScope = true;
+	}
+
+	async function submitHubEditScope() {
+		if (!hubEditScopeTarget) return;
+		hubSecretActionLoading = true;
+		hubSecretError = null;
+		try {
+			const t = hubEditScopeTarget;
+			const body: {
+				pipeline_id?: string | null;
+				environment_id?: string | null;
+				description?: string | null;
+				propagate_to_projects?: boolean;
+			} = {};
+
+			if (!t.project_id || t.project_id === '') {
+				const descNow = (t.description ?? '').trim();
+				const descNew = hubEditScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+				const propNow = t.propagate_to_projects !== false;
+				if (hubEditScopePropagate !== propNow) body.propagate_to_projects = hubEditScopePropagate;
+			} else {
+				const newPip = hubEditScopePipelineId.trim() || null;
+				const oldPip = t.pipeline_id ?? null;
+				if (newPip !== oldPip) body.pipeline_id = newPip;
+				const newEnv = hubEditScopeEnvironmentId.trim() || null;
+				const oldEnv = t.environment_id ?? null;
+				if (newEnv !== oldEnv) body.environment_id = newEnv;
+				const descNow = (t.description ?? '').trim();
+				const descNew = hubEditScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+			}
+
+			if (Object.keys(body).length === 0) {
+				showHubEditScope = false;
+				hubEditScopeTarget = null;
+				return;
+			}
+
+			await apiMethods.storedSecrets.patch(t.id, body);
+			showHubEditScope = false;
+			hubEditScopeTarget = null;
+			await reloadList();
+		} catch (e) {
+			hubSecretError = e instanceof Error ? e.message : 'Failed to update secret';
+		} finally {
+			hubSecretActionLoading = false;
+		}
+	}
+
+	async function submitHubRotateSecret() {
+		if (!hubRotateTarget) return;
+		hubSecretActionLoading = true;
+		hubSecretError = null;
+		try {
+			await apiMethods.storedSecrets.rotate(hubRotateTarget.id, hubRotateValue);
+			showHubRotateSecret = false;
+			hubRotateTarget = null;
+			hubRotateValue = '';
+			await reloadList();
+		} catch (e) {
+			hubSecretError = e instanceof Error ? e.message : 'Failed to rotate secret';
+		} finally {
+			hubSecretActionLoading = false;
+		}
+	}
+
+	async function submitHubDeleteSecret() {
+		if (!hubDeleteTarget) return;
+		hubSecretActionLoading = true;
+		hubSecretError = null;
+		try {
+			await apiMethods.storedSecrets.delete(hubDeleteTarget.id);
+			showHubDeleteSecret = false;
+			hubDeleteTarget = null;
+			await reloadList();
+		} catch (e) {
+			hubSecretError = e instanceof Error ? e.message : 'Failed to delete secret';
+		} finally {
+			hubSecretActionLoading = false;
+		}
+	}
+
+	const hubRotateDialogTitle = $derived(
+		hubRotateTarget != null && isRemoteRefSecretKind(hubRotateTarget.kind)
+			? 'Update provider reference'
+			: 'Rotate secret'
+	);
 
 	function variableScopeLabel(v: WorkspaceVariableListItem): string {
 		if (v.pipeline_id) return 'Pipeline';
@@ -552,6 +778,12 @@
 		</Alert>
 	{/if}
 
+	{#if kind === 'secrets' && hubSecretError}
+		<Alert variant="error" title="Secrets" dismissible ondismiss={() => (hubSecretError = null)}>
+			{hubSecretError}
+		</Alert>
+	{/if}
+
 	{#if listLoading && (kind === 'variables' ? variableRows.length === 0 : secretRows.length === 0)}
 		<Card>
 			<div class="space-y-3 p-4">
@@ -652,12 +884,14 @@
 					<tr>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Path</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Reference</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
+						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Environment</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Project</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Pipeline</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
 						<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
-						<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Open</th>
+						<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-[var(--border-secondary)]">
@@ -665,6 +899,13 @@
 						<tr class="bg-[var(--bg-secondary)]">
 							<td class="px-4 py-3 font-mono text-xs">{s.path}</td>
 							<td class="px-4 py-3">{s.kind}</td>
+							<td class="max-w-[12rem] truncate px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
+								{#if isRemoteRefSecretKind(s.kind)}
+									{getSecretRefFromMetadata(s.metadata) ?? '—'}
+								{:else}
+									—
+								{/if}
+							</td>
 							<td class="px-4 py-3">
 								<div class="flex flex-wrap items-center gap-1">
 									<Badge variant="secondary">{secretScopeLabel(s)}</Badge>
@@ -672,6 +913,9 @@
 										<Badge variant="outline">Platform only</Badge>
 									{/if}
 								</div>
+							</td>
+							<td class="px-4 py-3 text-[var(--text-secondary)]">
+								{s.environment_name ?? '—'}
 							</td>
 							<td class="px-4 py-3 text-[var(--text-secondary)]">
 								{#if s.project_name}
@@ -689,19 +933,54 @@
 								{formatRelativeTime(s.updated_at)}
 							</td>
 							<td class="px-4 py-3 text-right">
-								<div class="flex justify-end gap-1">
+								<div class="flex flex-wrap justify-end gap-1">
 									{#if s.project_id}
-										<Button variant="ghost" size="sm" href="/projects/{s.project_id}">
+										<Button variant="ghost" size="sm" href="/projects/{s.project_id}?tab=secrets">
 											Project
 											<ExternalLink class="h-3 w-3 opacity-70" />
 										</Button>
 									{/if}
 									{#if s.pipeline_id}
-										<Button variant="ghost" size="sm" href="/pipelines/{s.pipeline_id}">
+										<Button variant="ghost" size="sm" href="/pipelines/{s.pipeline_id}?tab=secrets">
 											Pipeline
 											<ExternalLink class="h-3 w-3 opacity-70" />
 										</Button>
 									{/if}
+									<Button
+										variant="ghost"
+										size="sm"
+										title="Change pipeline, environment, or description"
+										onclick={() => void openHubEditScope(s)}
+									>
+										<Edit class="h-4 w-4" />
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)}
+										title={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)
+											? 'This kind is disabled by platform administrators'
+											: undefined}
+										onclick={() => {
+											hubRotateTarget = s;
+											hubRotateValue = isRemoteRefSecretKind(s.kind)
+												? (getSecretRefFromMetadata(s.metadata) ?? '')
+												: '';
+											showHubRotateSecret = true;
+										}}
+									>
+										{isRemoteRefSecretKind(s.kind) ? 'Ref' : 'Rotate'}
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => {
+											hubDeleteTarget = s;
+											showHubDeleteSecret = true;
+										}}
+									>
+										<Trash2 class="h-4 w-4" />
+									</Button>
 								</div>
 							</td>
 						</tr>
@@ -888,15 +1167,16 @@
 		{:else}
 			<div>
 				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-s-val"
-					>Value (one-time)</label
+					>{storedSecretValueFieldLabel(hubSecKind)}</label
 				>
 				<textarea
 					id="hub-s-val"
 					bind:value={hubSecValue}
 					rows="4"
 					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
-					placeholder="Secret value or PEM / JSON payload"
+					placeholder={storedSecretValuePlaceholder(hubSecKind)}
 				></textarea>
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">{storedSecretValueHelpLine(hubSecKind)}</p>
 			</div>
 		{/if}
 		<div>
@@ -915,6 +1195,17 @@
 					disabled={!hubSecProjectId || hubSecPipelinesLoading}
 				/>
 			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-s-env"
+					>Environment (optional)</label
+				>
+				<Select
+					id="hub-s-env"
+					options={hubSecEnvOptions}
+					bind:value={hubSecEnvironmentId}
+					disabled={!hubSecProjectId}
+				/>
+			</div>
 		{/if}
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showHubCreateSecret = false)}>Cancel</Button>
@@ -928,4 +1219,158 @@
 			</Button>
 		</div>
 	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showHubRotateSecret}
+	title={hubRotateDialogTitle}
+	onclose={() => {
+		hubRotateTarget = null;
+		hubRotateValue = '';
+	}}
+>
+	{#if hubRotateTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			{#if isRemoteRefSecretKind(hubRotateTarget.kind)}
+				Update the provider reference for
+				<span class="font-mono text-[var(--text-primary)]">{hubRotateTarget.path}</span> (new version).
+			{:else}
+				New value for <span class="font-mono text-[var(--text-primary)]">{hubRotateTarget.path}</span>.
+			{/if}
+		</p>
+		<div class="mt-4">
+			{#if hubRotateTarget.kind !== 'github_app'}
+				<label class="mb-1 block text-xs font-medium text-[var(--text-secondary)]" for="hub-rotate-val"
+					>{storedSecretValueFieldLabel(hubRotateTarget.kind)}</label
+				>
+			{/if}
+			<textarea
+				id="hub-rotate-val"
+				bind:value={hubRotateValue}
+				rows={hubRotateTarget.kind === 'github_app' ? 14 : 4}
+				placeholder={storedSecretValuePlaceholder(hubRotateTarget.kind)}
+				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+			></textarea>
+			{#if hubRotateTarget.kind !== 'github_app'}
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					{storedSecretValueHelpLine(hubRotateTarget.kind)}
+				</p>
+			{/if}
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showHubRotateSecret = false;
+					hubRotateTarget = null;
+					hubRotateValue = '';
+				}}
+			>
+				Cancel
+			</Button>
+			<Button
+				variant="primary"
+				onclick={submitHubRotateSecret}
+				loading={hubSecretActionLoading}
+				disabled={!hubRotateValue?.trim()}
+			>
+				{hubRotateTarget && isRemoteRefSecretKind(hubRotateTarget.kind) ? 'Save reference' : 'Rotate'}
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showHubDeleteSecret}
+	title="Delete secret?"
+	onclose={() => {
+		hubDeleteTarget = null;
+	}}
+>
+	{#if hubDeleteTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Soft-delete <span class="font-mono">{hubDeleteTarget.path}</span>?
+		</p>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showHubDeleteSecret = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitHubDeleteSecret}
+				loading={hubSecretActionLoading}
+			>
+				Delete
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showHubEditScope}
+	title="Edit secret scope"
+	onclose={() => {
+		hubEditScopeTarget = null;
+	}}
+>
+	{#if hubEditScopeTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Updates apply to all versions for
+			<span class="font-mono text-[var(--text-primary)]">{hubEditScopeTarget.path}</span>.
+		</p>
+		<div class="mt-4 space-y-4">
+			{#if !hubEditScopeTarget.project_id || hubEditScopeTarget.project_id === ''}
+				<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<input
+						type="checkbox"
+						class="mt-1 h-4 w-4 rounded border-[var(--border-primary)]"
+						bind:checked={hubEditScopePropagate}
+					/>
+					<span>
+						<span class="text-sm font-medium text-[var(--text-primary)]"
+							>Expose to all projects and pipelines</span>
+						<span class="mt-0.5 block text-xs text-[var(--text-secondary)]">
+							When off, the secret is for platform features only.
+						</span>
+					</span>
+				</label>
+			{:else}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-edit-pipe"
+						>Pipeline scope</label
+					>
+					<Select
+						id="hub-edit-pipe"
+						options={hubEditScopePipelineOptions}
+						bind:value={hubEditScopePipelineId}
+					/>
+				</div>
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-edit-env"
+						>Environment</label
+					>
+					<Select id="hub-edit-env" options={hubEditScopeEnvSelectOptions} bind:value={hubEditScopeEnvironmentId} />
+				</div>
+			{/if}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-edit-desc"
+					>Description</label
+				>
+				<Input id="hub-edit-desc" bind:value={hubEditScopeDescription} placeholder="Optional" />
+			</div>
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showHubEditScope = false;
+					hubEditScopeTarget = null;
+				}}
+			>
+				Cancel
+			</Button>
+			<Button variant="primary" onclick={submitHubEditScope} loading={hubSecretActionLoading}>
+				Save
+			</Button>
+		</div>
+	{/if}
 </Dialog>

@@ -5,6 +5,7 @@
 	import type { AdminUser } from '$lib/api/types';
 	import { getGravatarUrl } from '$lib/utils/gravatar';
 	import { auth } from '$stores';
+	import Pagination from '$lib/components/data/Pagination.svelte';
 
 	let searchQuery = $state('');
 	let users = $state<AdminUser[]>([]);
@@ -17,6 +18,9 @@
 	let newPassword = $state('');
 	let resetPasswordLoading = $state(false);
 	let resetPasswordError = $state<string | null>(null);
+
+	let usersPage = $state(1);
+	let usersPerPage = $state(20);
 
 	let showServiceAccountModal = $state(false);
 	let saUsername = $state('');
@@ -89,6 +93,21 @@
 				(u.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false)
 		)
 	);
+
+	const pagedUsers = $derived(
+		filteredUsers.slice((usersPage - 1) * usersPerPage, usersPage * usersPerPage)
+	);
+
+	$effect(() => {
+		searchQuery;
+		usersPage = 1;
+	});
+
+	$effect(() => {
+		const n = filteredUsers.length;
+		const maxPage = Math.max(1, Math.ceil(n / usersPerPage) || 1);
+		if (usersPage > maxPage) usersPage = maxPage;
+	});
 
 	function toggleActionMenu(userId: string) {
 		actionMenuOpen = actionMenuOpen === userId ? null : userId;
@@ -295,7 +314,7 @@
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-[var(--border-primary)] bg-[var(--bg-primary)]">
-					{#each filteredUsers as user (user.id)}
+					{#each pagedUsers as user (user.id)}
 						<tr class="cursor-pointer hover:bg-[var(--bg-hover)]" onclick={() => goToUser(user.id)}>
 							<td class="whitespace-nowrap px-4 py-3">
 								<div class="flex items-center gap-3">
@@ -422,6 +441,11 @@
 				</tbody>
 			</table>
 		</div>
+		{#if filteredUsers.length > usersPerPage}
+			<div class="mt-4">
+				<Pagination bind:page={usersPage} bind:perPage={usersPerPage} total={filteredUsers.length} />
+			</div>
+		{/if}
 	{/if}
 </div>
 

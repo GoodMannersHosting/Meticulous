@@ -34,12 +34,14 @@ pub mod oauth;
 pub mod oidc_provider;
 pub mod orgs;
 pub mod pipeline_check;
+pub mod pipeline_matrix;
 pub mod pipelines;
 pub mod platform_settings;
 pub mod projects;
 pub mod runs;
 pub mod security;
 pub mod secrets;
+pub mod stored_secret_policy;
 pub mod stored_secrets;
 pub mod tokens;
 pub mod triggers;
@@ -80,6 +82,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(orgs::router())
         .merge(secrets::router())
         .merge(stored_secrets::router())
+        .merge(stored_secret_policy::router())
         .merge(variables::router())
         .merge(workspace_config::router())
         .merge(workflows::router())
@@ -92,7 +95,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(members::router())
         .merge(platform_settings::router())
         .merge(environments::router())
-        .merge(pipeline_check::router());
+        .merge(pipeline_check::router())
+        .merge(pipeline_matrix::router());
 
     let openapi_spec = ApiDoc::openapi();
     let swagger_router: Router<()> = SwaggerUi::new("/docs")

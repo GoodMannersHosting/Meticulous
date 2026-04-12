@@ -17,6 +17,12 @@ pub enum StoredSecretKind {
     X509Bundle,
     /// Authenticated OCI registry credentials (ADR-015).
     Registry,
+    /// Remote: AWS Secrets Manager secret ARN or name (ref in metadata).
+    AwsSecretsManager,
+    Vault,
+    GcpSecretManager,
+    AzureKeyVault,
+    KubernetesSecret,
 }
 
 impl StoredSecretKind {
@@ -29,7 +35,25 @@ impl StoredSecretKind {
             Self::ApiKey => "api_key",
             Self::X509Bundle => "x509_bundle",
             Self::Registry => "registry",
+            Self::AwsSecretsManager => "aws_sm",
+            Self::Vault => "vault",
+            Self::GcpSecretManager => "gcp_sm",
+            Self::AzureKeyVault => "azure_kv",
+            Self::KubernetesSecret => "kubernetes",
         }
+    }
+
+    /// Provider kinds where the user-visible value is a non-sensitive reference (stored in `metadata.secret_ref`).
+    #[must_use]
+    pub const fn stores_remote_ref_in_metadata(self) -> bool {
+        matches!(
+            self,
+            Self::AwsSecretsManager
+                | Self::Vault
+                | Self::GcpSecretManager
+                | Self::AzureKeyVault
+                | Self::KubernetesSecret
+        )
     }
 
     pub fn parse(s: &str) -> Result<Self> {
@@ -40,6 +64,11 @@ impl StoredSecretKind {
             "api_key" => Ok(Self::ApiKey),
             "x509_bundle" => Ok(Self::X509Bundle),
             "registry" => Ok(Self::Registry),
+            "aws_sm" | "aws_secrets_manager" | "aws" => Ok(Self::AwsSecretsManager),
+            "vault" | "hashicorp_vault" => Ok(Self::Vault),
+            "gcp_sm" | "gcp_secret_manager" => Ok(Self::GcpSecretManager),
+            "azure_kv" | "azure_key_vault" => Ok(Self::AzureKeyVault),
+            "kubernetes" | "k8s" => Ok(Self::KubernetesSecret),
             _ => Err(StoreError::validation(format!("unknown secret kind: {s}"))),
         }
     }
@@ -63,6 +92,7 @@ pub struct BuiltinSecretMetaRow {
     pub org_id: Uuid,
     pub project_id: Option<Uuid>,
     pub pipeline_id: Option<Uuid>,
+    pub environment_id: Option<Uuid>,
     pub path: String,
     pub kind: String,
     pub version: i32,
@@ -185,6 +215,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         org_id: OrganizationId,
         project_id: Option<ProjectId>,
         pipeline_id: Option<PipelineId>,
+        environment_id: Option<Uuid>,
         path: &str,
     ) -> Result<i32> {
         let (n,): (Option<i32>,) = sqlx::query_as(
@@ -197,12 +228,15 @@ impl<'a> BuiltinSecretsRepo<'a> {
                   = COALESCE($3, '00000000-0000-0000-0000-000000000000'::uuid)
               AND COALESCE(pipeline_id, '00000000-0000-0000-0000-000000000000'::uuid)
                   = COALESCE($4, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND COALESCE(environment_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($5, '00000000-0000-0000-0000-000000000000'::uuid)
             "#,
         )
         .bind(org_id.as_uuid())
         .bind(path)
         .bind(project_id.map(|p| p.as_uuid()))
         .bind(pipeline_id.map(|p| p.as_uuid()))
+        .bind(environment_id)
         .fetch_one(self.pool)
         .await?;
 
@@ -215,6 +249,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         org_id: OrganizationId,
         project_id: Option<ProjectId>,
         pipeline_id: Option<PipelineId>,
+        environment_id: Option<Uuid>,
         path: &str,
         kind: StoredSecretKind,
         metadata: &serde_json::Value,
@@ -230,11 +265,11 @@ impl<'a> BuiltinSecretsRepo<'a> {
         let row = sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
             INSERT INTO builtin_secrets (
-                id, org_id, project_id, pipeline_id, path, kind, metadata, description,
+                id, org_id, project_id, pipeline_id, environment_id, path, kind, metadata, description,
                 encrypted_value, nonce, key_id, version, created_by, propagate_to_projects
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            RETURNING id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                       created_at, updated_at, propagate_to_projects
             "#,
         )
@@ -242,6 +277,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .bind(org_id.as_uuid())
         .bind(project_id.map(|p| p.as_uuid()))
         .bind(pipeline_id.map(|p| p.as_uuid()))
+        .bind(environment_id)
         .bind(path)
         .bind(kind.as_str())
         .bind(metadata)
@@ -266,7 +302,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
     ) -> Result<Vec<BuiltinSecretMetaRow>> {
         let rows = sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
-            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                    created_at, updated_at, propagate_to_projects
             FROM builtin_secrets
             WHERE org_id = $1
@@ -284,22 +320,56 @@ impl<'a> BuiltinSecretsRepo<'a> {
         Ok(rows)
     }
 
+    /// List secrets scoped to a specific environment (env-scoped + project-scoped + org-scoped).
+    pub async fn list_for_environment(
+        &self,
+        org_id: OrganizationId,
+        project_id: ProjectId,
+        environment_id: Uuid,
+    ) -> Result<Vec<BuiltinSecretMetaRow>> {
+        let rows = sqlx::query_as::<_, BuiltinSecretMetaRow>(
+            r#"
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
+                   created_at, updated_at, propagate_to_projects
+            FROM builtin_secrets
+            WHERE org_id = $1
+              AND deleted_at IS NULL
+              AND (project_id IS NULL OR project_id = $2)
+              AND (environment_id IS NULL OR environment_id = $3)
+              AND NOT (project_id IS NULL AND NOT propagate_to_projects)
+            ORDER BY path ASC, version DESC
+            "#,
+        )
+        .bind(org_id.as_uuid())
+        .bind(project_id.as_uuid())
+        .bind(environment_id)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     /// List metadata for a specific pipeline (includes project + org scoped names that apply).
+    ///
+    /// When `environment_id` is set, only rows visible for that environment are returned (global
+    /// `environment_id` NULL rows plus rows pinned to that environment).
     pub async fn list_for_pipeline(
         &self,
         org_id: OrganizationId,
         project_id: ProjectId,
         pipeline_id: PipelineId,
+        environment_id: Option<Uuid>,
     ) -> Result<Vec<BuiltinSecretMetaRow>> {
         let rows = sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
-            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                    created_at, updated_at, propagate_to_projects
             FROM builtin_secrets
             WHERE org_id = $1
               AND deleted_at IS NULL
               AND (project_id IS NULL OR project_id = $2)
               AND (pipeline_id IS NULL OR pipeline_id = $3)
+              AND ($4::uuid IS NULL OR environment_id IS NULL OR environment_id = $4)
               AND NOT (project_id IS NULL AND NOT propagate_to_projects)
             ORDER BY path ASC, version DESC
             "#,
@@ -307,6 +377,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .bind(org_id.as_uuid())
         .bind(project_id.as_uuid())
         .bind(pipeline_id.as_uuid())
+        .bind(environment_id)
         .fetch_all(self.pool)
         .await?;
 
@@ -316,7 +387,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
     pub async fn get_meta_by_id(&self, id: Uuid) -> Result<Option<BuiltinSecretMetaRow>> {
         sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
-            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                    created_at, updated_at, propagate_to_projects
             FROM builtin_secrets
             WHERE id = $1 AND deleted_at IS NULL
@@ -335,7 +406,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
     ) -> Result<Option<BuiltinSecretMetaRow>> {
         sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
-            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                    created_at, updated_at, propagate_to_projects
             FROM builtin_secrets
             WHERE id = $1
@@ -364,6 +435,52 @@ impl<'a> BuiltinSecretsRepo<'a> {
         Ok(())
     }
 
+    /// Update scope-related columns for every non-deleted row in the same logical chain
+    /// (org + path + project + pipeline + environment).
+    pub async fn update_scope_for_chain(
+        &self,
+        org_id: Uuid,
+        project_id: Option<Uuid>,
+        pipeline_id: Option<Uuid>,
+        environment_id: Option<Uuid>,
+        path: &str,
+        new_pipeline_id: Option<Uuid>,
+        new_environment_id: Option<Uuid>,
+        set_description: bool,
+        description: Option<&str>,
+        propagate_to_projects: Option<bool>,
+    ) -> Result<u64> {
+        let r = sqlx::query(
+            r#"
+            UPDATE builtin_secrets SET
+                pipeline_id = $6,
+                environment_id = $7,
+                description = CASE WHEN $8::bool THEN $9 ELSE description END,
+                propagate_to_projects = COALESCE($10, propagate_to_projects),
+                updated_at = NOW()
+            WHERE org_id = $1
+              AND path = $2
+              AND deleted_at IS NULL
+              AND project_id IS NOT DISTINCT FROM $3
+              AND pipeline_id IS NOT DISTINCT FROM $4
+              AND environment_id IS NOT DISTINCT FROM $5
+            "#,
+        )
+        .bind(org_id)
+        .bind(path)
+        .bind(project_id)
+        .bind(pipeline_id)
+        .bind(environment_id)
+        .bind(new_pipeline_id)
+        .bind(new_environment_id)
+        .bind(set_description)
+        .bind(description)
+        .bind(propagate_to_projects)
+        .execute(self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// All non-deleted versions for the same org / project / pipeline scope and logical `path`.
     ///
     /// `project_id` / `pipeline_id` use SQL `IS NOT DISTINCT FROM` so org-wide rows (`NULL`) match.
@@ -372,11 +489,12 @@ impl<'a> BuiltinSecretsRepo<'a> {
         org_id: OrganizationId,
         project_id: Option<ProjectId>,
         pipeline_id: Option<PipelineId>,
+        environment_id: Option<Uuid>,
         path: &str,
     ) -> Result<Vec<BuiltinSecretMetaRow>> {
         sqlx::query_as::<_, BuiltinSecretMetaRow>(
             r#"
-            SELECT id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+            SELECT id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
                    created_at, updated_at, propagate_to_projects
             FROM builtin_secrets
             WHERE org_id = $1
@@ -384,6 +502,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
               AND deleted_at IS NULL
               AND project_id IS NOT DISTINCT FROM $3
               AND pipeline_id IS NOT DISTINCT FROM $4
+              AND environment_id IS NOT DISTINCT FROM $5
             ORDER BY version DESC
             "#,
         )
@@ -391,6 +510,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .bind(path)
         .bind(project_id.map(|p| p.as_uuid()))
         .bind(pipeline_id.map(|p| p.as_uuid()))
+        .bind(environment_id)
         .fetch_all(self.pool)
         .await
         .map_err(Into::into)
@@ -411,7 +531,9 @@ impl<'a> BuiltinSecretsRepo<'a> {
               AND path = $3
               AND COALESCE(pipeline_id, '00000000-0000-0000-0000-000000000000'::uuid)
                   = COALESCE($4, '00000000-0000-0000-0000-000000000000'::uuid)
-              AND version > $5
+              AND COALESCE(environment_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE($5, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND version > $6
               AND deleted_at IS NULL
             "#,
         )
@@ -419,6 +541,7 @@ impl<'a> BuiltinSecretsRepo<'a> {
         .bind(anchor.project_id)
         .bind(&anchor.path)
         .bind(anchor.pipeline_id)
+        .bind(anchor.environment_id)
         .bind(anchor.version)
         .execute(self.pool)
         .await?;

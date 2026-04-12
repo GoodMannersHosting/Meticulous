@@ -31,8 +31,17 @@
 		StoredSecret,
 		UpdatePipelineInput,
 		UpdatePipelineTriggerInput,
-		WorkflowDiagnosticItem
+		WorkflowDiagnosticItem,
+		Environment
 	} from '$api/types';
+	import {
+		getSecretRefFromMetadata,
+		isRemoteRefSecretKind,
+		kindAllowedByExternalPolicy,
+		storedSecretValueFieldLabel,
+		storedSecretValueHelpLine,
+		storedSecretValuePlaceholder
+	} from '$lib/utils/storedSecretUi';
 	import { formatRelativeTime, truncateId } from '$utils/format';
 	import { generateRandomWebhookSecret } from '$utils/webhookSecret';
 	import {
@@ -58,7 +67,8 @@
 		CircleHelp,
 		Shield,
 		Layers,
-		Archive
+		Archive,
+		Edit
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { sortRunList } from '$utils/sortRuns';
@@ -99,6 +109,31 @@
 	let runsLoading = $state(false);
 	let error = $state<string | null>(null);
 	let activeTab = $state('runs');
+
+	const pipelineTabIds = new Set([
+		'runs',
+		'variables',
+		'secrets',
+		'definition',
+		'settings',
+		'triggers',
+		'access',
+		'advanced'
+	]);
+
+	function setPipelineTab(tab: string) {
+		activeTab = tab;
+		const u = new URL($page.url.href);
+		u.searchParams.set('tab', tab);
+		void goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true, keepFocus: true });
+	}
+
+	$effect(() => {
+		const t = $page.url.searchParams.get('tab');
+		if (t && pipelineTabIds.has(t) && t !== activeTab) {
+			activeTab = t;
+		}
+	});
 	let triggerLoading = $state(false);
 	let syncGitLoading = $state(false);
 	let pipelineSecrets = $state<StoredSecret[]>([]);
@@ -110,6 +145,11 @@
 	let createValue = $state('');
 	let createDescription = $state('');
 	let secScopePipelineId = $state('');
+	let createEnvironmentId = $state('');
+	let pipelineProjectEnvs = $state<Environment[]>([]);
+	let projectPipelinesAll = $state<Pipeline[]>([]);
+	let storedExternalKindPolicy = $state<Record<string, boolean> | null>(null);
+	let secretsFilterEnvId = $state('');
 	let ghAppId = $state('');
 	let ghInstallationId = $state('');
 	let ghPrivateKey = $state('');
@@ -119,6 +159,12 @@
 	let rotateTarget = $state<StoredSecret | null>(null);
 	let rotateValue = $state('');
 	let showRotateSecretDialog = $state(false);
+	let showEditSecretScopeDialog = $state(false);
+	let editScopeTarget = $state<StoredSecret | null>(null);
+	let editScopePipelineId = $state('');
+	let editScopeEnvironmentId = $state('');
+	let editScopeDescription = $state('');
+	let editScopePropagate = $state(true);
 	let deleteTarget = $state<StoredSecret | null>(null);
 	let showDeleteSecretDialog = $state(false);
 	let showSecretVersionsDialog = $state(false);
@@ -230,13 +276,26 @@
 			: [{ value: '', label: 'Project-wide' }]
 	);
 
+	const plSecretEnvironmentOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...pipelineProjectEnvs.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
+
+	const plSecretsEnvFilterOptions = $derived([
+		{ value: '', label: 'All environments' },
+		...pipelineProjectEnvs.map((e) => ({ value: e.id, label: e.display_name }))
+	]);
+
 	const runsPageSizeOptions = [
 		{ value: '20', label: '20 per page' },
 		{ value: '50', label: '50 per page' },
 		{ value: '100', label: '100 per page' }
 	];
 
-	const kindOptions = [
+	const allStoredSecretKindOptions = [
 		{ value: 'kv', label: 'Key / value' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
@@ -249,6 +308,17 @@
 		{ value: 'azure_kv', label: 'Azure Key Vault' },
 		{ value: 'kubernetes', label: 'Kubernetes Secret' }
 	];
+
+	const kindOptions = $derived(
+		allStoredSecretKindOptions.filter((o) =>
+			kindAllowedByExternalPolicy(o.value, storedExternalKindPolicy)
+		)
+	);
+
+	const pipelineSecretScopeEditOptions = $derived([
+		{ value: '', label: 'Project-wide (all pipelines)' },
+		...projectPipelinesAll.map((pl) => ({ value: pl.id, label: pl.name }))
+	]);
 
 	function definitionJobs(def: Pipeline['definition']): PipelineJob[] {
 		if (def && typeof def === 'object' && 'jobs' in def) {
@@ -272,6 +342,21 @@
 		return s.length > 12 ? `${s.slice(0, 7)}…` : s;
 	}
 
+	async function loadMatrix() {
+		if (!pipeline) return;
+		matrixLoading = true;
+		try {
+			matrixData = await apiMethods.pipelines.matrix(pipeline.id);
+			if (matrixData.environments.length > 1) {
+				runsViewMode = 'matrix';
+			}
+		} catch {
+			matrixData = null;
+		} finally {
+			matrixLoading = false;
+		}
+	}
+
 	async function loadPipelineMembers() {
 		if (!pipeline) return;
 		plMembersLoading = true;
@@ -285,21 +370,17 @@
 		}
 	}
 
-	async function addPipelineMember(input: import('$api/types').AddMemberInput) {
+	async function savePipelineAccess(batch: import('$api/types').AccessControlSaveBatch) {
 		if (!pipeline) return;
-		await apiMethods.pipelineMembers.add(pipeline.id, input);
-		await loadPipelineMembers();
-	}
-
-	async function removePipelineMember(principalId: string) {
-		if (!pipeline) return;
-		await apiMethods.pipelineMembers.remove(pipeline.id, principalId);
-		await loadPipelineMembers();
-	}
-
-	async function updatePipelineMemberRole(principalId: string, role: import('$api/types').MemberRole) {
-		if (!pipeline) return;
-		await apiMethods.pipelineMembers.updateRole(pipeline.id, principalId, { role });
+		for (const principalId of batch.removePrincipalIds) {
+			await apiMethods.pipelineMembers.remove(pipeline.id, principalId);
+		}
+		for (const u of batch.roleUpdates) {
+			await apiMethods.pipelineMembers.updateRole(pipeline.id, u.principalId, { role: u.role });
+		}
+		for (const input of batch.adds) {
+			await apiMethods.pipelineMembers.add(pipeline.id, input);
+		}
 		await loadPipelineMembers();
 	}
 
@@ -374,6 +455,10 @@
 	let plMembers = $state<import('$api/types').Member[]>([]);
 	let plMembersLoading = $state(false);
 	let plMembersError = $state<string | null>(null);
+
+	let runsViewMode = $state<'list' | 'matrix'>('list');
+	let matrixData = $state<import('$api/types').MatrixResponse | null>(null);
+	let matrixLoading = $state(false);
 
 	function apiPublicOrigin(): string {
 		return getPublicApiBase();
@@ -667,6 +752,7 @@
 			const pipelineId = $page.params.id!;
 			runsListOffset = 0;
 			pipeline = await apiMethods.pipelines.get(pipelineId);
+			projectPipelinesAll = [];
 			try {
 				const proj = await apiMethods.projects.get(pipeline.project_id);
 				breadcrumbTrail.set([
@@ -730,13 +816,42 @@
 		return `${from}–${to}`;
 	});
 
+	async function ensureStoredSecretPolicy() {
+		if (storedExternalKindPolicy !== null) return;
+		try {
+			const pol = await apiMethods.storedSecretPolicy.get();
+			storedExternalKindPolicy = pol.stored_secret_external_kinds;
+		} catch {
+			storedExternalKindPolicy = {};
+		}
+	}
+
+	async function loadProjectPipelinesForEditScope() {
+		const p = pipeline;
+		if (!p) return;
+		try {
+			const acc: Pipeline[] = [];
+			let cursor: string | undefined;
+			do {
+				const r = await apiMethods.pipelines.list({ project_id: p.project_id, per_page: 100, cursor });
+				acc.push(...r.data);
+				cursor = r.pagination.has_more ? r.pagination.next_cursor : undefined;
+			} while (cursor);
+			projectPipelinesAll = acc;
+		} catch {
+			projectPipelinesAll = [];
+		}
+	}
+
 	async function loadPipelineSecrets() {
 		if (!pipeline) return;
 		secretsLoading = true;
 		secretsError = null;
 		try {
+			await ensureStoredSecretPolicy();
 			pipelineSecrets = await apiMethods.storedSecrets.list(pipeline.project_id, {
-				pipeline_id: pipeline.id
+				pipeline_id: pipeline.id,
+				...(secretsFilterEnvId ? { environment_id: secretsFilterEnvId } : {})
 			});
 		} catch (e) {
 			secretsError = e instanceof Error ? e.message : 'Failed to load secrets';
@@ -746,9 +861,29 @@
 		}
 	}
 
+	async function loadPipelineProjectEnvironments() {
+		const p = pipeline;
+		if (!p) return;
+		try {
+			pipelineProjectEnvs = await apiMethods.environments.list(p.project_id);
+		} catch {
+			pipelineProjectEnvs = [];
+		}
+	}
+
 	$effect(() => {
-		if (activeTab !== 'secrets' || !pipeline || loading) return;
-		void loadPipelineSecrets();
+		const p = pipeline;
+		const _f = secretsFilterEnvId;
+		if (activeTab !== 'secrets' || !p || loading) return;
+		void (async () => {
+			if (pipelineProjectEnvs.length === 0) {
+				await loadPipelineProjectEnvironments();
+			}
+			if (projectPipelinesAll.length === 0) {
+				await loadProjectPipelinesForEditScope();
+			}
+			await loadPipelineSecrets();
+		})();
 	});
 
 	$effect(() => {
@@ -762,11 +897,24 @@
 		}
 	});
 
+	$effect(() => {
+		if (activeTab === 'runs' && pipeline && !loading) {
+			void loadMatrix();
+		}
+	});
+
 	function storedSecretScopeLabel(s: StoredSecret): string {
 		const p = pipeline;
-		if (!s.pipeline_id) return 'Project';
-		if (p && s.pipeline_id === p.id) return 'This pipeline';
-		return s.pipeline_id.slice(0, 8);
+		const env =
+			s.environment_id && pipelineProjectEnvs.length
+				? pipelineProjectEnvs.find((e) => e.id === s.environment_id)
+				: null;
+		const envPart = env ? ` · ${env.display_name}` : s.environment_id ? ' · Environment' : '';
+		if (!s.pipeline_id) return 'Project' + envPart;
+		if (p && s.pipeline_id === p.id) return 'This pipeline' + envPart;
+		const named = projectPipelinesAll.find((x) => x.id === s.pipeline_id);
+		if (named) return named.name + envPart;
+		return (s.pipeline_id?.slice(0, 8) ?? 'Pipeline') + envPart;
 	}
 
 	function openCreateSecret() {
@@ -775,6 +923,7 @@
 		createValue = '';
 		createDescription = '';
 		secScopePipelineId = pipeline?.id ?? '';
+		createEnvironmentId = '';
 		ghAppId = '';
 		ghInstallationId = '';
 		ghPrivateKey = '';
@@ -839,12 +988,70 @@
 				kind: createKind,
 				value,
 				description: createDescription.trim() || undefined,
-				pipeline_id: secScopePipelineId || undefined
+				pipeline_id: secScopePipelineId || undefined,
+				environment_id: createEnvironmentId || undefined
 			});
 			showCreateSecret = false;
 			await loadPipelineSecrets();
 		} catch (e) {
 			secretsError = e instanceof Error ? e.message : 'Failed to create secret';
+		} finally {
+			secretActionLoading = false;
+		}
+	}
+
+	function openEditSecretScope(s: StoredSecret) {
+		editScopeTarget = s;
+		editScopePipelineId = s.pipeline_id ?? '';
+		editScopeEnvironmentId = s.environment_id ?? '';
+		editScopeDescription = s.description ?? '';
+		editScopePropagate = s.propagate_to_projects !== false;
+		showEditSecretScopeDialog = true;
+	}
+
+	async function submitEditSecretScope() {
+		if (!editScopeTarget) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			const t = editScopeTarget;
+			const body: {
+				pipeline_id?: string | null;
+				environment_id?: string | null;
+				description?: string | null;
+				propagate_to_projects?: boolean;
+			} = {};
+
+			if (!t.project_id || t.project_id === '') {
+				const descNow = (t.description ?? '').trim();
+				const descNew = editScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+				const propNow = t.propagate_to_projects !== false;
+				if (editScopePropagate !== propNow) body.propagate_to_projects = editScopePropagate;
+			} else {
+				const newPip = editScopePipelineId.trim() || null;
+				const oldPip = t.pipeline_id ?? null;
+				if (newPip !== oldPip) body.pipeline_id = newPip;
+				const newEnv = editScopeEnvironmentId.trim() || null;
+				const oldEnv = t.environment_id ?? null;
+				if (newEnv !== oldEnv) body.environment_id = newEnv;
+				const descNow = (t.description ?? '').trim();
+				const descNew = editScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+			}
+
+			if (Object.keys(body).length === 0) {
+				showEditSecretScopeDialog = false;
+				editScopeTarget = null;
+				return;
+			}
+
+			await apiMethods.storedSecrets.patch(t.id, body);
+			showEditSecretScopeDialog = false;
+			editScopeTarget = null;
+			await loadPipelineSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to update secret';
 		} finally {
 			secretActionLoading = false;
 		}
@@ -900,7 +1107,9 @@
 		try {
 			secretVersionRows = await apiMethods.storedSecrets.listVersions(p.project_id, {
 				path: ctx.path,
-				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {})
+				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {}),
+				...(ctx.environment_id ? { environment_id: ctx.environment_id } : {}),
+				...(!ctx.project_id ? { organization_wide: true } : {})
 			});
 		} catch (e) {
 			versionsError = e instanceof Error ? e.message : 'Failed to load versions';
@@ -1126,6 +1335,12 @@
 	function handleRunClick(run: Run) {
 		goto(`/runs/${run.id}`);
 	}
+
+	const rotateSecretDialogTitle = $derived(
+		rotateTarget != null && isRemoteRefSecretKind(rotateTarget.kind)
+			? 'Update provider reference'
+			: 'Rotate secret'
+	);
 </script>
 
 <svelte:head>
@@ -1248,7 +1463,7 @@
 					<button
 						type="button"
 						class="text-left text-primary-600 underline hover:no-underline sm:text-left"
-						onclick={() => (activeTab = 'triggers')}
+						onclick={() => setPipelineTab('triggers')}
 					>
 						View URLs & settings
 					</button>
@@ -1268,7 +1483,7 @@
 			{/if}
 		{/if}
 
-		<Tabs items={tabs} value={isPlSettingsGroup ? 'settings' : activeTab} onchange={(v) => (activeTab = v)} />
+		<Tabs items={tabs} value={isPlSettingsGroup ? 'settings' : activeTab} onchange={(v) => setPipelineTab(v)} />
 
 		{#if isPlSettingsGroup}
 			<div class="flex gap-1.5 mt-1 mb-4">
@@ -1277,7 +1492,7 @@
 						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {activeTab === sub.id
 							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
 							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
-						onclick={() => (activeTab = sub.id)}
+						onclick={() => setPipelineTab(sub.id)}
 					>
 						{sub.label}
 					</button>
@@ -1286,6 +1501,32 @@
 		{/if}
 
 		{#if activeTab === 'runs'}
+			{#if matrixData && matrixData.environments.length > 1}
+				<div class="flex items-center gap-2 mb-3">
+					<button
+						class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {runsViewMode === 'matrix'
+							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (runsViewMode = 'matrix')}
+					>
+						Matrix
+					</button>
+					<button
+						class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {runsViewMode === 'list'
+							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (runsViewMode = 'list')}
+					>
+						List
+					</button>
+				</div>
+			{/if}
+
+			{#if runsViewMode === 'matrix' && matrixData}
+				{#await import('$lib/components/pipeline/RunMatrix.svelte') then mod}
+					<svelte:component this={mod.default} data={matrixData} onrefresh={loadMatrix} />
+				{/await}
+			{:else}
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<p class="text-sm text-[var(--text-secondary)]">
 					{#if runs.length === 0 && runsListOffset === 0 && !runsLoading}
@@ -1384,6 +1625,7 @@
 					onRowClick={handleRunClick}
 					loading={runsLoading && runs.length === 0}
 				/>
+			{/if}
 			{/if}
 		{:else if activeTab === 'settings'}
 			{#if pipeline}
@@ -1671,9 +1913,7 @@
 					loading={plMembersLoading}
 					error={plMembersError}
 					showInherited={true}
-					onAdd={addPipelineMember}
-					onRemove={removePipelineMember}
-					onUpdateRole={updatePipelineMemberRole}
+					onSaveAccess={savePipelineAccess}
 				/>
 			{/await}
 		{:else if activeTab === 'variables'}
@@ -1771,15 +2011,24 @@
 			{/if}
 		{:else if activeTab === 'secrets'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
-				<p class="text-sm text-[var(--text-secondary)]">
-					Project-wide secrets plus pipeline-specific overrides for <strong>{pipeline.name}</strong>. Reference in
-					YAML with
+				<p class="max-w-3xl text-sm text-[var(--text-secondary)]">
+					Project-wide secrets plus pipeline-specific overrides for <strong>{pipeline.name}</strong>. Provider-backed
+					kinds store only the resource reference (visible in this list). Reference in YAML with
 					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
 						>stored: &#123; name: MY_TOKEN &#125;</code
 					>.
 				</p>
-				<div class="flex flex-wrap gap-2">
-					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}">
+				<div class="flex flex-wrap items-center gap-2">
+					{#if pipelineProjectEnvs.length > 0}
+						<div class="min-w-[11rem]">
+							<Select
+								id="pl-secrets-env-filter"
+								options={plSecretsEnvFilterOptions}
+								bind:value={secretsFilterEnvId}
+							/>
+						</div>
+					{/if}
+					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}?tab=secrets">
 						Project secrets
 					</Button>
 					<Button variant="ghost" size="sm" onclick={loadPipelineSecrets} loading={secretsLoading}>
@@ -1824,6 +2073,7 @@
 							<tr>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Reference</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
@@ -1835,6 +2085,13 @@
 								<tr class="bg-[var(--bg-secondary)]">
 									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
 									<td class="px-4 py-3">{s.kind}</td>
+									<td class="max-w-[14rem] truncate px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
+										{#if isRemoteRefSecretKind(s.kind)}
+											{getSecretRefFromMetadata(s.metadata) ?? '—'}
+										{:else}
+											—
+										{/if}
+									</td>
 									<td class="px-4 py-3">{storedSecretScopeLabel(s)}</td>
 									<td class="px-4 py-3 font-mono">
 										<button
@@ -1861,13 +2118,27 @@
 											<Button
 												variant="ghost"
 												size="sm"
+												title="Change pipeline, environment, or description"
+												onclick={() => openEditSecretScope(s)}
+											>
+												<Edit class="h-4 w-4" />
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)}
+												title={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)
+													? 'This kind is disabled by platform administrators'
+													: undefined}
 												onclick={() => {
 													rotateTarget = s;
-													rotateValue = '';
+													rotateValue = isRemoteRefSecretKind(s.kind)
+														? (getSecretRefFromMetadata(s.metadata) ?? '')
+														: '';
 													showRotateSecretDialog = true;
 												}}
 											>
-												Rotate
+												{isRemoteRefSecretKind(s.kind) ? 'Edit ref' : 'Rotate'}
 											</Button>
 											<Button
 												variant="ghost"
@@ -2310,15 +2581,16 @@
 		{:else}
 			<div>
 				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-val"
-					>Value (one-time)</label
+					>{storedSecretValueFieldLabel(createKind)}</label
 				>
 				<textarea
 					id="pl-sec-val"
 					bind:value={createValue}
 					rows="4"
 					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
-					placeholder="Secret value or PEM / JSON payload"
+					placeholder={storedSecretValuePlaceholder(createKind)}
 				></textarea>
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">{storedSecretValueHelpLine(createKind)}</p>
 			</div>
 		{/if}
 		<div>
@@ -2330,6 +2602,15 @@
 		<div>
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-scope">Scope</label>
 			<Select id="pl-sec-scope" options={pipelineVarScopeOptions} bind:value={secScopePipelineId} />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-env"
+				>Environment (optional)</label
+			>
+			<Select id="pl-sec-env" options={plSecretEnvironmentOptions} bind:value={createEnvironmentId} />
+			<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+				When set, this secret applies only to runs targeting that environment.
+			</p>
 		</div>
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showCreateSecret = false)}>Cancel</Button>
@@ -2347,7 +2628,7 @@
 
 <Dialog
 	bind:open={showRotateSecretDialog}
-	title="Rotate secret"
+	title={rotateSecretDialogTitle}
 	onclose={() => {
 		rotateTarget = null;
 		rotateValue = '';
@@ -2355,8 +2636,13 @@
 >
 	{#if rotateTarget}
 		<p class="text-sm text-[var(--text-secondary)]">
-			New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
-			version).
+			{#if isRemoteRefSecretKind(rotateTarget.kind)}
+				Update the provider reference for{' '}
+				<span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new version).
+			{:else}
+				New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
+				version).
+			{/if}
 		</p>
 		{#if rotateTarget.kind === 'github_app'}
 			<p class="mt-2 text-xs text-[var(--text-secondary)]">
@@ -2368,11 +2654,23 @@
 			</p>
 		{/if}
 		<div class="mt-4">
+			{#if rotateTarget.kind !== 'github_app'}
+				<label class="mb-1 block text-xs font-medium text-[var(--text-secondary)]" for="pl-rotate-sec-val"
+					>{storedSecretValueFieldLabel(rotateTarget.kind)}</label
+				>
+			{/if}
 			<textarea
+				id="pl-rotate-sec-val"
 				bind:value={rotateValue}
 				rows={rotateTarget.kind === 'github_app' ? 14 : 4}
+				placeholder={storedSecretValuePlaceholder(rotateTarget.kind)}
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
 			></textarea>
+			{#if rotateTarget.kind !== 'github_app'}
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					{storedSecretValueHelpLine(rotateTarget.kind)}
+				</p>
+			{/if}
 		</div>
 		<div class="mt-6 flex justify-end gap-2">
 			<Button
@@ -2391,7 +2689,81 @@
 				loading={secretActionLoading}
 				disabled={!rotateValue?.trim()}
 			>
-				Rotate
+				{rotateTarget && isRemoteRefSecretKind(rotateTarget.kind) ? 'Save reference' : 'Rotate'}
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showEditSecretScopeDialog}
+	title="Edit secret scope"
+	onclose={() => {
+		editScopeTarget = null;
+	}}
+>
+	{#if editScopeTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Updates apply to the whole secret chain (all versions) for
+			<span class="font-mono text-[var(--text-primary)]">{editScopeTarget.path}</span>.
+		</p>
+		<div class="mt-4 space-y-4">
+			{#if !editScopeTarget.project_id || editScopeTarget.project_id === ''}
+				<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<input
+						type="checkbox"
+						class="mt-1 h-4 w-4 rounded border-[var(--border-primary)]"
+						bind:checked={editScopePropagate}
+					/>
+					<span>
+						<span class="text-sm font-medium text-[var(--text-primary)]"
+							>Expose to all projects and pipelines</span>
+						<span class="mt-0.5 block text-xs text-[var(--text-secondary)]">
+							When off, the secret is for platform features only, not project secret lists or
+							<code class="font-mono">stored:</code> resolution.
+						</span>
+					</span>
+				</label>
+			{:else}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-edit-sec-pipe"
+						>Pipeline scope</label
+					>
+					<Select
+						id="pl-edit-sec-pipe"
+						options={pipelineSecretScopeEditOptions}
+						bind:value={editScopePipelineId}
+					/>
+				</div>
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-edit-sec-env"
+						>Environment</label
+					>
+					<Select id="pl-edit-sec-env" options={plSecretEnvironmentOptions} bind:value={editScopeEnvironmentId} />
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						Choose “All environments (default)” to clear environment scoping.
+					</p>
+				</div>
+			{/if}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-edit-sec-desc"
+					>Description</label
+				>
+				<Input id="pl-edit-sec-desc" bind:value={editScopeDescription} placeholder="Optional" />
+			</div>
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showEditSecretScopeDialog = false;
+					editScopeTarget = null;
+				}}
+			>
+				Cancel
+			</Button>
+			<Button variant="primary" onclick={submitEditSecretScope} loading={secretActionLoading}>
+				Save
 			</Button>
 		</div>
 	{/if}

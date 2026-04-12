@@ -104,6 +104,7 @@ struct SecretHubRow {
     org_id: Uuid,
     project_id: Option<Uuid>,
     pipeline_id: Option<Uuid>,
+    environment_id: Option<Uuid>,
     path: String,
     kind: String,
     version: i32,
@@ -115,6 +116,7 @@ struct SecretHubRow {
     project_name: Option<String>,
     project_slug: Option<String>,
     pipeline_name: Option<String>,
+    environment_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -127,6 +129,9 @@ pub struct WorkspaceStoredSecretListItem {
     pub project_slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline_name: Option<String>,
+    /// Display name for [`StoredSecretResponse::environment_id`] when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_name: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -400,8 +405,8 @@ async fn list_workspace_stored_secrets(
     let rows = sqlx::query_as::<_, SecretHubRow>(
         r#"
         WITH latest AS (
-          SELECT DISTINCT ON (path, project_id, pipeline_id)
-            id, org_id, project_id, pipeline_id, path, kind, version, metadata, description,
+          SELECT DISTINCT ON (path, project_id, pipeline_id, environment_id)
+            id, org_id, project_id, pipeline_id, environment_id, path, kind, version, metadata, description,
             created_at, updated_at, propagate_to_projects
           FROM builtin_secrets
           WHERE org_id = $1
@@ -416,15 +421,17 @@ async fn list_workspace_stored_secrets(
               OR ($9 = 'project' AND project_id IS NOT NULL AND pipeline_id IS NULL)
               OR ($9 = 'pipeline' AND pipeline_id IS NOT NULL)
             )
-          ORDER BY path, project_id, pipeline_id, version DESC
+          ORDER BY path, project_id, pipeline_id, environment_id, version DESC
         )
         SELECT
-          l.id, l.org_id, l.project_id, l.pipeline_id, l.path, l.kind, l.version,
+          l.id, l.org_id, l.project_id, l.pipeline_id, l.environment_id, l.path, l.kind, l.version,
           l.metadata, l.description, l.created_at, l.updated_at, l.propagate_to_projects,
-          p.name AS project_name, p.slug AS project_slug, pl.name AS pipeline_name
+          p.name AS project_name, p.slug AS project_slug, pl.name AS pipeline_name,
+          e.display_name AS environment_name
         FROM latest l
         LEFT JOIN projects p ON p.id = l.project_id
         LEFT JOIN pipelines pl ON pl.id = l.pipeline_id
+        LEFT JOIN environments e ON e.id = l.environment_id
         WHERE ($7::timestamptz IS NULL OR (l.updated_at, l.id) < ($7::timestamptz, $8::uuid))
         ORDER BY l.updated_at DESC, l.id DESC
         LIMIT $10
@@ -452,6 +459,7 @@ async fn list_workspace_stored_secrets(
                 org_id: r.org_id,
                 project_id: r.project_id,
                 pipeline_id: r.pipeline_id,
+                environment_id: r.environment_id,
                 path: r.path,
                 kind: r.kind,
                 version: r.version,
@@ -466,6 +474,7 @@ async fn list_workspace_stored_secrets(
                 project_name: r.project_name,
                 project_slug: r.project_slug,
                 pipeline_name: r.pipeline_name,
+                environment_name: r.environment_name,
             }
         })
         .collect();

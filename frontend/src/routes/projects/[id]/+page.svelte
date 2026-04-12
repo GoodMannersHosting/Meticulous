@@ -23,8 +23,18 @@
 		CatalogWorkflow,
 		PatchProjectWebhookInput,
 		ProjectWebhookRegistration,
-		WebhookRegistrationTargetRow
+		WebhookRegistrationTargetRow,
+		Environment,
+		EnvironmentTier
 	} from '$api/types';
+	import {
+		getSecretRefFromMetadata,
+		isRemoteRefSecretKind,
+		kindAllowedByExternalPolicy,
+		storedSecretValueFieldLabel,
+		storedSecretValueHelpLine,
+		storedSecretValuePlaceholder
+	} from '$lib/utils/storedSecretUi';
 	import type {
 		MeticulousAppCatalogEntry,
 		ProjectMeticulousInstallationRow
@@ -47,7 +57,8 @@
 		Webhook,
 		Puzzle,
 		Archive,
-		Shield
+		Shield,
+		Globe
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -74,6 +85,12 @@
 	let rotateTarget = $state<StoredSecret | null>(null);
 	let rotateValue = $state('');
 	let showRotateSecretDialog = $state(false);
+	let showEditSecretScopeDialog = $state(false);
+	let editScopeTarget = $state<StoredSecret | null>(null);
+	let editScopePipelineId = $state('');
+	let editScopeEnvironmentId = $state('');
+	let editScopeDescription = $state('');
+	let editScopePropagate = $state(true);
 	let deleteTarget = $state<StoredSecret | null>(null);
 	let showDeleteSecretDialog = $state(false);
 	let showSecretVersionsDialog = $state(false);
@@ -164,7 +181,7 @@
 	let permAgentsDelete = $state(false);
 	let installAppLoading = $state(false);
 
-	const kindOptions = [
+	const allStoredSecretKindOptions = [
 		{ value: 'kv', label: 'Key / value' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
@@ -178,14 +195,49 @@
 		{ value: 'kubernetes', label: 'Kubernetes Secret' }
 	];
 
+	let storedExternalKindPolicy = $state<Record<string, boolean> | null>(null);
+
+	const kindOptions = $derived(
+		allStoredSecretKindOptions.filter((o) =>
+			kindAllowedByExternalPolicy(o.value, storedExternalKindPolicy)
+		)
+	);
+
 	const tabs = [
 		{ id: 'pipelines', label: 'Pipelines', icon: GitBranch },
 		{ id: 'workflows', label: 'Workflows', icon: Layers },
 		{ id: 'runs', label: 'Runs', icon: Play },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
+		{ id: 'environments', label: 'Environments', icon: Globe },
 		{ id: 'settings', label: 'Settings', icon: Settings }
 	];
+
+	let projectEnvs = $state<Environment[]>([]);
+	let envsLoading = $state(false);
+	let selectedEnvScope = $state<string | null>(null);
+	let showCreateEnv = $state(false);
+	let newEnvName = $state('');
+	let newEnvDisplayName = $state('');
+	let newEnvTier = $state('development');
+	let createEnvLoading = $state(false);
+
+	let createEnvironmentId = $state('');
+	let secretsFilterEnvId = $state('');
+
+	let editEnvTarget = $state<Environment | null>(null);
+	let showEditEnv = $state(false);
+	let editEnvName = $state('');
+	let editEnvDisplayName = $state('');
+	let editEnvDescription = $state('');
+	let editEnvTier = $state('development');
+	let editEnvLoading = $state(false);
+	let editEnvError = $state<string | null>(null);
+
+	let deleteEnvTarget = $state<Environment | null>(null);
+	let showDeleteEnv = $state(false);
+	let deleteEnvLoading = $state(false);
+	let deleteEnvError = $state<string | null>(null);
 
 	const settingsGroupIds = ['settings', 'triggers', 'access', 'apps', 'advanced'];
 	const isSettingsGroup = $derived(settingsGroupIds.includes(activeTab));
@@ -197,6 +249,47 @@
 		{ id: 'apps', label: 'Apps' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
+
+	const projectTabIds = new Set([
+		'pipelines',
+		'workflows',
+		'runs',
+		'variables',
+		'secrets',
+		'environments',
+		'settings',
+		'triggers',
+		'access',
+		'apps',
+		'advanced'
+	]);
+
+	function setProjectTab(tab: string) {
+		activeTab = tab;
+		const u = new URL($page.url.href);
+		u.searchParams.set('tab', tab);
+		void goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true, keepFocus: true });
+	}
+
+	$effect(() => {
+		const t = $page.url.searchParams.get('tab');
+		if (t && projectTabIds.has(t) && t !== activeTab) {
+			activeTab = t;
+		}
+	});
+
+	const secretEnvironmentOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...projectEnvs.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
+
+	const secretsEnvFilterOptions = $derived([
+		{ value: '', label: 'All environments' },
+		...projectEnvs.map((e) => ({ value: e.id, label: e.display_name }))
+	]);
 
 	$effect(() => {
 		loadProject();
@@ -214,6 +307,18 @@
 	$effect(() => {
 		if (activeTab === 'access' && project && !loading) {
 			void loadProjectMembers();
+		}
+	});
+
+	$effect(() => {
+		if (activeTab === 'environments' && project && !loading) {
+			void loadProjectEnvironments();
+		}
+	});
+
+	$effect(() => {
+		if ((activeTab === 'variables' || activeTab === 'secrets') && project && !loading && projectEnvs.length === 0) {
+			void loadProjectEnvironments();
 		}
 	});
 
@@ -581,6 +686,88 @@
 		}
 	}
 
+	async function loadProjectEnvironments() {
+		if (!project) return;
+		envsLoading = true;
+		try {
+			projectEnvs = await apiMethods.environments.list(project.id);
+		} catch {
+			projectEnvs = [];
+		} finally {
+			envsLoading = false;
+		}
+	}
+
+	async function createEnvironment() {
+		if (!project || !newEnvName.trim()) return;
+		createEnvLoading = true;
+		try {
+			await apiMethods.environments.create(project.id, {
+				name: newEnvName.trim(),
+				display_name: newEnvDisplayName.trim() || newEnvName.trim(),
+				tier: newEnvTier as EnvironmentTier
+			});
+			newEnvName = '';
+			newEnvDisplayName = '';
+			newEnvTier = 'development';
+			showCreateEnv = false;
+			await loadProjectEnvironments();
+		} catch (e) {
+			console.error('Failed to create environment:', e);
+		} finally {
+			createEnvLoading = false;
+		}
+	}
+
+	function openEditEnvironment(env: Environment) {
+		editEnvTarget = env;
+		editEnvName = env.name;
+		editEnvDisplayName = env.display_name;
+		editEnvDescription = env.description ?? '';
+		editEnvTier = env.tier;
+		editEnvError = null;
+		showEditEnv = true;
+	}
+
+	async function submitEditEnvironment() {
+		if (!project || !editEnvTarget) return;
+		editEnvLoading = true;
+		editEnvError = null;
+		try {
+			await apiMethods.environments.update(project.id, editEnvTarget.id, {
+				name: editEnvName.trim(),
+				display_name: editEnvDisplayName.trim(),
+				description: editEnvDescription.trim() || undefined,
+				tier: editEnvTier as EnvironmentTier
+			});
+			showEditEnv = false;
+			editEnvTarget = null;
+			await loadProjectEnvironments();
+			await loadSecrets();
+		} catch (e) {
+			editEnvError = e instanceof Error ? e.message : 'Failed to update environment';
+		} finally {
+			editEnvLoading = false;
+		}
+	}
+
+	async function submitDeleteEnvironment() {
+		if (!project || !deleteEnvTarget) return;
+		deleteEnvLoading = true;
+		deleteEnvError = null;
+		try {
+			await apiMethods.environments.delete(project.id, deleteEnvTarget.id);
+			showDeleteEnv = false;
+			deleteEnvTarget = null;
+			await loadProjectEnvironments();
+			await loadSecrets();
+		} catch (e) {
+			deleteEnvError = e instanceof Error ? e.message : 'Failed to delete environment';
+		} finally {
+			deleteEnvLoading = false;
+		}
+	}
+
 	async function loadProjectMembers() {
 		if (!project) return;
 		membersLoading = true;
@@ -594,21 +781,17 @@
 		}
 	}
 
-	async function addProjectMember(input: import('$api/types').AddMemberInput) {
+	async function saveProjectAccess(batch: import('$api/types').AccessControlSaveBatch) {
 		if (!project) return;
-		await apiMethods.projectMembers.add(project.id, input);
-		await loadProjectMembers();
-	}
-
-	async function removeProjectMember(principalId: string) {
-		if (!project) return;
-		await apiMethods.projectMembers.remove(project.id, principalId);
-		await loadProjectMembers();
-	}
-
-	async function updateProjectMemberRole(principalId: string, role: import('$api/types').MemberRole) {
-		if (!project) return;
-		await apiMethods.projectMembers.updateRole(project.id, principalId, { role });
+		for (const principalId of batch.removePrincipalIds) {
+			await apiMethods.projectMembers.remove(project.id, principalId);
+		}
+		for (const u of batch.roleUpdates) {
+			await apiMethods.projectMembers.updateRole(project.id, u.principalId, { role: u.role });
+		}
+		for (const input of batch.adds) {
+			await apiMethods.projectMembers.add(project.id, input);
+		}
 		await loadProjectMembers();
 	}
 
@@ -627,12 +810,25 @@
 		}
 	}
 
+	async function ensureStoredSecretPolicy() {
+		if (storedExternalKindPolicy !== null) return;
+		try {
+			const p = await apiMethods.storedSecretPolicy.get();
+			storedExternalKindPolicy = p.stored_secret_external_kinds;
+		} catch {
+			storedExternalKindPolicy = {};
+		}
+	}
+
 	async function loadSecrets() {
 		if (!project) return;
 		secretsLoading = true;
 		secretsError = null;
 		try {
-			secrets = await apiMethods.storedSecrets.list(project.id);
+			await ensureStoredSecretPolicy();
+			secrets = await apiMethods.storedSecrets.list(project.id, {
+				...(secretsFilterEnvId ? { environment_id: secretsFilterEnvId } : {})
+			});
 		} catch (e) {
 			secretsError = e instanceof Error ? e.message : 'Failed to load secrets';
 			secrets = [];
@@ -643,6 +839,7 @@
 
 	$effect(() => {
 		const pid = project?.id;
+		const _env = secretsFilterEnvId;
 		if (activeTab !== 'secrets' || !pid || loading) return;
 		void loadSecrets();
 	});
@@ -678,6 +875,7 @@
 		createValue = '';
 		createDescription = '';
 		createPipelineId = '';
+		createEnvironmentId = '';
 		createOrgWideSecret = false;
 		orgWidePropagateToProjects = true;
 		ghAppId = '';
@@ -740,6 +938,8 @@
 				value,
 				description: createDescription.trim() || undefined,
 				pipeline_id: createOrgWideSecret ? undefined : createPipelineId || undefined,
+				environment_id:
+					createOrgWideSecret || !createEnvironmentId ? undefined : createEnvironmentId,
 				...(createOrgWideSecret
 					? { scope: 'organization', propagate_to_projects: orgWidePropagateToProjects }
 					: {})
@@ -759,6 +959,63 @@
 			return !!(ghAppId.trim() && ghInstallationId.trim() && ghPrivateKey.trim());
 		}
 		return !!createValue.trim();
+	}
+
+	function openEditSecretScope(s: StoredSecret) {
+		editScopeTarget = s;
+		editScopePipelineId = s.pipeline_id ?? '';
+		editScopeEnvironmentId = s.environment_id ?? '';
+		editScopeDescription = s.description ?? '';
+		editScopePropagate = s.propagate_to_projects !== false;
+		showEditSecretScopeDialog = true;
+	}
+
+	async function submitEditSecretScope() {
+		if (!editScopeTarget) return;
+		secretActionLoading = true;
+		secretsError = null;
+		try {
+			const t = editScopeTarget;
+			const body: {
+				pipeline_id?: string | null;
+				environment_id?: string | null;
+				description?: string | null;
+				propagate_to_projects?: boolean;
+			} = {};
+
+			if (!t.project_id || t.project_id === '') {
+				const descNow = (t.description ?? '').trim();
+				const descNew = editScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+				const propNow = t.propagate_to_projects !== false;
+				if (editScopePropagate !== propNow) body.propagate_to_projects = editScopePropagate;
+			} else {
+				const newPip = editScopePipelineId.trim() || null;
+				const oldPip = t.pipeline_id ?? null;
+				if (newPip !== oldPip) body.pipeline_id = newPip;
+				const newEnv = editScopeEnvironmentId.trim() || null;
+				const oldEnv = t.environment_id ?? null;
+				if (newEnv !== oldEnv) body.environment_id = newEnv;
+				const descNow = (t.description ?? '').trim();
+				const descNew = editScopeDescription.trim();
+				if (descNew !== descNow) body.description = descNew || null;
+			}
+
+			if (Object.keys(body).length === 0) {
+				showEditSecretScopeDialog = false;
+				editScopeTarget = null;
+				return;
+			}
+
+			await apiMethods.storedSecrets.patch(t.id, body);
+			showEditSecretScopeDialog = false;
+			editScopeTarget = null;
+			await loadSecrets();
+		} catch (e) {
+			secretsError = e instanceof Error ? e.message : 'Failed to update secret';
+		} finally {
+			secretActionLoading = false;
+		}
 	}
 
 	async function submitRotateSecret() {
@@ -812,6 +1069,7 @@
 			secretVersionRows = await apiMethods.storedSecrets.listVersions(proj.id, {
 				path: ctx.path,
 				...(ctx.pipeline_id ? { pipeline_id: ctx.pipeline_id } : {}),
+				...(ctx.environment_id ? { environment_id: ctx.environment_id } : {}),
 				...(!ctx.project_id ? { organization_wide: true } : {})
 			});
 		} catch (e) {
@@ -939,8 +1197,13 @@
 
 	function storedSecretScopeLabel(s: StoredSecret): string {
 		if (s.project_id == null || s.project_id === '') return 'Organization';
-		if (s.pipeline_id) return pipelineLabel(s.pipeline_id);
-		return 'Project';
+		const env =
+			s.environment_id && projectEnvs.length
+				? projectEnvs.find((e) => e.id === s.environment_id)
+				: null;
+		const envPart = env ? ` · ${env.display_name}` : s.environment_id ? ' · Environment' : '';
+		if (s.pipeline_id) return pipelineLabel(s.pipeline_id) + envPart;
+		return 'Project' + envPart;
 	}
 
 	const settingsDirty = $derived(
@@ -953,6 +1216,12 @@
 
 	const settingsSaveDisabled = $derived(
 		!settingsDirty || !settingsName.trim() || !settingsSlug.trim() || settingsSaving
+	);
+
+	const rotateSecretDialogTitle = $derived(
+		rotateTarget != null && isRemoteRefSecretKind(rotateTarget.kind)
+			? 'Update provider reference'
+			: 'Rotate secret'
 	);
 </script>
 
@@ -997,7 +1266,7 @@
 	{/if}
 
 	{#if !loading && project}
-		<Tabs items={tabs} value={isSettingsGroup ? 'settings' : activeTab} onchange={(v) => (activeTab = v)} />
+		<Tabs items={tabs} value={isSettingsGroup ? 'settings' : activeTab} onchange={(v) => setProjectTab(v)} />
 
 		{#if isSettingsGroup}
 			<div class="flex gap-1.5 mt-1 mb-4">
@@ -1006,7 +1275,7 @@
 						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {activeTab === sub.id
 							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
 							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
-						onclick={() => (activeTab = sub.id)}
+						onclick={() => setProjectTab(sub.id)}
 					>
 						{sub.label}
 					</button>
@@ -1518,16 +1787,30 @@
 			{/if}
 		{:else if activeTab === 'secrets'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
-				<p class="text-sm text-[var(--text-secondary)]">
-					Values are encrypted and never shown again after save. Use <strong>organization-wide</strong> secrets for
-					values shared across projects (org admins only). Otherwise scope to this project or a single pipeline.
-					Reference in pipeline YAML with{' '}
-					<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
-						>stored: &#123; name: MY_TOKEN &#125;</code
-					>
-					(use the same logical name you entered here).
-				</p>
-				<div class="flex gap-2">
+				<div class="max-w-3xl space-y-1 text-sm text-[var(--text-secondary)]">
+					<p>
+						Opaque secrets are encrypted and never shown again after save. <strong>Organization-wide</strong> secrets
+						are shared across projects (org admins only). Provider references (AWS, Vault, etc.) store only the
+						<strong>resource pointer</strong> in metadata so you can see and edit the ARN or path later.
+					</p>
+					<p>
+						Reference in pipeline YAML with{' '}
+						<code class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs"
+							>stored: &#123; name: MY_TOKEN &#125;</code
+						>
+						(use the same logical name you entered here).
+					</p>
+				</div>
+				<div class="flex flex-wrap items-center gap-2">
+					{#if projectEnvs.length > 0}
+						<div class="min-w-[11rem]">
+							<Select
+								id="secrets-env-filter"
+								options={secretsEnvFilterOptions}
+								bind:value={secretsFilterEnvId}
+							/>
+						</div>
+					{/if}
 					<Button variant="outline" size="sm" onclick={loadSecrets} loading={secretsLoading}>
 						<RefreshCw class="h-4 w-4" />
 						Refresh
@@ -1572,6 +1855,7 @@
 							<tr>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Kind</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Reference</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Version</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Updated</th>
@@ -1583,6 +1867,13 @@
 								<tr class="bg-[var(--bg-secondary)]">
 									<td class="px-4 py-3 font-mono text-sm">{s.path}</td>
 									<td class="px-4 py-3">{s.kind}</td>
+									<td class="max-w-[14rem] truncate px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
+										{#if isRemoteRefSecretKind(s.kind)}
+											{getSecretRefFromMetadata(s.metadata) ?? '—'}
+										{:else}
+											—
+										{/if}
+									</td>
 									<td class="px-4 py-3">
 										{storedSecretScopeLabel(s)}
 									</td>
@@ -1611,13 +1902,27 @@
 											<Button
 												variant="ghost"
 												size="sm"
+												title="Change pipeline, environment, or description"
+												onclick={() => openEditSecretScope(s)}
+											>
+												<Edit class="h-4 w-4" />
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)}
+												title={!kindAllowedByExternalPolicy(s.kind, storedExternalKindPolicy)
+													? 'This kind is disabled by platform administrators'
+													: undefined}
 												onclick={() => {
 													rotateTarget = s;
-													rotateValue = '';
+													rotateValue = isRemoteRefSecretKind(s.kind)
+														? (getSecretRefFromMetadata(s.metadata) ?? '')
+														: '';
 													showRotateSecretDialog = true;
 												}}
 											>
-												Rotate
+												{isRemoteRefSecretKind(s.kind) ? 'Edit ref' : 'Rotate'}
 											</Button>
 											<Button
 												variant="ghost"
@@ -1793,6 +2098,80 @@
 					{/if}
 				</Card>
 			</div>
+		{:else if activeTab === 'environments'}
+			<div class="flex items-center justify-between mb-4">
+				<div>
+					<h3 class="text-lg font-medium text-[var(--text-primary)]">Environments</h3>
+					<p class="text-sm text-[var(--text-secondary)]">
+						Named deployment targets with scoped secrets and variables.
+					</p>
+				</div>
+				<Button variant="primary" size="sm" onclick={() => (showCreateEnv = true)}>
+					<Plus class="h-4 w-4" />
+					New Environment
+				</Button>
+			</div>
+			{#if envsLoading}
+				<p class="text-sm text-[var(--text-secondary)]">Loading...</p>
+			{:else if projectEnvs.length === 0}
+				<Card>
+					<EmptyState
+						title="No environments"
+						description="Create environments like staging or production to scope secrets and variables per deployment target."
+					>
+						<Button variant="primary" onclick={() => (showCreateEnv = true)}>
+							<Plus class="h-4 w-4" />
+							Create environment
+						</Button>
+					</EmptyState>
+				</Card>
+			{:else}
+				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					{#each projectEnvs as env}
+						<Card>
+							<div class="space-y-2">
+								<div class="flex items-center justify-between">
+									<h4 class="font-medium text-[var(--text-primary)]">{env.display_name}</h4>
+									<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {
+										env.tier === 'production' ? 'bg-red-500/10 text-red-400' :
+										env.tier === 'staging' ? 'bg-amber-500/10 text-amber-400' :
+										'bg-green-500/10 text-green-400'
+									}">{env.tier}</span>
+								</div>
+								<p class="font-mono text-xs text-[var(--text-tertiary)]">{env.name}</p>
+								{#if env.description}
+									<p class="text-xs text-[var(--text-secondary)]">{env.description}</p>
+								{/if}
+								<div class="flex gap-3 text-[10px] text-[var(--text-tertiary)]">
+									{#if env.require_approval}
+										<span>Approval required ({env.required_approvers})</span>
+									{/if}
+									{#if env.allowed_branches?.length}
+										<span>Branches: {env.allowed_branches.join(', ')}</span>
+									{/if}
+								</div>
+								<div class="flex justify-end gap-2 border-t border-[var(--border-secondary)] pt-3">
+									<Button variant="outline" size="sm" onclick={() => openEditEnvironment(env)}>
+										Edit
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="text-red-600 hover:text-red-700 dark:text-red-400"
+										onclick={() => {
+											deleteEnvTarget = env;
+											deleteEnvError = null;
+											showDeleteEnv = true;
+										}}
+									>
+										Delete
+									</Button>
+								</div>
+							</div>
+						</Card>
+					{/each}
+				</div>
+			{/if}
 		{:else if activeTab === 'access'}
 			{#await import('$components/ui/access-control-panel.svelte') then mod}
 				<svelte:component
@@ -1801,9 +2180,7 @@
 					loading={membersLoading}
 					error={membersError}
 					showInherited={false}
-					onAdd={addProjectMember}
-					onRemove={removeProjectMember}
-					onUpdateRole={updateProjectMemberRole}
+					onSaveAccess={saveProjectAccess}
 				/>
 			{/await}
 		{:else if activeTab === 'settings'}
@@ -2009,15 +2386,16 @@
 		{:else}
 			<div>
 				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-val"
-					>Value (one-time)</label
+					>{storedSecretValueFieldLabel(createKind)}</label
 				>
 				<textarea
 					id="sec-val"
 					bind:value={createValue}
 					rows="4"
 					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
-					placeholder="Secret value or PEM / JSON payload"
+					placeholder={storedSecretValuePlaceholder(createKind)}
 				></textarea>
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">{storedSecretValueHelpLine(createKind)}</p>
 			</div>
 		{/if}
 		<div>
@@ -2073,6 +2451,17 @@
 				<p class="mt-1 text-xs text-[var(--text-secondary)]">Organization secrets are not limited to one pipeline.</p>
 			{/if}
 		</div>
+		{#if !createOrgWideSecret}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-env"
+					>Environment (optional)</label
+				>
+				<Select id="sec-env" options={secretEnvironmentOptions} bind:value={createEnvironmentId} />
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+				When set, this secret applies only to that environment (plus project-wide names that omit environment).
+				</p>
+			</div>
+		{/if}
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showCreateSecret = false)}>Cancel</Button>
 			<Button
@@ -2089,7 +2478,7 @@
 
 <Dialog
 	bind:open={showRotateSecretDialog}
-	title="Rotate secret"
+	title={rotateSecretDialogTitle}
 	onclose={() => {
 		rotateTarget = null;
 		rotateValue = '';
@@ -2097,8 +2486,13 @@
 >
 	{#if rotateTarget}
 		<p class="text-sm text-[var(--text-secondary)]">
-			New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
-			version).
+			{#if isRemoteRefSecretKind(rotateTarget.kind)}
+				Update the provider reference for{' '}
+				<span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new version).
+			{:else}
+				New value for <span class="font-mono text-[var(--text-primary)]">{rotateTarget.path}</span> (creates a new
+				version).
+			{/if}
 		</p>
 		{#if rotateTarget.kind === 'github_app'}
 			<p class="mt-2 text-xs text-[var(--text-secondary)]">
@@ -2110,11 +2504,23 @@
 			</p>
 		{/if}
 		<div class="mt-4">
+			{#if rotateTarget.kind !== 'github_app'}
+				<label class="mb-1 block text-xs font-medium text-[var(--text-secondary)]" for="rotate-sec-val"
+					>{storedSecretValueFieldLabel(rotateTarget.kind)}</label
+				>
+			{/if}
 			<textarea
+				id="rotate-sec-val"
 				bind:value={rotateValue}
 				rows={rotateTarget.kind === 'github_app' ? 14 : 4}
+				placeholder={storedSecretValuePlaceholder(rotateTarget.kind)}
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
 			></textarea>
+			{#if rotateTarget.kind !== 'github_app'}
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+					{storedSecretValueHelpLine(rotateTarget.kind)}
+				</p>
+			{/if}
 		</div>
 		<div class="mt-6 flex justify-end gap-2">
 			<Button
@@ -2133,7 +2539,81 @@
 				loading={secretActionLoading}
 				disabled={!rotateValue?.trim()}
 			>
-				Rotate
+				{rotateTarget && isRemoteRefSecretKind(rotateTarget.kind) ? 'Save reference' : 'Rotate'}
+			</Button>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showEditSecretScopeDialog}
+	title="Edit secret scope"
+	onclose={() => {
+		editScopeTarget = null;
+	}}
+>
+	{#if editScopeTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Updates apply to the whole secret chain (all versions) for
+			<span class="font-mono text-[var(--text-primary)]">{editScopeTarget.path}</span>.
+		</p>
+		<div class="mt-4 space-y-4">
+			{#if !editScopeTarget.project_id || editScopeTarget.project_id === ''}
+				<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<input
+						type="checkbox"
+						class="mt-1 h-4 w-4 rounded border-[var(--border-primary)]"
+						bind:checked={editScopePropagate}
+					/>
+					<span>
+						<span class="text-sm font-medium text-[var(--text-primary)]"
+							>Expose to all projects and pipelines</span>
+						<span class="mt-0.5 block text-xs text-[var(--text-secondary)]">
+							When off, the secret is for platform features only, not project secret lists or
+							<code class="font-mono">stored:</code> resolution.
+						</span>
+					</span>
+				</label>
+			{:else}
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-sec-pipe"
+						>Pipeline scope</label
+					>
+					<Select
+						id="edit-sec-pipe"
+						options={pipelineScopeOptions}
+						bind:value={editScopePipelineId}
+					/>
+				</div>
+				<div>
+					<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-sec-env"
+						>Environment</label
+					>
+					<Select id="edit-sec-env" options={secretEnvironmentOptions} bind:value={editScopeEnvironmentId} />
+					<p class="mt-1 text-xs text-[var(--text-tertiary)]">
+						Choose “All environments” to clear environment scoping.
+					</p>
+				</div>
+			{/if}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-sec-desc"
+					>Description</label
+				>
+				<Input id="edit-sec-desc" bind:value={editScopeDescription} placeholder="Optional" />
+			</div>
+		</div>
+		<div class="mt-6 flex justify-end gap-2">
+			<Button
+				variant="outline"
+				onclick={() => {
+					showEditSecretScopeDialog = false;
+					editScopeTarget = null;
+				}}
+			>
+				Cancel
+			</Button>
+			<Button variant="primary" onclick={submitEditSecretScope} loading={secretActionLoading}>
+				Save
 			</Button>
 		</div>
 	{/if}
@@ -2539,8 +3019,139 @@
 				onclick={submitClearPwInbound}
 				loading={clearPwLoading}
 			>
-				Remove verification
+			Remove verification
+		</Button>
+	</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showEditEnv}
+	title="Edit environment"
+	onclose={() => {
+		editEnvTarget = null;
+		editEnvError = null;
+	}}
+>
+	{#if editEnvTarget}
+		<div class="space-y-4">
+			{#if editEnvError}
+				<Alert variant="error" dismissible ondismiss={() => (editEnvError = null)}>{editEnvError}</Alert>
+			{/if}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-env-name"
+					>Name (slug)</label
+				>
+				<Input id="edit-env-name" bind:value={editEnvName} class="font-mono text-sm" />
+				<p class="mt-1 text-xs text-[var(--text-tertiary)]">Lowercase letters, digits, and hyphens (1–63 chars).</p>
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-env-display"
+					>Display name</label
+				>
+				<Input id="edit-env-display" bind:value={editEnvDisplayName} />
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-env-desc"
+					>Description</label
+				>
+				<textarea
+					id="edit-env-desc"
+					bind:value={editEnvDescription}
+					rows="2"
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+				></textarea>
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="edit-env-tier">Tier</label>
+				<select
+					id="edit-env-tier"
+					bind:value={editEnvTier}
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+				>
+					<option value="development">Development</option>
+					<option value="staging">Staging</option>
+					<option value="production">Production</option>
+					<option value="custom">Custom</option>
+				</select>
+			</div>
+			<div class="flex justify-end gap-2">
+				<Button variant="ghost" onclick={() => (showEditEnv = false)}>Cancel</Button>
+				<Button
+					variant="primary"
+					onclick={submitEditEnvironment}
+					loading={editEnvLoading}
+					disabled={!editEnvName.trim() || !editEnvDisplayName.trim()}
+				>
+					Save
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Dialog>
+
+<Dialog
+	bind:open={showDeleteEnv}
+	title="Delete environment?"
+	onclose={() => {
+		deleteEnvTarget = null;
+		deleteEnvError = null;
+	}}
+>
+	{#if deleteEnvTarget}
+		<p class="text-sm text-[var(--text-secondary)]">
+			Delete <span class="font-medium text-[var(--text-primary)]">{deleteEnvTarget.display_name}</span>
+			(<span class="font-mono text-xs">{deleteEnvTarget.name}</span>)? Scoped secrets and variables that reference
+			this environment may need to be updated.
+		</p>
+		{#if deleteEnvError}
+			<div class="mt-3">
+				<Alert variant="error" dismissible ondismiss={() => (deleteEnvError = null)}>{deleteEnvError}</Alert>
+			</div>
+		{/if}
+		<div class="mt-6 flex justify-end gap-2">
+			<Button variant="outline" onclick={() => (showDeleteEnv = false)}>Cancel</Button>
+			<Button
+				variant="primary"
+				class="bg-red-600 hover:bg-red-700"
+				onclick={submitDeleteEnvironment}
+				loading={deleteEnvLoading}
+			>
+				Delete
 			</Button>
 		</div>
 	{/if}
+</Dialog>
+
+<Dialog bind:open={showCreateEnv} title="Create environment">
+	<div class="space-y-4">
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="env-name">Name (slug)</label>
+			<Input id="env-name" bind:value={newEnvName} placeholder="e.g. staging, production" />
+			<p class="mt-1 text-xs text-[var(--text-tertiary)]">Lowercase, hyphens only. Used in YAML and API.</p>
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="env-display">Display name</label>
+			<Input id="env-display" bind:value={newEnvDisplayName} placeholder="e.g. Staging, Production" />
+		</div>
+		<div>
+			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="env-tier">Tier</label>
+			<select
+				id="env-tier"
+				bind:value={newEnvTier}
+				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+			>
+				<option value="development">Development</option>
+				<option value="staging">Staging</option>
+				<option value="production">Production</option>
+				<option value="custom">Custom</option>
+			</select>
+		</div>
+		<div class="flex justify-end gap-2">
+			<Button variant="ghost" onclick={() => (showCreateEnv = false)}>Cancel</Button>
+			<Button variant="primary" onclick={createEnvironment} loading={createEnvLoading} disabled={!newEnvName.trim()}>
+				Create
+			</Button>
+		</div>
+	</div>
 </Dialog>

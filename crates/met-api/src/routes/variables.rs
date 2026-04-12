@@ -41,6 +41,7 @@ pub struct VariableRow {
     pub project_id: Uuid,
     pub org_id: Uuid,
     pub pipeline_id: Option<Uuid>,
+    pub environment_id: Option<Uuid>,
     pub name: String,
     pub value: String,
     pub scope: String,
@@ -58,6 +59,8 @@ pub struct VariableResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
     pub pipeline_id: Option<PipelineId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<Uuid>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
@@ -74,6 +77,7 @@ impl From<VariableRow> for VariableResponse {
             id: VariableId::from_uuid(r.id),
             project_id: ProjectId::from_uuid(r.project_id),
             pipeline_id: r.pipeline_id.map(PipelineId::from_uuid),
+            environment_id: r.environment_id,
             name: r.name,
             value,
             scope: r.scope,
@@ -143,6 +147,8 @@ pub struct CreateVariableRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>)]
     pub pipeline_id: Option<PipelineId>,
+    #[serde(default)]
+    pub environment_id: Option<Uuid>,
 }
 
 fn default_scope() -> String {

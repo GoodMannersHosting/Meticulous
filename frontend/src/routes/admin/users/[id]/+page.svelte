@@ -1,14 +1,35 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { 
-		Mail, Calendar, Clock, Shield, ShieldCheck, Lock, Unlock, 
-		Trash2, Key, ArrowLeft, Users, Plus, X, Check, AlertTriangle
+	import {
+		Mail,
+		Calendar,
+		Clock,
+		Shield,
+		ShieldCheck,
+		Lock,
+		Unlock,
+		Trash2,
+		Key,
+		ArrowLeft,
+		Users,
+		Plus,
+		X,
+		Check,
+		AlertTriangle,
+		FolderKanban
 	} from 'lucide-svelte';
 	import { apiMethods } from '$lib/api';
-	import type { AdminUser, UserRoleAssignment, RoleInfo, GroupMember } from '$lib/api/types';
+	import type {
+		AdminUser,
+		UserRoleAssignment,
+		RoleInfo,
+		AdminUserResourceProjectRow,
+		AdminUserResourcePipelineRow
+	} from '$lib/api/types';
 	import { getGravatarUrl } from '$lib/utils/gravatar';
 	import { auth } from '$stores';
+	import Pagination from '$lib/components/data/Pagination.svelte';
 
 	let { data } = $props();
 
@@ -16,6 +37,16 @@
 	let roles = $state<UserRoleAssignment[]>([]);
 	let availableRoles = $state<RoleInfo[]>([]);
 	let groupMemberships = $state<{ group_id: string; group_name: string; role: string }[]>([]);
+	let resourceProjects = $state<AdminUserResourceProjectRow[]>([]);
+	let resourcePipelines = $state<AdminUserResourcePipelineRow[]>([]);
+	let resourceAccessLoading = $state(false);
+	let resourceAccessError = $state<string | null>(null);
+	let grpMemPage = $state(1);
+	let grpMemPerPage = $state(20);
+	let projAccPage = $state(1);
+	let projAccPerPage = $state(20);
+	let pipeAccPage = $state(1);
+	let pipeAccPerPage = $state(20);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -86,6 +117,7 @@
 		await loadRoles();
 		await loadAvailableRoles();
 		await loadGroupMemberships();
+		await loadResourceAccess();
 	});
 
 	async function loadUser() {
@@ -118,13 +150,13 @@
 
 	async function loadGroupMemberships() {
 		try {
-			const groupsResponse = await apiMethods.admin.groups.list({ limit: 100 });
+			const groupsResponse = await apiMethods.admin.groups.list({ limit: 500 });
 			const memberships: { group_id: string; group_name: string; role: string }[] = [];
-			
+
 			for (const group of groupsResponse.data) {
 				try {
 					const members = await apiMethods.admin.groups.listMembers(group.id);
-					const membership = members.find(m => m.user_id === data.userId);
+					const membership = members.find((m) => m.user_id === data.userId);
 					if (membership) {
 						memberships.push({
 							group_id: group.id,
@@ -136,12 +168,40 @@
 					// Skip groups we can't access
 				}
 			}
-			
+
 			groupMemberships = memberships;
 		} catch (e) {
 			console.error('Failed to load group memberships:', e);
 		}
 	}
+
+	async function loadResourceAccess() {
+		resourceAccessLoading = true;
+		resourceAccessError = null;
+		try {
+			const r = await apiMethods.admin.users.resourceAccess(data.userId);
+			resourceProjects = r.projects;
+			resourcePipelines = r.pipelines;
+		} catch (e) {
+			resourceAccessError = e instanceof Error ? e.message : 'Failed to load resource access';
+			resourceProjects = [];
+			resourcePipelines = [];
+		} finally {
+			resourceAccessLoading = false;
+		}
+	}
+
+	const pagedGroupMemberships = $derived(
+		groupMemberships.slice((grpMemPage - 1) * grpMemPerPage, grpMemPage * grpMemPerPage)
+	);
+
+	const pagedResourceProjects = $derived(
+		resourceProjects.slice((projAccPage - 1) * projAccPerPage, projAccPage * projAccPerPage)
+	);
+
+	const pagedResourcePipelines = $derived(
+		resourcePipelines.slice((pipeAccPage - 1) * pipeAccPerPage, pipeAccPage * pipeAccPerPage)
+	);
 
 	function toggleAdmin() {
 		if (!user) return;
@@ -540,9 +600,9 @@
 							<p class="text-sm text-[var(--text-secondary)]">Not a member of any groups.</p>
 						{:else}
 							<div class="space-y-2">
-								{#each groupMemberships as membership (membership.group_id)}
+								{#each pagedGroupMemberships as membership (membership.group_id)}
 									<a
-										href="/admin/groups"
+										href="/admin/groups/{membership.group_id}"
 										class="flex items-center justify-between rounded-lg bg-[var(--bg-primary)] px-4 py-3 hover:bg-[var(--bg-hover)]"
 									>
 										<div class="flex items-center gap-3">
@@ -557,8 +617,146 @@
 									</a>
 								{/each}
 							</div>
+							{#if groupMemberships.length > grpMemPerPage}
+								<div class="mt-4">
+									<Pagination
+										bind:page={grpMemPage}
+										bind:perPage={grpMemPerPage}
+										total={groupMemberships.length}
+									/>
+								</div>
+							{/if}
 						{/if}
 					</div>
+				</div>
+
+				<!-- Project & pipeline ACL (explicit memberships) -->
+				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6">
+					<div class="flex items-center gap-2">
+						<FolderKanban class="h-5 w-5 text-[var(--text-secondary)]" />
+						<h3 class="text-base font-semibold text-[var(--text-primary)]">Project &amp; pipeline access</h3>
+					</div>
+					<p class="mt-1 text-sm text-[var(--text-secondary)]">
+						Resources where this user is listed directly on the ACL or inherits access via a group membership.
+					</p>
+
+					{#if resourceAccessError}
+						<div
+							class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400"
+						>
+							{resourceAccessError}
+						</div>
+					{/if}
+
+					{#if resourceAccessLoading}
+						<div class="mt-6 flex justify-center py-8">
+							<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
+						</div>
+					{:else}
+						<div class="mt-6 space-y-6">
+							<div>
+								<h4 class="text-sm font-medium text-[var(--text-primary)]">Projects</h4>
+								{#if resourceProjects.length === 0}
+									<p class="mt-2 text-sm text-[var(--text-secondary)]">No explicit project memberships.</p>
+								{:else}
+									<div class="mt-2 overflow-x-auto rounded-lg border border-[var(--border-primary)]">
+										<table class="min-w-full divide-y divide-[var(--border-primary)] text-sm">
+											<thead class="bg-[var(--bg-primary)]">
+												<tr>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Project</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Role</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Via</th>
+												</tr>
+											</thead>
+											<tbody class="divide-y divide-[var(--border-primary)]">
+												{#each pagedResourceProjects as row (row.project_id + row.via + (row.group_name ?? ''))}
+													<tr>
+														<td class="px-3 py-2">
+															<a
+																href="/projects/{row.project_id}"
+																class="font-medium text-primary-600 hover:underline dark:text-primary-400"
+															>
+																{row.project_name}
+															</a>
+														</td>
+														<td class="px-3 py-2 capitalize text-[var(--text-secondary)]">{row.role}</td>
+														<td class="px-3 py-2 text-[var(--text-secondary)]">
+															{#if row.via === 'group'}
+																Group{row.group_name ? `: ${row.group_name}` : ''}
+															{:else}
+																Direct
+															{/if}
+														</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									</div>
+									{#if resourceProjects.length > projAccPerPage}
+										<Pagination
+											bind:page={projAccPage}
+											bind:perPage={projAccPerPage}
+											total={resourceProjects.length}
+										/>
+									{/if}
+								{/if}
+							</div>
+
+							<div>
+								<h4 class="text-sm font-medium text-[var(--text-primary)]">Pipelines</h4>
+								{#if resourcePipelines.length === 0}
+									<p class="mt-2 text-sm text-[var(--text-secondary)]">No explicit pipeline memberships.</p>
+								{:else}
+									<div class="mt-2 overflow-x-auto rounded-lg border border-[var(--border-primary)]">
+										<table class="min-w-full divide-y divide-[var(--border-primary)] text-sm">
+											<thead class="bg-[var(--bg-primary)]">
+												<tr>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Pipeline</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Project</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Role</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Source</th>
+													<th class="px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]">Via</th>
+												</tr>
+											</thead>
+											<tbody class="divide-y divide-[var(--border-primary)]">
+												{#each pagedResourcePipelines as row (row.pipeline_id + row.via + (row.group_name ?? '') + String(row.inherited))}
+													<tr>
+														<td class="px-3 py-2">
+															<a
+																href="/pipelines/{row.pipeline_id}"
+																class="font-medium text-primary-600 hover:underline dark:text-primary-400"
+															>
+																{row.pipeline_name}
+															</a>
+														</td>
+														<td class="px-3 py-2 text-[var(--text-secondary)]">{row.project_name}</td>
+														<td class="px-3 py-2 capitalize text-[var(--text-secondary)]">{row.role}</td>
+														<td class="px-3 py-2 text-[var(--text-secondary)]">
+															{row.inherited ? 'Inherited from project' : 'Direct'}
+														</td>
+														<td class="px-3 py-2 text-[var(--text-secondary)]">
+															{#if row.via === 'group'}
+																Group{row.group_name ? `: ${row.group_name}` : ''}
+															{:else}
+																Direct
+															{/if}
+														</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									</div>
+									{#if resourcePipelines.length > pipeAccPerPage}
+										<Pagination
+											bind:page={pipeAccPage}
+											bind:perPage={pipeAccPerPage}
+											total={resourcePipelines.length}
+										/>
+									{/if}
+								{/if}
+							</div>
+						</div>
+					{/if}
 				</div>
 			</div>
 		</div>

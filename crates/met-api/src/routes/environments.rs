@@ -6,7 +6,8 @@ use axum::{
     routing::{get, post},
 };
 use met_core::ids::ProjectId;
-use met_store::repos::{EnvironmentRepo, EnvironmentRow, ProjectRepo};
+use met_store::repos::{EnvironmentRepo, EnvironmentRow, ProjectRepo, RunRepo};
+use met_store::StoreError;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -17,6 +18,30 @@ use crate::{
     project_access::effective_project_role_in_user_org,
     state::AppState,
 };
+
+fn validate_environment_slug(name: &str) -> ApiResult<()> {
+    if name.is_empty() || name.len() > 63 {
+        return Err(ApiError::bad_request(
+            "environment name must be 1–63 characters",
+        ));
+    }
+    let Some(first) = name.chars().next() else {
+        return Err(ApiError::bad_request("environment name is required"));
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return Err(ApiError::bad_request(
+            "environment name must start with a lowercase letter or digit",
+        ));
+    }
+    for c in name.chars() {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
+            return Err(ApiError::bad_request(
+                "environment name may only contain lowercase letters, digits, and hyphen",
+            ));
+        }
+    }
+    Ok(())
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -101,7 +126,13 @@ async fn get_environment(
     let row = EnvironmentRepo::new(state.db())
         .get(env_id)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            StoreError::NotFound { .. } => ApiError::not_found("environment not found"),
+            _ => ApiError::internal(e.to_string()),
+        })?;
+    if row.project_id != project_id.as_uuid() {
+        return Err(ApiError::not_found("environment not found"));
+    }
     Ok(Json(EnvironmentResponse::from(row)))
 }
 
@@ -129,12 +160,14 @@ async fn create_environment(
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden("requires project admin"));
     }
+    let name = req.name.trim();
+    validate_environment_slug(name)?;
     let project = ProjectRepo::new(state.db()).get(project_id).await?;
     let row = EnvironmentRepo::new(state.db())
         .create(
             project.org_id.into(),
             project_id,
-            &req.name,
+            name,
             &req.display_name,
             req.description.as_deref(),
             &req.tier,
@@ -146,6 +179,8 @@ async fn create_environment(
 
 #[derive(Debug, Deserialize)]
 struct UpdateEnvironmentRequest {
+    /// URL-safe slug (`^[a-z0-9][a-z0-9-]{0,62}$`); must stay unique per project.
+    name: Option<String>,
     display_name: Option<String>,
     description: Option<String>,
     tier: Option<String>,
@@ -168,9 +203,24 @@ async fn update_environment(
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden("requires project admin"));
     }
+    let existing = EnvironmentRepo::new(state.db())
+        .get(env_id)
+        .await
+        .map_err(|e| match e {
+            StoreError::NotFound { .. } => ApiError::not_found("environment not found"),
+            _ => ApiError::internal(e.to_string()),
+        })?;
+    if existing.project_id != project_id.as_uuid() {
+        return Err(ApiError::not_found("environment not found"));
+    }
+    let name = req.name.as_deref().map(str::trim);
+    if let Some(n) = name {
+        validate_environment_slug(n)?;
+    }
     let row = EnvironmentRepo::new(state.db())
         .update(
             env_id,
+            name,
             req.display_name.as_deref(),
             req.description.as_deref(),
             req.tier.as_deref(),
@@ -182,7 +232,10 @@ async fn update_environment(
             req.variables.as_ref(),
         )
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            StoreError::Validation(msg) => ApiError::bad_request(msg),
+            _ => ApiError::internal(e.to_string()),
+        })?;
     Ok(Json(EnvironmentResponse::from(row)))
 }
 
@@ -195,6 +248,16 @@ async fn delete_environment(
     let role = effective_project_role_in_user_org(state.db(), &user, project_id).await?;
     if !role.can_manage_pipelines() {
         return Err(ApiError::forbidden("requires project admin"));
+    }
+    let existing = EnvironmentRepo::new(state.db())
+        .get(env_id)
+        .await
+        .map_err(|e| match e {
+            StoreError::NotFound { .. } => ApiError::not_found("environment not found"),
+            _ => ApiError::internal(e.to_string()),
+        })?;
+    if existing.project_id != project_id.as_uuid() {
+        return Err(ApiError::not_found("environment not found"));
     }
     EnvironmentRepo::new(state.db())
         .delete(env_id)
@@ -215,9 +278,10 @@ async fn approve_deployment(
     Path((run_id, env_name)): Path<(Uuid, String)>,
     Json(req): Json<ApprovalRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let env_id = resolve_environment_for_run(state.db(), run_id, &env_name).await?;
     let repo = EnvironmentRepo::new(state.db());
     let approval = repo
-        .record_approval(run_id, Uuid::nil(), user.user_id, "approved", req.comment.as_deref())
+        .record_approval(run_id, env_id, user.user_id, "approved", req.comment.as_deref())
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(serde_json::json!({
@@ -234,9 +298,10 @@ async fn reject_deployment(
     Path((run_id, env_name)): Path<(Uuid, String)>,
     Json(req): Json<ApprovalRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let env_id = resolve_environment_for_run(state.db(), run_id, &env_name).await?;
     let repo = EnvironmentRepo::new(state.db());
     let approval = repo
-        .record_approval(run_id, Uuid::nil(), user.user_id, "rejected", req.comment.as_deref())
+        .record_approval(run_id, env_id, user.user_id, "rejected", req.comment.as_deref())
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(serde_json::json!({
@@ -244,4 +309,25 @@ async fn reject_deployment(
         "decision": approval.decision,
         "decided_at": approval.decided_at.to_rfc3339(),
     })))
+}
+
+async fn resolve_environment_for_run(
+    pool: &sqlx::PgPool,
+    run_id: Uuid,
+    env_name: &str,
+) -> ApiResult<Uuid> {
+    let run = RunRepo::new(pool)
+        .get(met_core::ids::RunId::from_uuid(run_id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let pipeline = met_store::repos::PipelineRepo::new(pool)
+        .get(run.pipeline_id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let env = EnvironmentRepo::new(pool)
+        .get_by_name(pipeline.project_id, env_name)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("environment '{env_name}' not found")))?;
+    Ok(env.id)
 }
