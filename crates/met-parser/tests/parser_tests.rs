@@ -46,6 +46,7 @@ fn mock_docker_workflow() -> RawWorkflowDef {
             name: "Build".to_string(),
             id: "build".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "Build Image".to_string(),
                 id: Some("build".to_string()),
@@ -79,6 +80,7 @@ fn mock_test_workflow() -> RawWorkflowDef {
             name: "Test".to_string(),
             id: "test".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "Run Tests".to_string(),
                 id: Some("test".to_string()),

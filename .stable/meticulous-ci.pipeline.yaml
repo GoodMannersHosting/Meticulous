@@ -1,0 +1,298 @@
+# Meticulous self-hosted CI/CD pipeline.
+#
+# Triggered by GitHub webhook on push and pull_request events.
+# Runs entirely on Meticulous agents — Meticulous builds itself.
+#
+# Stage flow:
+#   checkout
+#     ├─ trufflehog-scan, typos          (parallel, no heavy deps)
+#     ├─ setup-rust                       (toolchain for lint+test)
+#     │   ├─ cargo-lint                   (fmt/clippy/check)
+#     │   │   └─ cargo-test              (unit+integration with services)
+#     │   └─ cargo-audit                 (SCA/CVE)
+#     └─ semgrep                          (SAST, container-based)
+#
+#   After all static checks pass:
+#     ├─ ci-seed  (start met-api in CI mode + seed data)
+#     │   ├─ api-smoke-test
+#     │   ├─ playwright-test
+#     │   └─ zap-scan
+#
+#   After functional tests pass — build + scan all images (serial to share workspace):
+#     push-agent → scan-agent → push-api → scan-api →
+#     push-controller → scan-controller → push-frontend → scan-frontend →
+#     push-sqlx-migrate → scan-sqlx-migrate
+#
+#   Finally (main branch only):
+#     kubectl-deploy
+#
+# All stages share a workspace on one agent group (ci).
+# Secrets must be stored in Meticulous before running this pipeline.
+name: meticulous CI
+agent-affinity:
+  default-group: ci
+  share-workspace: true
+
+triggers:
+  webhook:
+    events: [push, pull_request]
+    branches: ["*"]
+
+secrets:
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+  REGISTRY_PASSWORD:
+    stored:
+      name: harbor-mar-operator-password
+  REGISTRY_USERNAME:
+    stored:
+      name: harbor-mar-operator-username
+  KUBECONFIG_B64:
+    stored:
+      name: kubeconfig-meticulous
+  MET_CI_BOOTSTRAP_PASSWORD:
+    stored:
+      name: ci-bootstrap-password
+
+vars:
+  METICULOUS_REPO: GoodMannersHosting/Meticulous
+  IMAGE_TAG: latest
+  REGISTRY_PREFIX: harbor.cloud.danmanners.com/meticulous
+  REGISTRY_HOST: harbor.cloud.danmanners.com
+  RUST_TOOLCHAIN: stable
+  K8S_NAMESPACE: meticulous
+  K8S_DEPLOYMENTS: "met-api met-controller met-frontend"
+  HEALTH_URL: https://meticulous.cloud.danmanners.com/health
+
+workflows:
+  # ── Checkout ──────────────────────────────────────────────────────────────
+  - name: Checkout Meticulous
+    id: checkout
+    workflow: global/git-checkout
+    version: "1.0.1"
+    inputs:
+      repo: "${METICULOUS_REPO}"
+      clone_path: meticulous
+
+  # ── Fast static checks (all depend only on checkout, run in parallel) ──────
+  - name: Secret scan (TruffleHog)
+    id: trufflehog
+    workflow: global/trufflehog-scan
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      scan_path: meticulous
+
+  - name: Typo check
+    id: typos
+    workflow: global/typos
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      path: meticulous
+
+  - name: SAST (Semgrep)
+    id: semgrep
+    workflow: global/semgrep
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      scan_path: meticulous
+      config: "p/rust"
+      fail_on_findings: "true"
+
+  # ── Rust toolchain setup ───────────────────────────────────────────────────
+  - name: Setup Rust toolchain
+    id: setup-rust
+    workflow: global/setup-rust
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      rust_toolchain: "${RUST_TOOLCHAIN}"
+
+  # ── Lint + audit (depend on toolchain, parallel with each other) ───────────
+  - name: Cargo lint
+    id: cargo-lint
+    workflow: global/cargo-lint
+    version: "1.0.0"
+    depends-on: [setup-rust]
+    inputs:
+      rust_toolchain: "${RUST_TOOLCHAIN}"
+      workspace_path: meticulous
+
+  - name: Cargo audit (SCA)
+    id: cargo-audit
+    workflow: global/cargo-audit
+    version: "1.0.0"
+    depends-on: [setup-rust]
+    inputs:
+      workspace_path: meticulous
+
+  # ── Unit + integration tests ───────────────────────────────────────────────
+  - name: Cargo test
+    id: cargo-test
+    workflow: global/cargo-test
+    version: "1.0.0"
+    depends-on: [cargo-lint]
+    inputs:
+      rust_toolchain: "${RUST_TOOLCHAIN}"
+      workspace_path: meticulous
+      compose_file: docker-compose.yml
+
+  # ── Functional / UI tests (gate on unit tests + all static checks) ─────────
+  - name: CI seed (start API + seed data)
+    id: ci-seed
+    workflow: global/meticulous-ci-seed
+    version: "1.0.0"
+    depends-on: [cargo-test, cargo-audit, trufflehog, semgrep]
+    inputs:
+      workspace_path: meticulous
+      api_listen: "127.0.0.1:8081"
+
+  - name: API smoke tests
+    id: api-smoke
+    workflow: global/api-smoke-test
+    version: "1.0.0"
+    depends-on: [ci-seed]
+
+  - name: Playwright E2E tests
+    id: playwright
+    workflow: global/playwright-test
+    version: "1.0.0"
+    depends-on: [ci-seed]
+    inputs:
+      workspace_path: meticulous
+      frontend_path: frontend
+
+  - name: DAST scan (ZAP)
+    id: zap
+    workflow: global/zap-scan
+    version: "1.0.0"
+    depends-on: [ci-seed]
+    inputs:
+      fail_on_warn: "false"
+
+  # ── Docker build + push + Trivy scan (serial to share workspace cleanly) ───
+  - name: Build and push met-agent
+    id: push-agent
+    workflow: global/docker-buildx-push
+    version: "1.0.1"
+    depends-on: [playwright, api-smoke, zap]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.agent
+      image_ref: "${REGISTRY_PREFIX}/met-agent:${IMAGE_TAG}"
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Trivy scan met-agent
+    id: scan-agent
+    workflow: global/trivy-scan
+    version: "1.1.2"
+    depends-on: [push-agent]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-agent:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Build and push met-api
+    id: push-api
+    workflow: global/docker-buildx-push
+    version: "1.0.1"
+    depends-on: [scan-agent]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.met-api
+      image_ref: "${REGISTRY_PREFIX}/met-api:${IMAGE_TAG}"
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Trivy scan met-api
+    id: scan-api
+    workflow: global/trivy-scan
+    version: "1.1.2"
+    depends-on: [push-api]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-api:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Build and push met-controller
+    id: push-controller
+    workflow: global/docker-buildx-push
+    version: "1.0.1"
+    depends-on: [scan-api]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.met-controller
+      image_ref: "${REGISTRY_PREFIX}/met-controller:${IMAGE_TAG}"
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Trivy scan met-controller
+    id: scan-controller
+    workflow: global/trivy-scan
+    version: "1.1.2"
+    depends-on: [push-controller]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-controller:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Build and push met-frontend
+    id: push-frontend
+    workflow: global/docker-buildx-push
+    version: "1.0.1"
+    depends-on: [scan-controller]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile
+      image_ref: "${REGISTRY_PREFIX}/met-frontend:${IMAGE_TAG}"
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Trivy scan met-frontend
+    id: scan-frontend
+    workflow: global/trivy-scan
+    version: "1.1.2"
+    depends-on: [push-frontend]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-frontend:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Build and push sqlx-migrate
+    id: push-sqlx-migrate
+    workflow: global/docker-buildx-push
+    version: "1.0.1"
+    depends-on: [scan-frontend]
+    inputs:
+      context_path: meticulous
+      dockerfile: Dockerfile.sqlx-migrate
+      image_ref: "${REGISTRY_PREFIX}/met-sqlx-migrate:${IMAGE_TAG}"
+      registry_host: "${REGISTRY_HOST}"
+
+  - name: Trivy scan sqlx-migrate
+    id: scan-sqlx-migrate
+    workflow: global/trivy-scan
+    version: "1.1.2"
+    depends-on: [push-sqlx-migrate]
+    inputs:
+      mode: image
+      target: "${REGISTRY_PREFIX}/met-sqlx-migrate:${IMAGE_TAG}"
+      cyclonedx_path: sbom.cdx.json
+      registry_host: "${REGISTRY_HOST}"
+
+  # ── Deploy (main branch only) ──────────────────────────────────────────────
+  - name: Deploy to Kubernetes
+    id: kubectl-deploy
+    workflow: global/kubectl-deploy
+    version: "1.0.0"
+    depends-on: [scan-sqlx-migrate]
+    condition: "trigger.branch == 'main'"
+    inputs:
+      namespace: "${K8S_NAMESPACE}"
+      deployments: "${K8S_DEPLOYMENTS}"
+      rollout_timeout: "180s"
+      health_url: "${HEALTH_URL}"

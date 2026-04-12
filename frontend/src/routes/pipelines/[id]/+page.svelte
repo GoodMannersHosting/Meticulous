@@ -31,7 +31,8 @@
 		StoredSecret,
 		UpdatePipelineInput,
 		UpdatePipelineTriggerInput,
-		Environment
+		Environment,
+		WorkflowDiagnosticItem
 	} from '$api/types';
 	import {
 		getSecretRefFromMetadata,
@@ -67,7 +68,9 @@
 		Shield,
 		Layers,
 		Archive,
-		Edit
+		Edit,
+		Check,
+		ShieldAlert
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { sortRunList } from '$utils/sortRuns';
@@ -232,6 +235,11 @@
 	let showDeleteTriggerDialog = $state(false);
 	let deleteTriggerTarget = $state<PipelineTrigger | null>(null);
 	let showWebhookHelpModal = $state(false);
+
+	let workflowDiagItems = $state<WorkflowDiagnosticItem[]>([]);
+	let workflowDiagLoading = $state(false);
+	let workflowDiagError = $state<string | null>(null);
+	let showWorkflowDiagModal = $state(false);
 	let webhookHelpCodeTab = $state('bash');
 
 	const webhookHelpActiveSnippet = $derived.by(() => {
@@ -728,9 +736,25 @@
 		return 'Could not match this reference to a catalog workflow version (sync from Git or check the catalog).';
 	}
 
+	async function loadWorkflowDiagnostics(pipelineId: string) {
+		workflowDiagLoading = true;
+		workflowDiagError = null;
+		try {
+			workflowDiagItems = await apiMethods.pipelines.workflowDiagnostics(pipelineId);
+		} catch (e) {
+			workflowDiagError = e instanceof Error ? e.message : 'Failed to check linked workflows';
+			workflowDiagItems = [];
+		} finally {
+			workflowDiagLoading = false;
+		}
+	}
+
 	async function loadPipeline(pipelineId: string) {
 		loading = true;
 		error = null;
+		workflowDiagItems = [];
+		workflowDiagError = null;
+		showWorkflowDiagModal = false;
 		try {
 			runsListOffset = 0;
 			pipeline = await apiMethods.pipelines.get(pipelineId);
@@ -746,6 +770,7 @@
 			}
 			await loadRuns({ offset: 0 });
 			await loadTriggers();
+			void loadWorkflowDiagnostics(pipelineId);
 		} catch (e) {
 			breadcrumbTrail.set(null);
 			error = e instanceof Error ? e.message : 'Failed to load pipeline';
@@ -1252,6 +1277,7 @@
 			const updated = await apiMethods.pipelines.syncFromGit(pipeline.id, {});
 			pipeline = updated;
 			await loadTriggers();
+			void loadWorkflowDiagnostics(pipeline.id);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to sync from source code';
 		} finally {
@@ -1321,6 +1347,16 @@
 			? 'Update provider reference'
 			: 'Rotate secret'
 	);
+
+	const workflowDiagProblems = $derived(
+		workflowDiagItems.filter((i) => i.blocking || i.status !== 'ok')
+	);
+	const workflowDiagAllSafe = $derived(
+		!workflowDiagLoading &&
+			workflowDiagError === null &&
+			(workflowDiagItems.length === 0 ||
+				workflowDiagItems.every((i) => !i.blocking && i.status === 'ok'))
+	);
 </script>
 
 <svelte:head>
@@ -1344,12 +1380,45 @@
 			</div>
 		{:else if pipeline}
 			<div class="flex-1">
-				<div class="flex items-center gap-3">
+				<div class="flex flex-wrap items-center gap-3">
 					<h1 class="text-2xl font-bold text-[var(--text-primary)]">{pipeline.name}</h1>
 					{#if pipeline.enabled}
 						<Badge variant="success" size="sm">Active</Badge>
 					{:else}
 						<Badge variant="secondary" size="sm">Disabled</Badge>
+					{/if}
+					{#if workflowDiagLoading}
+						<span
+							class="text-xs text-[var(--text-tertiary)]"
+							title="Checking linked workflows against the catalog"
+							aria-busy="true">…</span
+						>
+					{:else if workflowDiagError !== null}
+						<button
+							type="button"
+							class="inline-flex items-center gap-1 text-xs font-medium text-amber-700 underline hover:no-underline dark:text-amber-400"
+							onclick={() => (showWorkflowDiagModal = true)}
+						>
+							<ShieldAlert class="h-3.5 w-3.5 shrink-0" />
+							Workflow check unavailable
+						</button>
+					{:else if !workflowDiagAllSafe}
+						<button
+							type="button"
+							class="inline-flex items-center gap-1 text-xs font-medium text-amber-700 underline hover:no-underline dark:text-amber-400"
+							onclick={() => (showWorkflowDiagModal = true)}
+						>
+							<ShieldAlert class="h-3.5 w-3.5 shrink-0" />
+							Workflow issues
+						</button>
+					{:else if pipeline.enabled}
+						<span
+							class="inline-flex items-center gap-0.5 text-xs font-medium text-success-600 dark:text-success-500"
+							title="All linked workflows resolve and are allowed to run"
+						>
+							<Check class="h-3.5 w-3.5 shrink-0" />
+							ok
+						</span>
 					{/if}
 				</div>
 				{#if pipeline.description}
@@ -3152,5 +3221,47 @@
 		<Button variant="outline" class="w-full sm:w-auto" onclick={() => (showWebhookHelpModal = false)}>
 			Close
 		</Button>
+	</div>
+</Dialog>
+
+<Dialog
+	bind:open={showWorkflowDiagModal}
+	title="Linked workflows"
+	description="Runs can be blocked until catalog approval, trust, and version resolution are satisfied."
+	class="max-w-lg"
+	onclose={() => {
+		showWorkflowDiagModal = false;
+	}}
+>
+	{#if workflowDiagError !== null}
+		<p class="text-sm text-[var(--text-secondary)]">{workflowDiagError}</p>
+	{:else if workflowDiagProblems.length === 0}
+		<p class="text-sm text-[var(--text-secondary)]">No issues reported for linked workflows.</p>
+	{:else}
+		<ul class="max-h-[min(60vh,24rem)] space-y-3 overflow-y-auto text-sm">
+			{#each workflowDiagProblems as item}
+				<li class="rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
+					<p class="font-medium text-[var(--text-primary)]">
+						<span class="font-mono text-xs">{item.invocation_id || '—'}</span>
+						{#if item.reference}
+							<span class="text-[var(--text-secondary)]"> · </span>
+							<span class="font-mono text-xs">{item.reference}</span>
+						{/if}
+					</p>
+					<p class="mt-1 text-[var(--text-secondary)]">
+						<span class="font-semibold">{item.status}</span>
+						{#if item.blocking}
+							<span class="text-amber-700 dark:text-amber-400"> (blocks runs)</span>
+						{/if}
+					</p>
+					{#if item.detail}
+						<p class="mt-1 text-[var(--text-tertiary)]">{item.detail}</p>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	{/if}
+	<div class="mt-4 flex justify-end border-t border-[var(--border-primary)] pt-4">
+		<Button variant="outline" onclick={() => (showWorkflowDiagModal = false)}>Close</Button>
 	</div>
 </Dialog>

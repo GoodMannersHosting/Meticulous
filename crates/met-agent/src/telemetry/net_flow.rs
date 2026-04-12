@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 
+use met_core::proc_net_tcp::parse_hex_ip_port;
 use met_proto::agent::v1::LogStream;
 use serde_json::json;
 
@@ -17,9 +18,9 @@ const TCP_ESTABLISHED: &str = "01";
 #[derive(Debug)]
 struct ParsedRow {
     local_ip: String,
-    local_port: u32,
+    local_port: u16,
     remote_ip: String,
-    remote_port: u32,
+    remote_port: u16,
     inode: u64,
 }
 
@@ -39,10 +40,10 @@ fn read_proc_tcp(path: &str) -> std::io::Result<Vec<ParsedRow>> {
         if parts[3] != TCP_ESTABLISHED {
             continue;
         }
-        let Some((lip, lp)) = parse_addr(parts[1]) else {
+        let Some((lip, lp)) = parse_hex_ip_port(parts[1]) else {
             continue;
         };
-        let Some((rip, rp)) = parse_addr(parts[2]) else {
+        let Some((rip, rp)) = parse_hex_ip_port(parts[2]) else {
             continue;
         };
         if rp == 0 {
@@ -60,32 +61,6 @@ fn read_proc_tcp(path: &str) -> std::io::Result<Vec<ParsedRow>> {
         });
     }
     Ok(out)
-}
-
-fn parse_addr(s: &str) -> Option<(String, u32)> {
-    let (addr_hex, port_hex) = s.split_once(':')?;
-    if addr_hex.len() == 8 {
-        let addr = u32::from_str_radix(addr_hex, 16).ok()?;
-        let ip = format!(
-            "{}.{}.{}.{}",
-            addr & 0xff,
-            (addr >> 8) & 0xff,
-            (addr >> 16) & 0xff,
-            (addr >> 24) & 0xff,
-        );
-        let port = u32::from(u16::from_str_radix(port_hex, 16).ok()?);
-        Some((ip, port))
-    } else if addr_hex.len() == 32 {
-        let mut b = [0u8; 16];
-        for i in 0..16 {
-            b[i] = u8::from_str_radix(addr_hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
-        }
-        let ip = std::net::Ipv6Addr::from(b).to_string();
-        let port = u32::from(u16::from_str_radix(port_hex, 16).ok()?);
-        Some((ip, port))
-    } else {
-        None
-    }
 }
 
 fn inode_to_pid(tracked_pids: &HashSet<u32>) -> HashMap<u64, u32> {
@@ -114,7 +89,7 @@ fn inode_to_pid(tracked_pids: &HashSet<u32>) -> HashMap<u64, u32> {
     map
 }
 
-fn flow_direction(local_port: u32, remote_port: u32) -> &'static str {
+fn flow_direction(local_port: u16, remote_port: u16) -> &'static str {
     // Ephemeral local port with a well-known / registered remote service port → typical outbound client.
     if local_port >= 32768 && remote_port < 32768 {
         return "outbound";

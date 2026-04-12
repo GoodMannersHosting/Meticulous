@@ -353,6 +353,21 @@ export interface Pipeline {
 	updated_at: string;
 }
 
+/** `GET /api/v1/pipelines/{id}/workflow-diagnostics` — per `workflows:` invocation. */
+export interface WorkflowDiagnosticItem {
+	invocation_id: string;
+	reference: string;
+	scope: string;
+	name: string;
+	version_requested: string;
+	version_resolved?: string | null;
+	/** `ok` | `missing` | `version_not_found` | `pending_approval` | `rejected` | `deleted` | `untrusted_blocked` | `project_not_found` */
+	status: string;
+	detail?: string | null;
+	blocking: boolean;
+	declared_outputs?: string[] | null;
+}
+
 /** `GET/POST /api/v1/pipelines/{id}/triggers` — `config` never includes `secret`. */
 export interface PipelineTrigger {
 	id: string;

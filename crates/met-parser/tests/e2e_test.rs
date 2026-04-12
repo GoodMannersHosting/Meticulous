@@ -32,6 +32,7 @@ fn create_full_provider() -> MockWorkflowProvider {
             name: "Checkout".to_string(),
             id: "checkout".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "Clone Repository".to_string(),
                 id: Some("clone".to_string()),
@@ -75,6 +76,7 @@ fn create_full_provider() -> MockWorkflowProvider {
             name: "Build".to_string(),
             id: "build".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![
                 RawStep {
                     name: "Install Dependencies".to_string(),
@@ -121,6 +123,7 @@ fn create_full_provider() -> MockWorkflowProvider {
             name: "Test".to_string(),
             id: "test".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "Run Tests".to_string(),
                 id: Some("test".to_string()),
@@ -481,6 +484,7 @@ async fn test_e2e_workflow_outputs_reference_in_inputs() {
             name: "Build".to_string(),
             id: "build_job".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "noop".to_string(),
                 id: Some("noop".to_string()),
@@ -523,6 +527,7 @@ async fn test_e2e_workflow_outputs_reference_in_inputs() {
             name: "Deploy".to_string(),
             id: "deploy_job".to_string(),
             runs_on: None,
+            environment: None,
             steps: vec![RawStep {
                 name: "apply".to_string(),
                 id: Some("apply".to_string()),

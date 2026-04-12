@@ -33,12 +33,8 @@ async fn start_callback_server(
                     let path = line.split_whitespace().nth(1)?;
                     let query = path.split('?').nth(1)?;
                     query.split('&').find_map(|pair| {
-                        let (key, value) = pair.split_once('=')?;
-                        if key == "token" {
-                            Some(value.to_string())
-                        } else {
-                            None
-                        }
+                        let (key, value) = met_core::split_key_value(pair)?;
+                        (key == "token").then_some(value.to_string())
                     })
                 })
                 .unwrap_or_default();

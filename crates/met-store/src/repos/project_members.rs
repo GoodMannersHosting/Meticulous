@@ -5,6 +5,8 @@
 //! require explicit membership. Legacy projects with zero `project_members`
 //! rows still grant **Developer** access to all org members.
 
+use std::str::FromStr;
+
 use met_core::ids::{ProjectId, UserId};
 use met_core::models::ResourceVisibility;
 use sqlx::PgPool;
@@ -56,12 +58,16 @@ impl ProjectRole {
     }
 }
 
-fn parse_role(s: &str) -> Option<ProjectRole> {
-    match s {
-        "admin" => Some(ProjectRole::Admin),
-        "developer" => Some(ProjectRole::Developer),
-        "readonly" => Some(ProjectRole::Readonly),
-        _ => None,
+impl FromStr for ProjectRole {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "admin" => std::result::Result::Ok(Self::Admin),
+            "developer" => std::result::Result::Ok(Self::Developer),
+            "readonly" => std::result::Result::Ok(Self::Readonly),
+            _ => std::result::Result::Err(()),
+        }
     }
 }
 
@@ -123,7 +129,7 @@ impl<'a> ProjectAccessRepo<'a> {
         .await?;
 
         Ok(max_project_role(
-            rows.into_iter().filter_map(|(s,)| parse_role(&s)),
+            rows.into_iter().filter_map(|(s,)| s.parse().ok()),
         ))
     }
 
@@ -267,15 +273,27 @@ mod tests {
 
     #[test]
     fn test_parse_role_valid() {
-        assert_eq!(parse_role("admin"), Some(ProjectRole::Admin));
-        assert_eq!(parse_role("developer"), Some(ProjectRole::Developer));
-        assert_eq!(parse_role("readonly"), Some(ProjectRole::Readonly));
+        assert_eq!(
+            "admin".parse::<ProjectRole>(),
+            std::result::Result::Ok(ProjectRole::Admin)
+        );
+        assert_eq!(
+            "developer".parse::<ProjectRole>(),
+            std::result::Result::Ok(ProjectRole::Developer)
+        );
+        assert_eq!(
+            "readonly".parse::<ProjectRole>(),
+            std::result::Result::Ok(ProjectRole::Readonly)
+        );
     }
 
     #[test]
     fn test_parse_role_invalid() {
-        assert_eq!(parse_role("superuser"), None);
-        assert_eq!(parse_role(""), None);
+        assert_eq!(
+            ProjectRole::from_str("superuser"),
+            std::result::Result::Err(())
+        );
+        assert_eq!(ProjectRole::from_str(""), std::result::Result::Err(()));
     }
 
     #[test]

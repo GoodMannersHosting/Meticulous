@@ -28,7 +28,10 @@ use utoipa::ToSchema;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta, SessionOrAppAuth},
+    extractors::{
+        Auth, PaginatedResponse, Pagination, PaginationMeta, SessionOrAppAuth,
+        parse_sql_offset_cursor,
+    },
     pipeline_execution,
     project_access::{
         SessionOrApp, effective_project_role_session_or_app_in_user_org,
@@ -227,7 +230,7 @@ async fn list_runs(
 
     let status_filter = parse_run_status_filter(query.status.as_deref())?;
 
-    let offset = parse_runs_list_offset(pagination.cursor.as_deref());
+    let offset = parse_sql_offset_cursor(pagination.cursor.as_deref());
     let limit = pagination.sql_limit();
 
     let mut items: Vec<RunResponse> = match (query.pipeline_id, query.project_id) {
@@ -338,18 +341,6 @@ fn parse_run_status_filter(raw: Option<&str>) -> ApiResult<Option<RunStatus>> {
     }
     serde_json::from_value(serde_json::Value::String(trimmed.to_owned()))
         .map_err(|_| ApiError::bad_request(format!("invalid run status: {trimmed}")))
-}
-
-/// `cursor` for run lists is a non-negative SQL `OFFSET` as a decimal string.
-fn parse_runs_list_offset(cursor: Option<&str>) -> i64 {
-    let Some(raw) = cursor else {
-        return 0;
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-    trimmed.parse::<i64>().ok().filter(|&o| o >= 0).unwrap_or(0)
 }
 
 fn job_run_snapshot_key(bytes: &Option<Vec<u8>>) -> Option<[u8; 32]> {

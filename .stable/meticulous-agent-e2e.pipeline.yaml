@@ -1,0 +1,96 @@
+# Agent E2E test pipeline.
+#
+# Validates that a freshly-built agent container can:
+#   1. Register against a live Meticulous control plane using a fresh join token.
+#   2. Successfully execute a set of test pipelines.
+#   3. Report expected run statuses back via the API.
+#
+# This pipeline is intended to run AFTER the main meticulous-ci pipeline has pushed
+# fresh images to Harbor. It should be triggered manually or from a downstream trigger
+# after the CI pipeline succeeds on main.
+#
+# Prerequisites:
+#   - A running Meticulous control plane (the production or staging instance).
+#   - met CLI binary available on the agent (built from the workspace or on PATH).
+#   - The freshly-pushed met-agent image available in Harbor.
+#   - Pipeline secrets as listed below.
+name: meticulous agent E2E
+agent-affinity:
+  default-group: ci
+  share-workspace: true
+
+triggers:
+  manual: {}
+
+secrets:
+  # Admin API token for the control plane under test
+  MET_E2E_API_TOKEN:
+    stored:
+      name: meticulous-e2e-api-token
+  # Harbor credentials to pull the agent image
+  HARBOR_USERNAME:
+    stored:
+      name: harbor-mar-operator-username
+  HARBOR_PASSWORD:
+    stored:
+      name: harbor-mar-operator-password
+  GITHUB_TOKEN:
+    stored:
+      name: meticulous-ci
+
+vars:
+  METICULOUS_REPO: GoodMannersHosting/Meticulous
+  # Target control plane to test against
+  MET_E2E_SERVER_URL: https://meticulous.cloud.danmanners.com
+  MET_E2E_ORG: meticulous-ci
+  # Agent image to pull and run
+  AGENT_IMAGE: harbor.cloud.danmanners.com/meticulous/met-agent:latest
+  REGISTRY_HOST: harbor.cloud.danmanners.com
+  # How long to wait for each test run to finish (seconds)
+  RUN_TIMEOUT_SECS: "120"
+
+workflows:
+  # ── Checkout (for met CLI binary + test pipeline definitions) ─────────────
+  - name: Checkout Meticulous
+    id: checkout
+    workflow: global/git-checkout
+    version: "1.0.1"
+    inputs:
+      repo: "${METICULOUS_REPO}"
+      clone_path: meticulous
+
+  # ── Provision a fresh join token ─────────────────────────────────────────
+  - name: Create join token
+    id: create-join-token
+    workflow: global/run-script
+    version: "1.0.0"
+    depends-on: [checkout]
+    inputs:
+      script_path: meticulous/.stable/scripts/e2e-create-join-token.sh
+
+  # ── Pull + launch agent container ─────────────────────────────────────────
+  - name: Launch test agent
+    id: launch-agent
+    workflow: global/run-script
+    version: "1.0.0"
+    depends-on: [create-join-token]
+    inputs:
+      script_path: meticulous/.stable/scripts/e2e-launch-agent.sh
+
+  # ── Run test pipelines and assert outcomes ────────────────────────────────
+  - name: Run test pipelines
+    id: run-test-pipelines
+    workflow: global/run-script
+    version: "1.0.0"
+    depends-on: [launch-agent]
+    inputs:
+      script_path: meticulous/.stable/scripts/e2e-run-test-pipelines.sh
+
+  # ── Cleanup: revoke token + stop agent container ──────────────────────────
+  - name: Cleanup
+    id: cleanup
+    workflow: global/run-script
+    version: "1.0.0"
+    depends-on: [run-test-pipelines]
+    inputs:
+      script_path: meticulous/.stable/scripts/e2e-cleanup.sh

@@ -184,6 +184,7 @@ mod tests {
                 id: "test-job".to_string(),
                 name: "Test Job".to_string(),
                 runs_on: None,
+                environment: None,
                 steps: vec![RawStep {
                     name: "Test Step".to_string(),
                     id: Some("step1".to_string()),

@@ -39,6 +39,10 @@ SQL migrations live in **`crates/met-store/migrations/`** (numbered `*.sql` file
 
 gRPC and shared message definitions are under **`proto/`**; generated code is wired through **`met-proto`**.
 
+## Shared helpers / dedup notes
+
+Cross-crate parsing helpers and a per-crate sweep summary from the Rust dedup pass live in [`design/notes/rust-dedup-crate-sweep.md`](../../design/notes/rust-dedup-crate-sweep.md) (e.g. `met_core::proc_net_tcp`, `split_key_value`, API offset cursor).
+
 ## Common commands
 
 From repository root:

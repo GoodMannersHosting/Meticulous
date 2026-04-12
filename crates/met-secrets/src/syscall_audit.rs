@@ -222,14 +222,16 @@ impl NetworkMetadataCollector {
         }
     }
 
-    /// Snapshot current connections from /proc/net/tcp.
+    /// Snapshot current connections from `/proc/net/tcp` and `/proc/net/tcp6`.
     #[cfg(target_os = "linux")]
     pub async fn snapshot_connections(&self) -> Vec<NetworkConnection> {
         let mut conns = Vec::new();
-        if let Ok(content) = tokio::fs::read_to_string("/proc/net/tcp").await {
-            for line in content.lines().skip(1) {
-                if let Some(conn) = parse_proc_net_tcp_line(line, &self.agent_id) {
-                    conns.push(conn);
+        for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            if let Ok(content) = tokio::fs::read_to_string(path).await {
+                for line in content.lines().skip(1) {
+                    if let Some(conn) = parse_proc_net_tcp_line(line, &self.agent_id) {
+                        conns.push(conn);
+                    }
                 }
             }
         }
@@ -250,13 +252,15 @@ impl NetworkMetadataCollector {
 
 #[cfg(target_os = "linux")]
 fn parse_proc_net_tcp_line(line: &str, _agent_id: &str) -> Option<NetworkConnection> {
+    use met_core::proc_net_tcp::parse_hex_ip_port;
+
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() < 4 {
         return None;
     }
 
-    let local = parse_hex_addr(parts[1])?;
-    let remote = parse_hex_addr(parts[2])?;
+    let local = parse_hex_ip_port(parts[1])?;
+    let remote = parse_hex_ip_port(parts[2])?;
 
     Some(NetworkConnection {
         src_ip: local.0,
@@ -271,30 +275,6 @@ fn parse_proc_net_tcp_line(line: &str, _agent_id: &str) -> Option<NetworkConnect
         connected_at: chrono::Utc::now(),
         disconnected_at: None,
     })
-}
-
-#[cfg(target_os = "linux")]
-fn parse_hex_addr(addr: &str) -> Option<(String, u16)> {
-    let parts: Vec<&str> = addr.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let ip_hex = parts[0];
-    let port = u16::from_str_radix(parts[1], 16).ok()?;
-
-    if ip_hex.len() == 8 {
-        let ip = u32::from_str_radix(ip_hex, 16).ok()?;
-        let ip_str = format!(
-            "{}.{}.{}.{}",
-            ip & 0xff,
-            (ip >> 8) & 0xff,
-            (ip >> 16) & 0xff,
-            (ip >> 24) & 0xff
-        );
-        Some((ip_str, port))
-    } else {
-        Some((ip_hex.to_string(), port))
-    }
 }
 
 /// Blast radius tracking: given a compromised binary SHA, find affected runs.

@@ -55,6 +55,16 @@ pub struct ApiConfig {
     /// Emit `Strict-Transport-Security` on responses (enable behind HTTPS / TLS-terminating proxies).
     #[serde(default)]
     pub enable_hsts: bool,
+
+    /// CI mode: bootstrap a known admin + service-account on startup and seed fake data.
+    /// Enabled by `MET_CI_MODE=true`. Never enable in production.
+    #[serde(default)]
+    pub ci_mode: bool,
+
+    /// Password for the CI bootstrap admin user (default: `ci-bootstrap`).
+    /// Read from `MET_CI_BOOTSTRAP_PASSWORD`. Only used when `ci_mode` is true.
+    #[serde(default)]
+    pub ci_bootstrap_password: Option<String>,
 }
 
 impl Default for ApiConfig {
@@ -75,6 +85,8 @@ impl Default for ApiConfig {
             pagination_max_limit: 10_000,
             public_base_url: None,
             enable_hsts: false,
+            ci_mode: false,
+            ci_bootstrap_password: None,
         }
     }
 }
@@ -94,6 +106,8 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             pagination_max_limit: http.pagination_max_limit,
             public_base_url: http.public_base_url.clone(),
             enable_hsts: false,
+            ci_mode: false,
+            ci_bootstrap_password: None,
             ..Default::default()
         }
     }

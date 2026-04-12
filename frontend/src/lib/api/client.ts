@@ -543,7 +543,15 @@ export const apiMethods = {
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
 			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
 		matrix: (id: string) =>
-			api.get<import('./types').MatrixResponse>(`/api/v1/pipelines/${id}/matrix`)
+			api.get<import('./types').MatrixResponse>(`/api/v1/pipelines/${id}/matrix`),
+		workflowDiagnostics: (
+			id: string,
+			params?: { commit_sha?: string; branch?: string }
+		) =>
+			api.get<import('./types').WorkflowDiagnosticItem[]>(
+				`/api/v1/pipelines/${id}/workflow-diagnostics`,
+				{ params }
+			)
 	},
 
 	triggers: {

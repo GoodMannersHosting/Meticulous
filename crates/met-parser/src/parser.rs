@@ -1153,6 +1153,7 @@ mod tests {
                 name: "Test Job".to_string(),
                 id: "test".to_string(),
                 runs_on: None,
+                environment: None,
                 steps: vec![RawStep {
                     name: "Test Step".to_string(),
                     id: Some("step1".to_string()),
@@ -1336,6 +1337,7 @@ workflows:
                 name: "Push".to_string(),
                 id: "push".to_string(),
                 runs_on: None,
+                environment: None,
                 steps: vec![RawStep {
                     name: "Docker".to_string(),
                     id: Some("docker".to_string()),

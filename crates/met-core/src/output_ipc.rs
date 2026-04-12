@@ -136,13 +136,7 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u8, String, Vec<u8>, usize), OutputIp
 
 /// Parse `KEY=value` for a single argv (first `=` separates key from value; value may contain `=`).
 pub fn parse_key_value_arg(arg: &str) -> Result<(&str, &str), ()> {
-    let Some((k, v)) = arg.split_once('=') else {
-        return Err(());
-    };
-    if k.is_empty() {
-        return Err(());
-    }
-    Ok((k, v))
+    crate::string_util::split_key_value(arg).ok_or(())
 }
 
 #[cfg(test)]

@@ -515,7 +515,7 @@ enum ConfigCommands {
 // ─── Main ────────────────────────────────────────────────────────────
 
 fn parse_key_value(s: &str) -> Option<(String, String)> {
-    let (k, v) = s.split_once('=')?;
+    let (k, v) = met_core::split_key_value(s)?;
     Some((k.to_string(), v.to_string()))
 }
 

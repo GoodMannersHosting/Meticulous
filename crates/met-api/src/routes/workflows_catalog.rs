@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE},
-    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta},
+    extractors::{Auth, PaginatedResponse, Pagination, PaginationMeta, parse_sql_offset_cursor},
     github_scm,
     state::AppState,
 };
@@ -54,18 +54,6 @@ pub struct CatalogListQuery {
     pub status: Option<String>,
 }
 
-/// `cursor` for catalog lists is a non-negative SQL `OFFSET` as a decimal string.
-fn parse_catalog_list_offset(cursor: Option<&str>) -> i64 {
-    let Some(raw) = cursor else {
-        return 0;
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-    trimmed.parse::<i64>().ok().filter(|&o| o >= 0).unwrap_or(0)
-}
-
 #[utoipa::path(get, path = "/api/v1/workflows/catalog", tag = "workflows")]
 #[instrument(skip(state))]
 async fn list_catalog_workflows(
@@ -87,7 +75,7 @@ async fn list_catalog_workflows(
         _ => None,
     };
 
-    let offset = parse_catalog_list_offset(pagination.cursor.as_deref());
+    let offset = parse_sql_offset_cursor(pagination.cursor.as_deref());
     let workflows = repo
         .list_global_catalog(user.org_id, pagination.sql_limit(), offset, st)
         .await?;
@@ -573,7 +561,7 @@ async fn list_catalog_versions(
         return Err(ApiError::bad_request("not a global catalog workflow row"));
     }
 
-    let offset = parse_catalog_list_offset(pagination.cursor.as_deref());
+    let offset = parse_sql_offset_cursor(pagination.cursor.as_deref());
     let rows = WorkflowRepo::new(state.db())
         .list_global_catalog_versions(
             user.org_id,

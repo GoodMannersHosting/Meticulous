@@ -133,10 +133,10 @@ impl ApiToken {
         if self.deactivated_at.is_some() {
             return false;
         }
-        if let Some(expires_at) = self.expires_at {
-            if expires_at <= Utc::now() {
-                return false;
-            }
+        if let Some(expires_at) = self.expires_at
+            && expires_at <= Utc::now()
+        {
+            return false;
         }
         true
     }
@@ -146,7 +146,7 @@ impl ApiToken {
     pub fn can_access_project(&self, project_id: ProjectId) -> bool {
         self.project_ids
             .as_ref()
-            .map_or(true, |ids| ids.contains(&project_id))
+            .is_none_or(|ids| ids.contains(&project_id))
     }
 
     /// Check pipeline access (call after project allowlist is satisfied).
@@ -154,7 +154,7 @@ impl ApiToken {
     pub fn can_access_pipeline(&self, pipeline_id: PipelineId) -> bool {
         self.pipeline_ids
             .as_ref()
-            .map_or(true, |ids| ids.contains(&pipeline_id))
+            .is_none_or(|ids| ids.contains(&pipeline_id))
     }
 }
 

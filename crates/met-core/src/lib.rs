@@ -14,10 +14,13 @@ pub mod fuzzy;
 pub mod ids;
 pub mod models;
 pub mod output_ipc;
+pub mod proc_net_tcp;
 pub mod redact;
+pub mod string_util;
 pub mod tokens;
 
 pub use config::MetConfig;
 pub use error::{MetError, Result};
 pub use ids::*;
+pub use string_util::split_key_value;
 pub use tokens::hash_join_token;

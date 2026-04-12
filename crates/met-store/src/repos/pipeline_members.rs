@@ -3,6 +3,8 @@
 //! Effective pipeline role = max(project-inherited role, direct pipeline role).
 //! Inherited members cannot be removed at the pipeline level.
 
+use std::str::FromStr;
+
 use met_core::ids::{PipelineId, ProjectId, UserId};
 use met_core::models::ResourceVisibility;
 use sqlx::PgPool;
@@ -42,12 +44,16 @@ impl PipelineRole {
     }
 }
 
-fn parse_role(s: &str) -> Option<PipelineRole> {
-    match s {
-        "admin" => Some(PipelineRole::Admin),
-        "developer" => Some(PipelineRole::Developer),
-        "readonly" => Some(PipelineRole::Readonly),
-        _ => None,
+impl FromStr for PipelineRole {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "admin" => std::result::Result::Ok(Self::Admin),
+            "developer" => std::result::Result::Ok(Self::Developer),
+            "readonly" => std::result::Result::Ok(Self::Readonly),
+            _ => std::result::Result::Err(()),
+        }
     }
 }
 
@@ -82,15 +88,30 @@ mod tests {
 
     #[test]
     fn test_parse_role_valid() {
-        assert_eq!(parse_role("admin"), Some(PipelineRole::Admin));
-        assert_eq!(parse_role("developer"), Some(PipelineRole::Developer));
-        assert_eq!(parse_role("readonly"), Some(PipelineRole::Readonly));
+        assert_eq!(
+            "admin".parse::<PipelineRole>(),
+            std::result::Result::Ok(PipelineRole::Admin)
+        );
+        assert_eq!(
+            "developer".parse::<PipelineRole>(),
+            std::result::Result::Ok(PipelineRole::Developer)
+        );
+        assert_eq!(
+            "readonly".parse::<PipelineRole>(),
+            std::result::Result::Ok(PipelineRole::Readonly)
+        );
     }
 
     #[test]
     fn test_parse_role_invalid() {
-        assert_eq!(parse_role("superuser"), None);
-        assert_eq!(parse_role(""), None);
+        assert_eq!(
+            PipelineRole::from_str("superuser"),
+            std::result::Result::Err(())
+        );
+        assert_eq!(
+            PipelineRole::from_str(""),
+            std::result::Result::Err(())
+        );
     }
 
     #[test]
@@ -170,7 +191,7 @@ impl<'a> PipelineAccessRepo<'a> {
         .await?;
 
         Ok(max_pipeline_role(
-            rows.into_iter().filter_map(|(s,)| parse_role(&s)),
+            rows.into_iter().filter_map(|(s,)| s.parse().ok()),
         ))
     }
 

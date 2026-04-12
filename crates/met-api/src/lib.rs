@@ -10,6 +10,7 @@
 //! - Rate limiting and CORS middleware
 
 pub mod auth;
+pub mod ci_bootstrap;
 pub mod config;
 pub mod error;
 pub mod extractors;

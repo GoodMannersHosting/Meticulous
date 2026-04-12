@@ -13,6 +13,6 @@ pub mod session_or_app;
 
 pub use app_installation::AppInstallationAuth;
 pub use auth::{Auth, CurrentUser, OptionalAuth};
-pub use pagination::{PaginatedResponse, Pagination, PaginationMeta};
+pub use pagination::{PaginatedResponse, Pagination, PaginationMeta, parse_sql_offset_cursor};
 pub use request_id::RequestId;
 pub use session_or_app::SessionOrAppAuth;

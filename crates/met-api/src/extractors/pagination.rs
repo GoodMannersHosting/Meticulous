@@ -32,6 +32,21 @@ impl Pagination {
     }
 }
 
+/// `cursor` for offset-based list endpoints: a non-negative SQL `OFFSET` as a decimal string.
+///
+/// Invalid, empty, or negative values clamp to `0`.
+#[must_use]
+pub fn parse_sql_offset_cursor(cursor: Option<&str>) -> i64 {
+    let Some(raw) = cursor else {
+        return 0;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    trimmed.parse::<i64>().ok().filter(|&o| o >= 0).unwrap_or(0)
+}
+
 /// Query parameters for pagination.
 #[derive(Debug, Deserialize)]
 struct PaginationQuery {
@@ -163,5 +178,25 @@ mod tests {
         assert_eq!(response.data.len(), 20);
         assert!(!response.pagination.has_more);
         assert!(response.pagination.next_cursor.is_none());
+    }
+
+    #[test]
+    fn sql_offset_cursor_none_and_empty() {
+        assert_eq!(parse_sql_offset_cursor(None), 0);
+        assert_eq!(parse_sql_offset_cursor(Some("")), 0);
+        assert_eq!(parse_sql_offset_cursor(Some("   ")), 0);
+    }
+
+    #[test]
+    fn sql_offset_cursor_valid() {
+        assert_eq!(parse_sql_offset_cursor(Some("0")), 0);
+        assert_eq!(parse_sql_offset_cursor(Some("42 ")), 42);
+    }
+
+    #[test]
+    fn sql_offset_cursor_invalid_clamps_to_zero() {
+        assert_eq!(parse_sql_offset_cursor(Some("-1")), 0);
+        assert_eq!(parse_sql_offset_cursor(Some("not-a-number")), 0);
+        assert_eq!(parse_sql_offset_cursor(Some("999999999999999999999")), 0);
     }
 }
