@@ -85,20 +85,6 @@ export interface CatalogWorkflow {
 	catalog_metadata: Record<string, unknown>;
 }
 
-export interface WorkflowDiagnosticItem {
-	invocation_id: string;
-	reference: string;
-	scope: string;
-	name: string;
-	version_requested: string;
-	version_resolved?: string | null;
-	status: string;
-	detail?: string | null;
-	blocking: boolean;
-	/** Declared output names from the workflow definition, when parseable */
-	declared_outputs?: string[] | null;
-}
-
 export interface CatalogVersionsPage {
 	workflow_name: string;
 	versions: CatalogWorkflow[];

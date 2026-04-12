@@ -67,6 +67,11 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let activeTab = $state('pipelines');
+	/**
+	 * Non-reactive: if this were `$state`, the bootstrap `$effect` would subscribe to it and
+	 * re-run when the guard updates, which can race with `goto` and rarely schedule `loadProject` twice.
+	 */
+	let lastBootstrappedProjectId: string | null = null;
 
 	let secrets = $state<StoredSecret[]>([]);
 	let secretsLoading = $state(false);
@@ -292,7 +297,11 @@
 	]);
 
 	$effect(() => {
-		loadProject();
+		const projectId = $page.params.id;
+		if (!projectId) return;
+		if (projectId === lastBootstrappedProjectId) return;
+		lastBootstrappedProjectId = projectId;
+		void loadProject(projectId);
 	});
 
 	$effect(() => {
@@ -370,11 +379,10 @@
 		}
 	}
 
-	async function loadProject() {
+	async function loadProject(projectId: string) {
 		loading = true;
 		error = null;
 		try {
-			const projectId = $page.params.id!;
 			project = await apiMethods.projects.get(projectId);
 			const pipelinesResponse = await apiMethods.pipelines.list({ project_id: projectId });
 			pipelines = pipelinesResponse.data;

@@ -1,4 +1,4 @@
-import type { Pipeline, ProjectWorkflowsAvailable, WorkflowDiagnosticItem } from '$api/types';
+import type { Pipeline, ProjectWorkflowsAvailable } from '$api/types';
 
 export type PipelineSourceRow = {
 	kind: 'pipeline' | 'workflow_project' | 'workflow_global';
@@ -175,14 +175,11 @@ export function workflowStemFromRef(ref: string | undefined): string | null {
 
 /**
  * Resolve a catalog workflow id for a reusable workflow row so the UI can link to `/workflows/{id}`.
- * Uses diagnostics (resolved version) and the project "available workflows" list (one row per name).
- * Avoids linking to the wrong version when the pipeline pins something other than the catalog row
- * returned by `DISTINCT ON (name)`.
+ * Uses the project "available workflows" list (one row per name). Pinned versions must match the catalog row.
  */
 export function catalogWorkflowIdForPipelineSourceRow(
 	row: PipelineSourceRow,
-	available: ProjectWorkflowsAvailable | null,
-	diagnostics: WorkflowDiagnosticItem[]
+	available: ProjectWorkflowsAvailable | null
 ): string | null {
 	if (row.kind === 'pipeline' || !available) return null;
 	const stem = workflowStemFromRef(row.workflowRef);
@@ -195,20 +192,12 @@ export function catalogWorkflowIdForPipelineSourceRow(
 	if (candidates.length !== 1) return null;
 	const catalogRow = candidates[0]!;
 
-	const diag = diagnostics.find((d) => d.reference === row.workflowRef);
-	const versionResolved = diag?.version_resolved?.trim();
-	const versionRequested = diag?.version_requested?.trim();
 	const rowVer = row.version?.trim();
 
-	if (versionResolved && catalogRow.version === versionResolved) return catalogRow.id;
-	if (versionRequested && versionRequested !== 'latest' && catalogRow.version === versionRequested) {
-		return catalogRow.id;
+	if (rowVer && rowVer !== 'latest') {
+		if (catalogRow.version === rowVer) return catalogRow.id;
+		return null;
 	}
-	if (rowVer && rowVer !== 'latest' && catalogRow.version === rowVer) return catalogRow.id;
 
-	const implicitLatest =
-		(!versionRequested || versionRequested === 'latest') && (!rowVer || rowVer === 'latest');
-	if (implicitLatest) return catalogRow.id;
-
-	return null;
+	return catalogRow.id;
 }

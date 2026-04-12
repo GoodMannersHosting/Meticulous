@@ -31,7 +31,6 @@
 		StoredSecret,
 		UpdatePipelineInput,
 		UpdatePipelineTriggerInput,
-		WorkflowDiagnosticItem,
 		Environment
 	} from '$api/types';
 	import {
@@ -109,6 +108,8 @@
 	let runsLoading = $state(false);
 	let error = $state<string | null>(null);
 	let activeTab = $state('runs');
+	/** Non-reactive guard — see `lastBootstrappedProjectId` on the project page. */
+	let lastBootstrappedPipelineId: string | null = null;
 
 	const pipelineTabIds = new Set([
 		'runs',
@@ -180,14 +181,8 @@
 	let runsListOffset = $state(0);
 	let runsHasMore = $state(false);
 
-	let workflowDiagnostics = $state<WorkflowDiagnosticItem[]>([]);
-	let wfDiagLoading = $state(false);
-	let wfDiagError = $state<string | null>(null);
-
 	let projectWorkflowsAvailable = $state<ProjectWorkflowsAvailable | null>(null);
 	let projectWorkflowsAvailableLoading = $state(false);
-
-	const workflowTriggerBlocked = $derived(workflowDiagnostics.some((d) => d.blocking));
 
 	let projectVariablesAll = $state<ProjectVariable[]>([]);
 	let variablesLoading = $state(false);
@@ -699,24 +694,12 @@
 	});
 
 	$effect(() => {
-		loadPipeline();
+		const pipelineId = $page.params.id;
+		if (!pipelineId) return;
+		if (pipelineId === lastBootstrappedPipelineId) return;
+		lastBootstrappedPipelineId = pipelineId;
+		void loadPipeline(pipelineId);
 	});
-
-	async function loadWorkflowDiagnostics() {
-		const p = pipeline;
-		if (!p) return;
-		wfDiagLoading = true;
-		wfDiagError = null;
-		try {
-			workflowDiagnostics = await apiMethods.pipelines.workflowDiagnostics(p.id);
-		} catch (e) {
-			wfDiagError =
-				e instanceof Error ? e.message : 'Could not load reusable workflow diagnostics';
-			workflowDiagnostics = [];
-		} finally {
-			wfDiagLoading = false;
-		}
-	}
 
 	async function loadProjectWorkflowsAvailable() {
 		const p = pipeline;
@@ -742,14 +725,13 @@
 		if (row.kind === 'workflow_global') {
 			return 'Global workflows are not stored as files in this repository. Sync the workflow to the catalog to open its detail page.';
 		}
-		return 'Could not match this reference to a catalog workflow version (try diagnostics or sync from Git).';
+		return 'Could not match this reference to a catalog workflow version (sync from Git or check the catalog).';
 	}
 
-	async function loadPipeline() {
+	async function loadPipeline(pipelineId: string) {
 		loading = true;
 		error = null;
 		try {
-			const pipelineId = $page.params.id!;
 			runsListOffset = 0;
 			pipeline = await apiMethods.pipelines.get(pipelineId);
 			projectPipelinesAll = [];
@@ -763,7 +745,6 @@
 				breadcrumbTrail.set([{ label: pipeline.name, href: `/pipelines/${pipeline.id}` }]);
 			}
 			await loadRuns({ offset: 0 });
-			await loadWorkflowDiagnostics();
 			await loadTriggers();
 		} catch (e) {
 			breadcrumbTrail.set(null);
@@ -1270,7 +1251,6 @@
 		try {
 			const updated = await apiMethods.pipelines.syncFromGit(pipeline.id, {});
 			pipeline = updated;
-			await loadWorkflowDiagnostics();
 			await loadTriggers();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to sync from source code';
@@ -1394,15 +1374,7 @@
 						Sync from Git
 					</Button>
 				{/if}
-				<Button
-					variant="primary"
-					onclick={triggerPipeline}
-					loading={triggerLoading}
-					disabled={workflowTriggerBlocked || wfDiagLoading}
-					title={workflowTriggerBlocked
-						? 'Fix workflow catalog issues before running'
-						: undefined}
-				>
+				<Button variant="primary" onclick={triggerPipeline} loading={triggerLoading}>
 					<Play class="h-4 w-4" />
 					Run Pipeline
 				</Button>
@@ -1414,39 +1386,6 @@
 		<Alert variant="error" title="Error" dismissible ondismiss={() => (error = null)}>
 			{error}
 		</Alert>
-	{/if}
-
-	{#if !loading && pipeline && (wfDiagError || (!wfDiagLoading && workflowDiagnostics.length > 0))}
-		{#if wfDiagError}
-			<Alert variant="warning" title="Workflow diagnostics unavailable">
-				{wfDiagError}
-			</Alert>
-		{:else if workflowTriggerBlocked}
-			<Alert variant="warning" title="Reusable workflows block runs" dismissible={false}>
-				<p class="mb-2 text-sm">
-					Resolve catalog approval, trust, or missing versions (or adjust org policy) before
-					triggering.
-				</p>
-				<ul class="list-inside list-disc space-y-1 text-sm text-[var(--text-secondary)]">
-					{#each workflowDiagnostics.filter((d) => d.blocking) as d}
-						<li>
-							<strong class="text-[var(--text-primary)]">{d.invocation_id}</strong>
-							({d.reference}): {d.status}{#if d.detail} — {d.detail}{/if}
-						</li>
-					{/each}
-				</ul>
-				<p class="mt-2 text-sm">
-					<a href="/workflows" class="text-primary-600 underline hover:no-underline"
-						>Open workflow catalog</a
-					>
-				</p>
-			</Alert>
-		{:else}
-			<Alert variant="success" title="Reusable workflows OK">
-				All <code class="rounded bg-[var(--bg-tertiary)] px-1">{workflowDiagnostics.length}</code> workflow
-				reference(s) in this pipeline resolve for the current org policy.
-			</Alert>
-		{/if}
 	{/if}
 
 	{#if !loading && pipeline}
@@ -1600,15 +1539,7 @@
 						title="No runs yet"
 						description="Trigger this pipeline to start your first run."
 					>
-						<Button
-							variant="primary"
-							onclick={triggerPipeline}
-							loading={triggerLoading}
-							disabled={workflowTriggerBlocked || wfDiagLoading}
-							title={workflowTriggerBlocked
-								? 'Fix workflow catalog issues before running'
-								: undefined}
-						>
+						<Button variant="primary" onclick={triggerPipeline} loading={triggerLoading}>
 							<Play class="h-4 w-4" />
 							Run Pipeline
 						</Button>
@@ -2269,8 +2200,7 @@
 											{@const upstream = upstreamLinkForRow(pipeline, row)}
 											{@const catalogWorkflowId = catalogWorkflowIdForPipelineSourceRow(
 												row,
-												projectWorkflowsAvailable,
-												workflowDiagnostics
+												projectWorkflowsAvailable
 											)}
 											<tr class="bg-[var(--bg-primary)]">
 												<td class="px-3 py-2 text-[var(--text-primary)]">
