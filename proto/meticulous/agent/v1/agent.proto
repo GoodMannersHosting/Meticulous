@@ -31,6 +31,22 @@ service AgentService {
 
     // Request graceful deregistration.
     rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+
+    // Request a short-lived OIDC identity token for workload identity (ADR-017).
+    rpc RequestIdToken(IdTokenRequest) returns (IdTokenResponse);
+}
+
+// Request for an OIDC identity token (ADR-017).
+message IdTokenRequest {
+    string agent_id = 1;
+    string job_run_id = 2;
+    string audience = 3;
+}
+
+// Response containing a signed OIDC identity token.
+message IdTokenResponse {
+    string token = 1;
+    meticulous.common.v1.Timestamp expires_at = 2;
 }
 
 // Request to register an agent.

@@ -16,7 +16,8 @@ use met_logging::{Redactor, RedactorConfig};
 use met_objstore::ObjectStore;
 use met_proto::agent::v1::{
     DeregisterRequest, DeregisterResponse, EncryptedSecretValue, HeartbeatAction, HeartbeatRequest,
-    HeartbeatResponse, JobExecutionMetadata as ProtoJobExecMeta, JobKeyExchange, JobSecretsPayload,
+    HeartbeatResponse, IdTokenRequest, IdTokenResponse,
+    JobExecutionMetadata as ProtoJobExecMeta, JobKeyExchange, JobSecretsPayload,
     JobStatusAck, JobStatusUpdate, LogAck, LogChunk, LogStream, RegisterRequest, RegisterResponse,
     SecretMaterialKind, SecurityBundle, StepStatusAck, StepStatusUpdate,
     agent_service_server::AgentService,
@@ -1346,6 +1347,44 @@ impl AgentService for AgentServiceImpl {
         }
 
         Ok(Response::new(DeregisterResponse { success: true }))
+    }
+
+    async fn request_id_token(
+        &self,
+        request: Request<IdTokenRequest>,
+    ) -> Result<Response<IdTokenResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.agent_id.is_empty() {
+            return Err(Status::invalid_argument("agent_id required"));
+        }
+        if req.job_run_id.is_empty() {
+            return Err(Status::invalid_argument("job_run_id required"));
+        }
+        if req.audience.is_empty() {
+            return Err(Status::invalid_argument("audience required"));
+        }
+        if req.audience.len() > 256 {
+            return Err(Status::invalid_argument("audience exceeds 256 characters"));
+        }
+
+        // TODO(Phase 2.2): implement full OIDC token minting.
+        //
+        // SECURITY: The `sub` claim is built from server-side verified run
+        // metadata, NEVER from agent-supplied fields (only `audience` is
+        // caller-controlled). The job_run_id is globally unique (UUIDv7,
+        // see met-core ids.rs invariant) so token scoping cannot collide.
+        //
+        // Steps:
+        // 1. Verify job_runs row exists AND is assigned to this agent_id
+        // 2. Load org/project/pipeline/ref/environment from verified run
+        // 3. Assemble claims: sub = "org:...:project:...:pipeline:...:ref:...:environment:..."
+        // 4. Sign with active ES256 key (OidcSigningKeyRepo::active_key)
+        // 5. Insert audit row (OidcSigningKeyRepo::audit_token)
+        // 6. Return signed JWT + expiry
+        Err(Status::unimplemented(
+            "OIDC token minting is not yet implemented; signing key infrastructure is in place",
+        ))
     }
 }
 

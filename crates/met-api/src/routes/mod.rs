@@ -25,12 +25,15 @@ pub mod artifacts;
 pub mod auth;
 pub mod dashboard;
 pub mod debug;
+pub mod environments;
 pub mod health;
 pub mod integration;
 pub mod members;
 pub mod meticulous_apps;
 pub mod oauth;
+pub mod oidc_provider;
 pub mod orgs;
+pub mod pipeline_check;
 pub mod pipelines;
 pub mod platform_settings;
 pub mod projects;
@@ -87,7 +90,9 @@ pub fn build_router(state: AppState) -> Router {
         .merge(websocket::router())
         .merge(integration::router())
         .merge(members::router())
-        .merge(platform_settings::router());
+        .merge(platform_settings::router())
+        .merge(environments::router())
+        .merge(pipeline_check::router());
 
     let openapi_spec = ApiDoc::openapi();
     let swagger_router: Router<()> = SwaggerUi::new("/docs")
@@ -102,6 +107,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(auth::router())
         // OAuth routes (OIDC, GitHub)
         .merge(oauth::router())
+        // OIDC identity provider discovery (ADR-017)
+        .merge(oidc_provider::router())
         // API v1 routes (includes `/api/v1/admin/*`)
         .nest("/api/v1", api_v1)
         // Apply middleware stack

@@ -297,6 +297,8 @@ export const apiMethods = {
 			api.get<import('./types').Member[]>(`/api/v1/projects/${projectId}/members`),
 		add: (projectId: string, data: import('./types').AddMemberInput) =>
 			api.post<{ message: string }>(`/api/v1/projects/${projectId}/members`, data),
+		updateRole: (projectId: string, principalId: string, data: import('./types').UpdateMemberRoleInput) =>
+			api.patch<{ message: string }>(`/api/v1/projects/${projectId}/members/${principalId}`, data),
 		remove: (projectId: string, principalId: string) =>
 			api.delete<{ message: string }>(`/api/v1/projects/${projectId}/members/${principalId}`)
 	},
@@ -307,8 +309,16 @@ export const apiMethods = {
 			api.get<import('./types').Member[]>(`/api/v1/pipelines/${pipelineId}/members`),
 		add: (pipelineId: string, data: import('./types').AddMemberInput) =>
 			api.post<{ message: string }>(`/api/v1/pipelines/${pipelineId}/members`, data),
+		updateRole: (pipelineId: string, principalId: string, data: import('./types').UpdateMemberRoleInput) =>
+			api.patch<{ message: string }>(`/api/v1/pipelines/${pipelineId}/members/${principalId}`, data),
 		remove: (pipelineId: string, principalId: string) =>
 			api.delete<{ message: string }>(`/api/v1/pipelines/${pipelineId}/members/${principalId}`)
+	},
+
+	/** Search users and groups by name/email. */
+	principalSearch: {
+		search: (q: string) =>
+			api.get<import('./types').PrincipalSearchResult[]>('/api/v1/principals/search', { params: { q } })
 	},
 
 	/** Platform settings (super_admin only). */
@@ -317,6 +327,24 @@ export const apiMethods = {
 			api.get<import('./types').PlatformSettings>('/api/v1/platform/settings'),
 		update: (data: Partial<import('./types').PlatformSettings>) =>
 			api.patch<import('./types').PlatformSettings>('/api/v1/platform/settings', data)
+	},
+
+	/** Pipeline environments (ADR-016). */
+	environments: {
+		list: (projectId: string) =>
+			api.get<import('./types').Environment[]>(`/api/v1/projects/${projectId}/environments`),
+		get: (projectId: string, envId: string) =>
+			api.get<import('./types').Environment>(`/api/v1/projects/${projectId}/environments/${envId}`),
+		create: (projectId: string, data: import('./types').CreateEnvironmentInput) =>
+			api.post<import('./types').Environment>(`/api/v1/projects/${projectId}/environments`, data),
+		update: (projectId: string, envId: string, data: import('./types').UpdateEnvironmentInput) =>
+			api.patch<import('./types').Environment>(`/api/v1/projects/${projectId}/environments/${envId}`, data),
+		delete: (projectId: string, envId: string) =>
+			api.delete<{ message: string }>(`/api/v1/projects/${projectId}/environments/${envId}`),
+		approve: (runId: string, envName: string, comment?: string) =>
+			api.post<{ message: string }>(`/api/v1/runs/${runId}/environments/${envName}/approve`, { comment }),
+		reject: (runId: string, envName: string, comment?: string) =>
+			api.post<{ message: string }>(`/api/v1/runs/${runId}/environments/${envName}/reject`, { comment })
 	},
 
 	/** Project-scoped webhook registrations (SCM + generic fan-out). */
@@ -487,6 +515,10 @@ export const apiMethods = {
 		update: (id: string, data: import('./types').UpdatePipelineInput) =>
 			api.put<import('./types').Pipeline>(`/api/v1/pipelines/${id}`, data),
 		delete: (id: string) => api.delete<void>(`/api/v1/pipelines/${id}`),
+		archive: (id: string) =>
+			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/archive`, {}),
+		unarchive: (id: string) =>
+			api.post<import('./types').Pipeline>(`/api/v1/pipelines/${id}/unarchive`, {}),
 		trigger: (id: string, data?: import('./types').TriggerRunInput) =>
 			api.post<import('./types').TriggerRunResponse>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
 		workflowDiagnostics: (

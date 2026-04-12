@@ -39,7 +39,6 @@
 		ArrowLeft,
 		Play,
 		Settings,
-		Edit,
 		Clock,
 		GitCommit,
 		User,
@@ -56,7 +55,10 @@
 		History,
 		Webhook,
 		Shuffle,
-		CircleHelp
+		CircleHelp,
+		Shield,
+		Layers,
+		Archive
 	} from 'lucide-svelte';
 	import type { Column, SortDirection } from '$components/data/DataTable.svelte';
 	import { sortRunList } from '$utils/sortRuns';
@@ -235,12 +237,17 @@
 	];
 
 	const kindOptions = [
-		{ value: 'kv', label: 'Key / value (kv)' },
+		{ value: 'kv', label: 'Key / value' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
 		{ value: 'github_app', label: 'GitHub App' },
-		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' },
-		{ value: 'registry', label: 'Container registry' }
+		{ value: 'x509_bundle', label: 'X.509 bundle' },
+		{ value: 'registry', label: 'Container registry' },
+		{ value: 'aws_sm', label: 'AWS Secrets Manager' },
+		{ value: 'vault', label: 'HashiCorp Vault' },
+		{ value: 'gcp_sm', label: 'GCP Secret Manager' },
+		{ value: 'azure_kv', label: 'Azure Key Vault' },
+		{ value: 'kubernetes', label: 'Kubernetes Secret' }
 	];
 
 	function definitionJobs(def: Pipeline['definition']): PipelineJob[] {
@@ -263,6 +270,37 @@
 		const s = sha?.trim();
 		if (!s) return null;
 		return s.length > 12 ? `${s.slice(0, 7)}…` : s;
+	}
+
+	async function loadPipelineMembers() {
+		if (!pipeline) return;
+		plMembersLoading = true;
+		plMembersError = null;
+		try {
+			plMembers = await apiMethods.pipelineMembers.list(pipeline.id);
+		} catch (e) {
+			plMembersError = e instanceof Error ? e.message : 'Failed to load members';
+		} finally {
+			plMembersLoading = false;
+		}
+	}
+
+	async function addPipelineMember(input: import('$api/types').AddMemberInput) {
+		if (!pipeline) return;
+		await apiMethods.pipelineMembers.add(pipeline.id, input);
+		await loadPipelineMembers();
+	}
+
+	async function removePipelineMember(principalId: string) {
+		if (!pipeline) return;
+		await apiMethods.pipelineMembers.remove(pipeline.id, principalId);
+		await loadPipelineMembers();
+	}
+
+	async function updatePipelineMemberRole(principalId: string, role: import('$api/types').MemberRole) {
+		if (!pipeline) return;
+		await apiMethods.pipelineMembers.updateRole(pipeline.id, principalId, { role });
+		await loadPipelineMembers();
 	}
 
 	function openEditPipeline() {
@@ -317,11 +355,25 @@
 
 	const tabs = [
 		{ id: 'runs', label: 'Runs', icon: Play },
-		{ id: 'triggers', label: 'Triggers', icon: Webhook },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
-		{ id: 'definition', label: 'Definition', icon: Settings }
+		{ id: 'definition', label: 'Definition', icon: Layers },
+		{ id: 'settings', label: 'Settings', icon: Settings }
 	];
+
+	const plSettingsGroupIds = ['settings', 'triggers', 'access', 'advanced'];
+	const isPlSettingsGroup = $derived(plSettingsGroupIds.includes(activeTab));
+
+	const plSettingsSubTabs = [
+		{ id: 'settings', label: 'General' },
+		{ id: 'triggers', label: 'Triggers' },
+		{ id: 'access', label: 'Access Controls' },
+		{ id: 'advanced', label: 'Advanced' }
+	];
+
+	let plMembers = $state<import('$api/types').Member[]>([]);
+	let plMembersLoading = $state(false);
+	let plMembersError = $state<string | null>(null);
 
 	function apiPublicOrigin(): string {
 		return getPublicApiBase();
@@ -702,6 +754,12 @@
 	$effect(() => {
 		if (activeTab !== 'definition' || !pipeline || loading) return;
 		void loadProjectWorkflowsAvailable();
+	});
+
+	$effect(() => {
+		if (activeTab === 'access' && pipeline && !loading) {
+			void loadPipelineMembers();
+		}
 	});
 
 	function storedSecretScopeLabel(s: StoredSecret): string {
@@ -1121,10 +1179,6 @@
 						Sync from Git
 					</Button>
 				{/if}
-				<Button variant="outline" size="sm" onclick={openEditPipeline}>
-					<Edit class="h-4 w-4" />
-					Edit
-				</Button>
 				<Button
 					variant="primary"
 					onclick={triggerPipeline}
@@ -1214,7 +1268,22 @@
 			{/if}
 		{/if}
 
-		<Tabs items={tabs} bind:value={activeTab} />
+		<Tabs items={tabs} value={isPlSettingsGroup ? 'settings' : activeTab} onchange={(v) => (activeTab = v)} />
+
+		{#if isPlSettingsGroup}
+			<div class="flex gap-1.5 mt-1 mb-4">
+				{#each plSettingsSubTabs as sub}
+					<button
+						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {activeTab === sub.id
+							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+						onclick={() => (activeTab = sub.id)}
+					>
+						{sub.label}
+					</button>
+				{/each}
+			</div>
+		{/if}
 
 		{#if activeTab === 'runs'}
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1315,6 +1384,70 @@
 					onRowClick={handleRunClick}
 					loading={runsLoading && runs.length === 0}
 				/>
+			{/if}
+		{:else if activeTab === 'settings'}
+			{#if pipeline}
+			<Card>
+				<div class="space-y-4">
+					<div>
+						<h3 class="text-base font-medium text-[var(--text-primary)]">General</h3>
+						<p class="mt-1 text-sm text-[var(--text-secondary)]">
+							Pipeline name, description, and configuration.
+						</p>
+					</div>
+					<div class="grid max-w-xl gap-4">
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="ep-name-g">Name</label>
+							<Input id="ep-name-g" bind:value={epName} placeholder="Pipeline display name" />
+						</div>
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="ep-slug-g">Slug</label>
+							<Input id="ep-slug-g" value={pipeline.slug} readonly class="bg-[var(--bg-tertiary)]" />
+							<p class="mt-1 text-xs text-[var(--text-tertiary)]">Slug is fixed after creation.</p>
+						</div>
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="ep-desc-g">Description</label>
+							<textarea
+								id="ep-desc-g"
+								bind:value={epDescription}
+								rows="3"
+								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+								placeholder="Optional summary"
+							></textarea>
+						</div>
+						<label class="flex items-center gap-2 text-sm">
+							<input type="checkbox" bind:checked={epEnabled} class="rounded border-[var(--border-primary)]" />
+							Enabled (allow new runs)
+						</label>
+						{#if pipeline.scm_provider}
+							<div class="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+								<p class="text-xs font-medium text-[var(--text-secondary)]">Git source ({pipeline.scm_provider})</p>
+								<div>
+									<label class="mb-1 block text-xs font-medium" for="ep-scm-repo-g">Repository</label>
+									<Input id="ep-scm-repo-g" bind:value={epScmRepository} placeholder="owner/repo" />
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-medium" for="ep-scm-ref-g">Git ref</label>
+									<Input id="ep-scm-ref-g" bind:value={epScmRef} placeholder="branch, tag, or SHA" />
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-medium" for="ep-scm-path-g">Path to pipeline YAML</label>
+									<Input id="ep-scm-path-g" bind:value={epScmPath} placeholder=".stable/pipeline.yaml" />
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-medium" for="ep-scm-creds-g">Credentials secret path</label>
+									<Input id="ep-scm-creds-g" bind:value={epScmCredsPath} placeholder="builtin_secrets path" />
+								</div>
+							</div>
+						{/if}
+						<div class="flex justify-end">
+							<Button variant="primary" onclick={submitEditPipeline} loading={editPipelineLoading} disabled={!epName.trim()}>
+								Save changes
+							</Button>
+						</div>
+					</div>
+				</div>
+			</Card>
 			{/if}
 		{:else if activeTab === 'triggers'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
@@ -1530,6 +1663,19 @@
 					</table>
 				</div>
 			{/if}
+		{:else if activeTab === 'access'}
+			{#await import('$components/ui/access-control-panel.svelte') then mod}
+				<svelte:component
+					this={mod.default}
+					members={plMembers}
+					loading={plMembersLoading}
+					error={plMembersError}
+					showInherited={true}
+					onAdd={addPipelineMember}
+					onRemove={removePipelineMember}
+					onUpdateRole={updatePipelineMemberRole}
+				/>
+			{/await}
 		{:else if activeTab === 'variables'}
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<p class="text-sm text-[var(--text-secondary)]">
@@ -1741,6 +1887,45 @@
 					</table>
 				</div>
 			{/if}
+		{:else if activeTab === 'advanced'}
+			<Card>
+				<div class="space-y-6">
+					<div>
+						<h3 class="text-base font-medium text-[var(--text-primary)]">Danger Zone</h3>
+						<p class="mt-1 text-sm text-[var(--text-secondary)]">
+							Irreversible actions that affect this pipeline.
+						</p>
+					</div>
+					<div class="rounded-lg border border-amber-200 p-4 dark:border-amber-900/60">
+						<div class="flex items-center justify-between gap-4">
+							<div>
+								<p class="font-medium text-amber-900 dark:text-amber-200">Archive pipeline</p>
+								<p class="mt-1 text-sm text-[var(--text-secondary)]">
+									Hides this pipeline from the project and prevents new runs. An org admin can restore it from
+									<a href="/admin/archive" class="text-primary-600 hover:underline dark:text-primary-400">Admin → Archive</a>.
+								</p>
+							</div>
+							<Button
+								variant="outline"
+								size="sm"
+								class="shrink-0 border-amber-300 text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-950/40"
+								onclick={async () => {
+									if (!pipeline) return;
+									try {
+										await apiMethods.pipelines.archive(pipeline.id);
+										window.location.href = `/projects/${pipeline.project_id}`;
+									} catch (e) {
+										error = e instanceof Error ? e.message : 'Failed to archive';
+									}
+								}}
+							>
+								<Archive class="h-4 w-4" />
+								Archive
+							</Button>
+						</div>
+					</div>
+				</div>
+			</Card>
 		{:else if activeTab === 'definition'}
 			<Card>
 				<div class="space-y-4">
@@ -2068,7 +2253,7 @@
 	{/if}
 </Dialog>
 
-<Dialog bind:open={showCreateSecret} title="Add stored secret">
+<Dialog bind:open={showCreateSecret} title="Add secret">
 	<div class="space-y-4">
 		<div>
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="pl-sec-path"

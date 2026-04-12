@@ -13,12 +13,14 @@ mod builtin_secrets;
 mod cache_entries;
 mod dashboard;
 mod definition_snapshots;
+mod environments;
 mod groups;
 mod job_assignments;
 mod jobs;
 mod join_tokens;
 mod log_cache;
 mod meticulous_apps;
+mod oidc_signing_keys;
 mod org_policy;
 mod organizations;
 mod pipeline_members;
@@ -52,6 +54,7 @@ pub use builtin_secrets::{
 pub use cache_entries::CacheEntryRepo;
 pub use dashboard::{DashboardRecentRunRow, DashboardStats, org_dashboard_stats, org_recent_runs};
 pub use definition_snapshots::DefinitionSnapshotRepo;
+pub use environments::{EnvironmentApprovalRow, EnvironmentRepo, EnvironmentRow};
 pub use groups::{GroupRepo, UserGroupInfoRow};
 pub use job_assignments::JobAssignmentRepo;
 pub use jobs::{JobDagNode, JobRepo};
@@ -60,6 +63,7 @@ pub use log_cache::{
     LazyCacheLine, LogArchiveRow, LogCacheEntry, LogCacheRepo, project_run_for_job_run,
 };
 pub use meticulous_apps::{MeticulousAppInstallationSummary, MeticulousAppRepo};
+pub use oidc_signing_keys::{OidcPublicKeyRow, OidcSigningKeyRepo, OidcSigningKeyRow, OidcTokenAuditRow};
 pub use org_policy::{OrgPolicy, OrgPolicyPatch, OrgPolicyRepo};
 pub use organizations::OrganizationRepo;
 pub use pipeline_run_workflow_outputs::PipelineRunWorkflowOutputsRepo;

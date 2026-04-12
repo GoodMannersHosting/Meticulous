@@ -318,6 +318,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(30),
+            secret_values: Arc::new(Vec::new()),
         };
 
         let exit_code = backend.execute(&step, &temp_dir).await.unwrap();
@@ -349,6 +350,7 @@ mod tests {
             shell: String::new(),
             environment: env,
             timeout: Duration::from_secs(30),
+            secret_values: Arc::new(Vec::new()),
         };
 
         let exit_code = backend.execute(&step, &temp_dir).await.unwrap();
@@ -377,6 +379,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(30),
+            secret_values: Arc::new(Vec::new()),
         };
 
         let exit_code = backend.execute(&step, &temp_dir).await.unwrap();
@@ -405,6 +408,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(30),
+            secret_values: Arc::new(Vec::new()),
         };
 
         let exit_code = backend.execute(&step, &work_dir).await.unwrap();
@@ -436,6 +440,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(1), // Short timeout
+            secret_values: Arc::new(Vec::new()),
         };
 
         let result = backend.execute(&step, &temp_dir).await;
@@ -561,6 +566,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(10),
+            secret_values: Arc::new(Vec::new()),
         };
 
         let exit_code = backend.execute(&step, &ws2).await.unwrap();

@@ -84,11 +84,23 @@ fn native_inherit_env_keys() -> Vec<String> {
         .collect()
 }
 
+/// Replace all secret values in `line` with `***`.
+pub(crate) fn redact_secrets(line: &str, secret_values: &[String]) -> String {
+    let mut output = line.to_string();
+    for secret in secret_values {
+        if !secret.is_empty() {
+            output = output.replace(secret.as_str(), "***");
+        }
+    }
+    output
+}
+
 /// Read process output line-by-line (including a final line without a trailing `\n`) and ship to logs.
 async fn forward_project_output<B: AsyncBufRead + Unpin>(
     mut reader: B,
     pipe: Option<StepLogPipe>,
     stderr: bool,
+    secret_values: std::sync::Arc<Vec<String>>,
 ) {
     let mut buf = String::new();
     loop {
@@ -96,12 +108,13 @@ async fn forward_project_output<B: AsyncBufRead + Unpin>(
         match reader.read_line(&mut buf).await {
             Ok(0) => break,
             Ok(_) => {
-                let line = buf.trim_end_matches(['\r', '\n']);
+                let raw = buf.trim_end_matches(['\r', '\n']);
+                let line = redact_secrets(raw, &secret_values);
                 if let Some(ref p) = pipe {
                     let send = if stderr {
-                        p.send_stderr_line(line).await
+                        p.send_stderr_line(&line).await
                     } else {
-                        p.send_stdout_line(line).await
+                        p.send_stdout_line(&line).await
                     };
                     if send.is_err() {
                         break;
@@ -279,9 +292,10 @@ impl ExecutionBackend for NativeBackend {
         // Read child output: `read_line` captures the last fragment even without a trailing newline (common for shell errors).
         let stdout_handle = if let Some(stdout) = stdout {
             let pipe = logs.cloned();
+            let sv = step.secret_values.clone();
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stdout);
-                forward_project_output(reader, pipe, false).await;
+                forward_project_output(reader, pipe, false, sv).await;
             }))
         } else {
             None
@@ -289,9 +303,10 @@ impl ExecutionBackend for NativeBackend {
 
         let stderr_handle = if let Some(stderr) = stderr {
             let pipe = logs.cloned();
+            let sv = step.secret_values.clone();
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
-                forward_project_output(reader, pipe, true).await;
+                forward_project_output(reader, pipe, true, sv).await;
             }))
         } else {
             None
@@ -440,6 +455,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(10),
+            secret_values: std::sync::Arc::new(Vec::new()),
         };
 
         let result = backend
@@ -470,6 +486,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(10),
+            secret_values: std::sync::Arc::new(Vec::new()),
         };
 
         let result = backend
@@ -498,6 +515,7 @@ mod tests {
             shell: String::new(),
             environment: HashMap::new(),
             timeout: Duration::from_secs(10),
+            secret_values: std::sync::Arc::new(Vec::new()),
         };
 
         let result = backend
@@ -508,5 +526,39 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         // On Linux, we should have tracked at least the shell process
         // Note: The exact count depends on how quickly processes spawn/exit
+    }
+
+    #[test]
+    fn test_redact_secrets_replaces_values() {
+        let secrets = vec!["s3cret".to_string(), "p@ssw0rd".to_string()];
+        let line = "connecting with password p@ssw0rd to bucket s3cret-data";
+        let safe = super::redact_secrets(line, &secrets);
+        assert!(!safe.contains("p@ssw0rd"));
+        assert!(!safe.contains("s3cret"));
+        assert!(safe.contains("***"));
+        assert!(safe.contains("-data"));
+    }
+
+    #[test]
+    fn test_redact_secrets_no_secrets() {
+        let line = "normal log output";
+        let safe = super::redact_secrets(line, &[]);
+        assert_eq!(safe, line);
+    }
+
+    #[test]
+    fn test_redact_secrets_empty_values_skipped() {
+        let secrets = vec!["".to_string(), "real".to_string()];
+        let line = "the real deal";
+        let safe = super::redact_secrets(line, &secrets);
+        assert_eq!(safe, "the *** deal");
+    }
+
+    #[test]
+    fn test_redact_secrets_multiple_occurrences() {
+        let secrets = vec!["tok".to_string()];
+        let line = "tok and tok again";
+        let safe = super::redact_secrets(line, &secrets);
+        assert_eq!(safe, "*** and *** again");
     }
 }

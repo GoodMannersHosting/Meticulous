@@ -276,11 +276,13 @@ impl ExecutionBackend for ContainerBackend {
 
         let stdout_handle = if let Some(stdout) = stdout {
             if let Some(pipe) = logs.cloned() {
+                let sv = step.secret_values.clone();
                 Some(tokio::spawn(async move {
                     let reader = BufReader::new(stdout);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
-                        if pipe.send_stdout_line(&line).await.is_err() {
+                        let safe = super::native::redact_secrets(&line, &sv);
+                        if pipe.send_stdout_line(&safe).await.is_err() {
                             break;
                         }
                     }
@@ -298,11 +300,13 @@ impl ExecutionBackend for ContainerBackend {
 
         let stderr_handle = if let Some(stderr) = stderr {
             if let Some(pipe) = logs.cloned() {
+                let sv = step.secret_values.clone();
                 Some(tokio::spawn(async move {
                     let reader = BufReader::new(stderr);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
-                        if pipe.send_stderr_line(&line).await.is_err() {
+                        let safe = super::native::redact_secrets(&line, &sv);
+                        if pipe.send_stderr_line(&safe).await.is_err() {
                             break;
                         }
                     }

@@ -159,11 +159,13 @@ export interface UpdateProjectInput {
 }
 
 /** Member of a project or pipeline. */
+export type MemberRole = 'admin' | 'operator' | 'readonly';
+
 export interface Member {
 	id: string;
 	principal_type: 'user' | 'group';
 	principal_id: string;
-	role: 'admin' | 'developer' | 'readonly';
+	role: MemberRole;
 	inherited?: boolean;
 	display_name?: string;
 	created_at: string;
@@ -172,12 +174,63 @@ export interface Member {
 export interface AddMemberInput {
 	principal_type: 'user' | 'group';
 	principal_id: string;
-	role: 'admin' | 'developer' | 'readonly';
+	role: MemberRole;
+}
+
+export interface UpdateMemberRoleInput {
+	role: MemberRole;
+}
+
+/** Search result for users and groups. */
+export interface PrincipalSearchResult {
+	id: string;
+	name: string;
+	principal_type: 'user' | 'group';
+	email?: string;
 }
 
 /** Platform-wide settings (super_admin only). */
 export interface PlatformSettings {
 	allow_unauthenticated_access: boolean;
+}
+
+/** Pipeline environment (ADR-016). */
+export type EnvironmentTier = 'development' | 'staging' | 'production' | 'custom';
+
+export interface Environment {
+	id: string;
+	project_id: string;
+	name: string;
+	display_name: string;
+	description?: string;
+	require_approval: boolean;
+	required_approvers: number;
+	approval_timeout_hours: number;
+	allowed_branches?: string[];
+	auto_deploy_branch?: string;
+	variables: Record<string, string>;
+	tier: EnvironmentTier;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateEnvironmentInput {
+	name: string;
+	display_name: string;
+	description?: string;
+	tier?: EnvironmentTier;
+}
+
+export interface UpdateEnvironmentInput {
+	display_name?: string;
+	description?: string;
+	tier?: EnvironmentTier;
+	require_approval?: boolean;
+	required_approvers?: number;
+	approval_timeout_hours?: number;
+	allowed_branches?: string[];
+	auto_deploy_branch?: string;
+	variables?: Record<string, string>;
 }
 
 /** GET /api/v1/projects/{id}/workflows/available */

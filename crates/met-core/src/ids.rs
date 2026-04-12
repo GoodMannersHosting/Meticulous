@@ -2,6 +2,22 @@
 //!
 //! Every entity in Meticulous has a unique ID type that wraps a UUIDv7.
 //! This prevents accidentally mixing IDs across entity types at compile time.
+//!
+//! ## Global uniqueness invariant
+//!
+//! `PipelineId`, `RunId`, `JobRunId`, and `StepRunId` **must** be globally
+//! unique (not just unique within a tenant). This is security-critical because:
+//!
+//! - **OIDC tokens** (ADR-017) embed `job_run_id` in the `sub` claim.
+//!   A collision could let one job's token authenticate as another.
+//! - **Per-job PKI** (ADR-004) derives encryption keys per `job_run_id`.
+//!   A collision would reuse key material.
+//! - **Secret resolution hints** reference `pipeline_id` + `job_run_id` to
+//!   scope which secrets are delivered to which job.
+//!
+//! UUIDv7 provides 74 bits of randomness per ID (plus monotonic time), giving
+//! a birthday-attack collision probability below 2^-50 even at 10 billion IDs.
+//! The Postgres `UUID PRIMARY KEY` constraint provides a database-level backstop.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -18,10 +34,16 @@ macro_rules! define_id {
         pub struct $name(pub Uuid);
 
         impl $name {
-            /// Create a new ID with a fresh UUIDv7 (time-sortable).
+            /// Create a new ID with a fresh UUIDv7 (time-sortable, globally unique).
+            ///
+            /// # Panics
+            ///
+            /// Panics if the system CSPRNG produces a nil UUID (should never happen).
             #[must_use]
             pub fn new() -> Self {
-                Self(Uuid::now_v7())
+                let id = Uuid::now_v7();
+                assert!(!id.is_nil(), "CSPRNG produced a nil UUID");
+                Self(id)
             }
 
             /// Create an ID from an existing UUID.
@@ -311,6 +333,32 @@ mod tests {
         let id1 = OrganizationId::new();
         let id2 = OrganizationId::new();
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_id_never_nil() {
+        let id = PipelineId::new();
+        assert!(!id.as_uuid().is_nil());
+        let id = RunId::new();
+        assert!(!id.as_uuid().is_nil());
+        let id = JobRunId::new();
+        assert!(!id.as_uuid().is_nil());
+    }
+
+    #[test]
+    fn test_global_uniqueness_across_types() {
+        let ids: Vec<Uuid> = (0..100)
+            .flat_map(|_| {
+                vec![
+                    PipelineId::new().as_uuid(),
+                    RunId::new().as_uuid(),
+                    JobRunId::new().as_uuid(),
+                    StepRunId::new().as_uuid(),
+                ]
+            })
+            .collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len(), "UUIDv7 collision detected");
     }
 
     #[test]

@@ -714,6 +714,10 @@ impl JobExecutor {
             env.insert("METICULOUS_WORKSPACE".into(), ws);
         }
 
+        let secret_values: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
+            secrets.values().filter(|v| !v.is_empty()).cloned().collect(),
+        );
+
         // Convert to backend step spec
         let backend_step = crate::backend::StepSpec {
             step_id: step.step_id.clone(),
@@ -726,7 +730,19 @@ impl JobExecutor {
             shell: step.shell.clone(),
             environment: env,
             timeout: Duration::from_secs(step.timeout_secs as u64),
+            secret_values: secret_values.clone(),
         };
+
+        // Emit step banner to the log stream so operators can see what runs.
+        {
+            let safe_command =
+                crate::backend::native::redact_secrets(&step.command, &secret_values);
+            let banner = format!(
+                "::group::Step {} — {}",
+                step.sequence, safe_command
+            );
+            let _ = log_pipe.send_stdout_line(&banner).await;
+        }
 
         // Create a process watcher for this step
         let mut watcher = ProcessWatcher::new();
@@ -742,6 +758,9 @@ impl JobExecutor {
             .backend
             .execute_with_watcher(&backend_step, workspace, &mut watcher, Some(&log_pipe))
             .await;
+
+        // Close the step banner group.
+        let _ = log_pipe.send_stdout_line("::endgroup::").await;
 
         // Report terminal step status before awaiting log drain: `finish()` waits on `stream_logs`
         // and must not delay controller updates or heartbeat release.

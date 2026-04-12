@@ -2,11 +2,15 @@
 -- Stores encrypted connection details for AWS SM, Vault, GCP SM, Azure KV,
 -- Kubernetes, Bitwarden, 1Password, Akeyless, and Conjur.
 
-CREATE TYPE secret_provider_type AS ENUM (
-    'aws_sm', 'vault', 'gcp_sm', 'azure_kv',
-    'kubernetes', 'bitwarden', 'onepassword',
-    'akeyless', 'conjur'
-);
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'secret_provider_type') THEN
+        CREATE TYPE secret_provider_type AS ENUM (
+            'aws_sm', 'vault', 'gcp_sm', 'azure_kv',
+            'kubernetes', 'bitwarden', 'onepassword',
+            'akeyless', 'conjur'
+        );
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS secret_provider_configs (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -21,9 +25,15 @@ CREATE TABLE IF NOT EXISTS secret_provider_configs (
     last_tested_at    TIMESTAMPTZ,
     last_test_ok      BOOLEAN,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (org_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid), name)
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secret_provider_configs_unique_name
+    ON secret_provider_configs (
+        org_id,
+        COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        name
+    );
 
 CREATE INDEX IF NOT EXISTS idx_secret_provider_configs_org ON secret_provider_configs(org_id);
 CREATE INDEX IF NOT EXISTS idx_secret_provider_configs_project ON secret_provider_configs(project_id) WHERE project_id IS NOT NULL;

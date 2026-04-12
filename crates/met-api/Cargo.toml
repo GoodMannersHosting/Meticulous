@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = "0.1"
 met-core = { workspace = true }
+met-lint = { path = "../met-lint" }
 met-store = { workspace = true }
 met-secrets = { workspace = true }
 met-engine = { workspace = true }

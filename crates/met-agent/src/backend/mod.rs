@@ -14,7 +14,7 @@ use tracing::warn;
 
 #[cfg(target_os = "linux")]
 mod container;
-mod native;
+pub(crate) mod native;
 
 #[cfg(target_os = "linux")]
 pub use container::ContainerBackend;
@@ -33,6 +33,9 @@ pub struct StepSpec {
     pub shell: String,
     pub environment: HashMap<String, String>,
     pub timeout: Duration,
+    /// Secret values that must be redacted from log output. Contains only the
+    /// values (not the keys), so any occurrence in stdout/stderr is masked.
+    pub secret_values: std::sync::Arc<Vec<String>>,
 }
 
 /// Result of step execution.

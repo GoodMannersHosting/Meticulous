@@ -10,6 +10,7 @@
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod fuzzy;
 pub mod ids;
 pub mod models;
 pub mod output_ipc;

@@ -37,8 +37,8 @@
 		Play,
 		Settings,
 		Trash2,
-		Edit,
 		KeyRound,
+		Edit,
 		RefreshCw,
 		Braces,
 		History,
@@ -46,7 +46,8 @@
 		ExternalLink,
 		Webhook,
 		Puzzle,
-		Archive
+		Archive,
+		Shield
 	} from 'lucide-svelte';
 	import type { Column } from '$components/data/DataTable.svelte';
 
@@ -121,6 +122,10 @@
 	let archiveProjectLoading = $state(false);
 	let archiveProjectError = $state<string | null>(null);
 
+	let projectMembers = $state<import('$api/types').Member[]>([]);
+	let membersLoading = $state(false);
+	let membersError = $state<string | null>(null);
+
 	let projectWebhooks = $state<ProjectWebhookRegistration[]>([]);
 	let pwLoading = $state(false);
 	let pwError = $state<string | null>(null);
@@ -160,23 +165,37 @@
 	let installAppLoading = $state(false);
 
 	const kindOptions = [
-		{ value: 'kv', label: 'Key / value (kv)' },
+		{ value: 'kv', label: 'Key / value' },
 		{ value: 'api_key', label: 'API key' },
 		{ value: 'ssh_private_key', label: 'SSH private key (PEM)' },
 		{ value: 'github_app', label: 'GitHub App' },
-		{ value: 'x509_bundle', label: 'X.509 bundle (JSON)' },
-		{ value: 'registry', label: 'Container registry' }
+		{ value: 'x509_bundle', label: 'X.509 bundle' },
+		{ value: 'registry', label: 'Container registry' },
+		{ value: 'aws_sm', label: 'AWS Secrets Manager' },
+		{ value: 'vault', label: 'HashiCorp Vault' },
+		{ value: 'gcp_sm', label: 'GCP Secret Manager' },
+		{ value: 'azure_kv', label: 'Azure Key Vault' },
+		{ value: 'kubernetes', label: 'Kubernetes Secret' }
 	];
 
 	const tabs = [
 		{ id: 'pipelines', label: 'Pipelines', icon: GitBranch },
-		{ id: 'triggers', label: 'Triggers', icon: Webhook },
 		{ id: 'workflows', label: 'Workflows', icon: Layers },
-		{ id: 'runs', label: 'Recent Runs', icon: Play },
+		{ id: 'runs', label: 'Runs', icon: Play },
 		{ id: 'variables', label: 'Variables', icon: Braces },
 		{ id: 'secrets', label: 'Secrets', icon: KeyRound },
-		{ id: 'apps', label: 'Meticulous Apps', icon: Puzzle },
 		{ id: 'settings', label: 'Settings', icon: Settings }
+	];
+
+	const settingsGroupIds = ['settings', 'triggers', 'access', 'apps', 'advanced'];
+	const isSettingsGroup = $derived(settingsGroupIds.includes(activeTab));
+
+	const settingsSubTabs = [
+		{ id: 'settings', label: 'General' },
+		{ id: 'triggers', label: 'Triggers' },
+		{ id: 'access', label: 'Access Controls' },
+		{ id: 'apps', label: 'Apps' },
+		{ id: 'advanced', label: 'Advanced' }
 	];
 
 	$effect(() => {
@@ -190,6 +209,12 @@
 		settingsDescription = project.description ?? '';
 		settingsVisibility = project.visibility ?? 'authenticated';
 		settingsError = null;
+	});
+
+	$effect(() => {
+		if (activeTab === 'access' && project && !loading) {
+			void loadProjectMembers();
+		}
 	});
 
 	$effect(() => {
@@ -554,6 +579,37 @@
 		} finally {
 			settingsSaving = false;
 		}
+	}
+
+	async function loadProjectMembers() {
+		if (!project) return;
+		membersLoading = true;
+		membersError = null;
+		try {
+			projectMembers = await apiMethods.projectMembers.list(project.id);
+		} catch (e) {
+			membersError = e instanceof Error ? e.message : 'Failed to load members';
+		} finally {
+			membersLoading = false;
+		}
+	}
+
+	async function addProjectMember(input: import('$api/types').AddMemberInput) {
+		if (!project) return;
+		await apiMethods.projectMembers.add(project.id, input);
+		await loadProjectMembers();
+	}
+
+	async function removeProjectMember(principalId: string) {
+		if (!project) return;
+		await apiMethods.projectMembers.remove(project.id, principalId);
+		await loadProjectMembers();
+	}
+
+	async function updateProjectMemberRole(principalId: string, role: import('$api/types').MemberRole) {
+		if (!project) return;
+		await apiMethods.projectMembers.updateRole(project.id, principalId, { role });
+		await loadProjectMembers();
 	}
 
 	async function confirmArchiveProject() {
@@ -926,10 +982,6 @@
 			</div>
 
 			<div class="flex items-center gap-2">
-				<Button variant="outline" size="sm" onclick={() => (activeTab = 'settings')}>
-					<Edit class="h-4 w-4" />
-					Edit
-				</Button>
 				<Button variant="primary" href="/pipelines/new?project={project.id}">
 					<Plus class="h-4 w-4" />
 					New Pipeline
@@ -945,7 +997,22 @@
 	{/if}
 
 	{#if !loading && project}
-		<Tabs items={tabs} bind:value={activeTab} />
+		<Tabs items={tabs} value={isSettingsGroup ? 'settings' : activeTab} onchange={(v) => (activeTab = v)} />
+
+		{#if isSettingsGroup}
+			<div class="flex gap-1.5 mt-1 mb-4">
+				{#each settingsSubTabs as sub}
+					<button
+						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {activeTab === sub.id
+							? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow-sm'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+						onclick={() => (activeTab = sub.id)}
+					>
+						{sub.label}
+					</button>
+				{/each}
+			</div>
+		{/if}
 
 		{#if activeTab === 'pipelines'}
 			{#if pipelines.length === 0}
@@ -1489,7 +1556,7 @@
 			{:else if secrets.length === 0}
 				<Card>
 					<EmptyState
-						title="No stored secrets"
+						title="No secrets"
 						description="Create a secret to inject into jobs via the pipeline secrets block."
 					>
 						<Button variant="primary" onclick={openCreateSecret}>
@@ -1726,6 +1793,19 @@
 					{/if}
 				</Card>
 			</div>
+		{:else if activeTab === 'access'}
+			{#await import('$components/ui/access-control-panel.svelte') then mod}
+				<svelte:component
+					this={mod.default}
+					members={projectMembers}
+					loading={membersLoading}
+					error={membersError}
+					showInherited={false}
+					onAdd={addProjectMember}
+					onRemove={removeProjectMember}
+					onUpdateRole={updateProjectMemberRole}
+				/>
+			{/await}
 		{:else if activeTab === 'settings'}
 			<Card>
 				<div class="space-y-6">
@@ -1798,33 +1878,41 @@
 						</div>
 					</div>
 
-					<div class="border-t border-[var(--border-primary)] pt-6">
-						<h4 class="text-sm font-medium text-[var(--text-primary)]">Danger Zone</h4>
-						<div class="mt-4 rounded-lg border border-amber-200 p-4 dark:border-amber-900/60">
-							<div class="flex items-center justify-between gap-4">
-								<div>
-									<p class="font-medium text-amber-900 dark:text-amber-200">Archive project</p>
-									<p class="mt-1 text-sm text-[var(--text-secondary)]">
-										Hides this project from the main project list, archives all pipelines in it, and disables
-										normal use. Only an organization admin can unarchive or permanently delete it from
-										<a href="/admin/archive" class="text-primary-600 hover:underline dark:text-primary-400"
-											>Admin → Archive</a
-										>.
-									</p>
-								</div>
-								<Button
-									variant="outline"
-									size="sm"
-									class="shrink-0 border-amber-300 text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-950/40"
-									onclick={() => {
-										archiveProjectError = null;
-										showArchiveProjectDialog = true;
-									}}
-								>
-									<Archive class="h-4 w-4" />
-									Archive
-								</Button>
+				</div>
+			</Card>
+		{:else if activeTab === 'advanced'}
+			<Card>
+				<div class="space-y-6">
+					<div>
+						<h3 class="text-base font-medium text-[var(--text-primary)]">Danger Zone</h3>
+						<p class="mt-1 text-sm text-[var(--text-secondary)]">
+							Irreversible actions that affect the entire project.
+						</p>
+					</div>
+					<div class="rounded-lg border border-amber-200 p-4 dark:border-amber-900/60">
+						<div class="flex items-center justify-between gap-4">
+							<div>
+								<p class="font-medium text-amber-900 dark:text-amber-200">Archive project</p>
+								<p class="mt-1 text-sm text-[var(--text-secondary)]">
+									Hides this project from the main project list, archives all pipelines in it, and disables
+									normal use. Only an organization admin can unarchive or permanently delete it from
+									<a href="/admin/archive" class="text-primary-600 hover:underline dark:text-primary-400"
+										>Admin → Archive</a
+									>.
+								</p>
 							</div>
+							<Button
+								variant="outline"
+								size="sm"
+								class="shrink-0 border-amber-300 text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-950/40"
+								onclick={() => {
+									archiveProjectError = null;
+									showArchiveProjectDialog = true;
+								}}
+							>
+								<Archive class="h-4 w-4" />
+								Archive
+							</Button>
 						</div>
 					</div>
 				</div>
@@ -1861,7 +1949,7 @@
 	</div>
 </Dialog>
 
-<Dialog bind:open={showCreateSecret} title="Add stored secret">
+<Dialog bind:open={showCreateSecret} title="Add secret">
 	<div class="space-y-4">
 		<div>
 			<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="sec-path"

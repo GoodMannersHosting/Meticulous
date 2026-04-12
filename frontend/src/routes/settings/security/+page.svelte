@@ -429,6 +429,56 @@
 			</Button>
 		</div>
 	</Card>
+
+	<Card>
+		<div class="space-y-4">
+			<div class="flex items-center gap-3">
+				<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--bg-tertiary)]">
+					<Key class="h-5 w-5 text-[var(--text-secondary)]" />
+				</div>
+				<div class="flex-1">
+					<h3 class="font-medium text-[var(--text-primary)]">OIDC Workload Identity</h3>
+					<p class="text-sm text-[var(--text-secondary)]">
+						Machine-to-machine authentication for pipeline jobs using short-lived OIDC tokens
+					</p>
+				</div>
+				<Badge variant="outline">ES256 / P-256</Badge>
+			</div>
+			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 space-y-3">
+				<div class="grid gap-4 text-sm sm:grid-cols-2">
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">Discovery endpoint</p>
+						<code class="text-xs text-[var(--text-primary)]">/.well-known/openid-configuration</code>
+					</div>
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">JWKS endpoint</p>
+						<code class="text-xs text-[var(--text-primary)]">/.well-known/jwks.json</code>
+					</div>
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">Token lifetime</p>
+						<p class="text-[var(--text-primary)]">5 minutes (max 15 min)</p>
+					</div>
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">Key rotation</p>
+						<p class="text-[var(--text-primary)]">Every 90 days (automatic)</p>
+					</div>
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">Signing algorithm</p>
+						<p class="text-[var(--text-primary)]">ES256 (ECDSA P-256 + SHA-256)</p>
+					</div>
+					<div>
+						<p class="text-xs text-[var(--text-tertiary)]">Agent command</p>
+						<code class="text-xs text-[var(--text-primary)]">met id-token --audience &lt;aud&gt;</code>
+					</div>
+				</div>
+				<p class="text-xs text-[var(--text-secondary)]">
+					Configure external services (AWS, GCP, Azure, Vault) to trust your Meticulous issuer URL and map
+					the <code class="rounded bg-[var(--bg-secondary)] px-1 text-[10px]">sub</code> claim to IAM roles.
+					Token claims include org, project, pipeline, ref, and environment.
+				</p>
+			</div>
+		</div>
+	</Card>
 </div>
 
 <Dialog bind:open={showCreateDialog} title="Create API Token">

@@ -120,6 +120,28 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigCommands,
     },
+    /// AI-assisted pipeline suggestions
+    Suggest {
+        /// Path to pipeline file
+        #[arg(default_value = ".meticulous/pipeline.yaml")]
+        path: PathBuf,
+        /// Security assessment mode
+        #[arg(long)]
+        assess: bool,
+    },
+    /// Run a pipeline locally in OCI containers
+    #[command(name = "run-local")]
+    RunLocal {
+        /// Path to pipeline file
+        #[arg(default_value = ".meticulous/pipeline.yaml")]
+        path: PathBuf,
+        /// Run a specific job only
+        #[arg(long)]
+        job: Option<String>,
+        /// Enable network access (default: isolated)
+        #[arg(long)]
+        network: bool,
+    },
 }
 
 // ─── Auth ────────────────────────────────────────────────────────────
@@ -249,6 +271,21 @@ enum PipelineCommands {
         /// Base ref to compare against
         #[arg(long)]
         base: Option<String>,
+    },
+    /// Validate a pipeline against server-side state (secrets, variables, environments)
+    Check {
+        /// Path to pipeline file
+        #[arg(default_value = ".meticulous/pipeline.yaml")]
+        path: PathBuf,
+        /// Project slug (required)
+        #[arg(long)]
+        project: String,
+        /// Environment to validate against
+        #[arg(long)]
+        environment: Option<String>,
+        /// Simulated trigger ref
+        #[arg(long, name = "ref")]
+        git_ref: Option<String>,
     },
 }
 
@@ -605,6 +642,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineCommands::Diff { id, base } => {
                 pipelines::diff(&client, &id, base.as_deref(), format).await
             }
+            PipelineCommands::Check {
+                path,
+                project,
+                environment,
+                git_ref,
+            } => {
+                commands::pipeline_check::check(
+                    &client,
+                    &path,
+                    &project,
+                    environment.as_deref(),
+                    git_ref.as_deref(),
+                    format,
+                )
+                .await
+            }
         },
 
         // ── Run ──────────────────────────────────────────────
@@ -725,6 +778,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ConfigCommands::Set { key, value } => config_cmd::set(&key, &value).await,
             ConfigCommands::Init => config_cmd::init().await,
         },
+
+        // ── Suggest ─────────────────────────────────────────
+        Commands::Suggest { path, assess } => {
+            if assess {
+                commands::suggest::assess(&path, format).await
+            } else {
+                Err(api_client::ApiError::Other(
+                    "met suggest requires --assess flag (LLM suggestion mode)".into(),
+                ))
+            }
+        }
+
+        // ── Run Local ───────────────────────────────────────
+        Commands::RunLocal {
+            path,
+            job,
+            network,
+        } => {
+            commands::run_local::run_local(&client, &path, job.as_deref(), network, format).await
+        }
     };
 
     if let Err(e) = result {

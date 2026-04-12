@@ -15,6 +15,7 @@ default = ["keyring"]
 
 [dependencies]
 met-core = { workspace = true }
+met-lint = { path = "../met-lint" }
 met-parser = { workspace = true }
 clap = { workspace = true }
 chrono = { workspace = true }

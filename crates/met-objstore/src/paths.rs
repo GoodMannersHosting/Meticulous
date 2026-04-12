@@ -155,6 +155,16 @@ impl ObjectKeyBuilder {
         let base = self.base_prefix();
         ObjectKey::new(format!("{base}/tmp/{upload_id}"))
     }
+
+    /// Build a key for a workspace snapshot archive (ADR-014).
+    ///
+    /// Path: `<base>/workspace-snapshots/{run_id}/{invocation_id}.tar.zst`
+    pub fn workspace_snapshot(&self, run_id: &str, invocation_id: &str) -> ObjectKey {
+        let base = self.base_prefix();
+        ObjectKey::new(format!(
+            "{base}/workspace-snapshots/{run_id}/{invocation_id}.tar.zst"
+        ))
+    }
 }
 
 impl Default for ObjectKeyBuilder {
