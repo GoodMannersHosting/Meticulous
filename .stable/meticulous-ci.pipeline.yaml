@@ -26,11 +26,12 @@
 #   Finally (main branch only):
 #     kubectl-deploy
 #
-# All stages share a workspace on one agent group (ci).
+# Parallel static checks and tests run without a shared workspace. The Docker build +
+# Trivy chain uses affinity-group `ci` with share-workspace so each image step reuses
+# the same checkout on one agent (serial `depends-on` chain).
 # Secrets must be stored in Meticulous before running this pipeline.
 name: meticulous CI
 agent-affinity:
-  default-group: ci
   share-workspace: true
 
 triggers:
@@ -178,6 +179,7 @@ workflows:
     id: push-agent
     workflow: global/docker-buildx-push
     version: "1.0.1"
+    affinity-group: ci
     depends-on: [playwright, api-smoke, zap]
     inputs:
       context_path: meticulous
@@ -189,6 +191,7 @@ workflows:
     id: scan-agent
     workflow: global/trivy-scan
     version: "1.1.2"
+    affinity-group: ci
     depends-on: [push-agent]
     inputs:
       mode: image
@@ -200,6 +203,7 @@ workflows:
     id: push-api
     workflow: global/docker-buildx-push
     version: "1.0.1"
+    affinity-group: ci
     depends-on: [scan-agent]
     inputs:
       context_path: meticulous
@@ -211,6 +215,7 @@ workflows:
     id: scan-api
     workflow: global/trivy-scan
     version: "1.1.2"
+    affinity-group: ci
     depends-on: [push-api]
     inputs:
       mode: image
@@ -222,6 +227,7 @@ workflows:
     id: push-controller
     workflow: global/docker-buildx-push
     version: "1.0.1"
+    affinity-group: ci
     depends-on: [scan-api]
     inputs:
       context_path: meticulous
@@ -233,6 +239,7 @@ workflows:
     id: scan-controller
     workflow: global/trivy-scan
     version: "1.1.2"
+    affinity-group: ci
     depends-on: [push-controller]
     inputs:
       mode: image
@@ -244,6 +251,7 @@ workflows:
     id: push-frontend
     workflow: global/docker-buildx-push
     version: "1.0.1"
+    affinity-group: ci
     depends-on: [scan-controller]
     inputs:
       context_path: meticulous
@@ -255,6 +263,7 @@ workflows:
     id: scan-frontend
     workflow: global/trivy-scan
     version: "1.1.2"
+    affinity-group: ci
     depends-on: [push-frontend]
     inputs:
       mode: image
@@ -266,6 +275,7 @@ workflows:
     id: push-sqlx-migrate
     workflow: global/docker-buildx-push
     version: "1.0.1"
+    affinity-group: ci
     depends-on: [scan-frontend]
     inputs:
       context_path: meticulous
@@ -277,6 +287,7 @@ workflows:
     id: scan-sqlx-migrate
     workflow: global/trivy-scan
     version: "1.1.2"
+    affinity-group: ci
     depends-on: [push-sqlx-migrate]
     inputs:
       mode: image

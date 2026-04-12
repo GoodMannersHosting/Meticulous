@@ -5,6 +5,7 @@
 	import { apiMethods } from '$api/client';
 	import type { Project, CreatePipelineInput, StoredSecret } from '$api/types';
 	import { ArrowLeft, Save, Code, GitBranch } from 'lucide-svelte';
+	import { parsePipelineDefinitionError } from '$lib/utils/apiErrorMessage';
 
 	let projects = $state<Project[]>([]);
 	let projectSecrets = $state<StoredSecret[]>([]);
@@ -158,6 +159,8 @@
 			.filter((s) => s.kind === 'github_app')
 			.map((s) => ({ value: s.path, label: `${s.path} (github_app)` }))
 	]);
+
+	const pipelineDefError = $derived(error ? parsePipelineDefinitionError(error) : null);
 </script>
 
 <svelte:head>
@@ -178,8 +181,21 @@
 	</div>
 
 	{#if error}
-		<Alert variant="error" dismissible ondismiss={() => (error = null)}>
-			{error}
+		<Alert
+			variant="error"
+			title={pipelineDefError ? pipelineDefError.title : 'Something went wrong'}
+			dismissible
+			ondismiss={() => (error = null)}
+		>
+			{#if pipelineDefError}
+				<ul class="list-disc space-y-2 pl-5 [overflow-wrap:anywhere]">
+					{#each pipelineDefError.bullets as line}
+						<li>{line}</li>
+					{/each}
+				</ul>
+			{:else}
+				{error}
+			{/if}
 		</Alert>
 	{/if}
 

@@ -98,6 +98,7 @@
 		WEBHOOK_HELP_PYTHON,
 		WEBHOOK_HELP_PWSH
 	} from '$utils/webhookHelpSnippets';
+	import { parsePipelineDefinitionError } from '$lib/utils/apiErrorMessage';
 
 	const webhookHelpSnippetTabs: TabItem[] = [
 		{ id: 'bash', label: 'Bash' },
@@ -1382,6 +1383,8 @@
 			(workflowDiagItems.length === 0 ||
 				workflowDiagItems.every((i) => !i.blocking && i.status === 'ok'))
 	);
+
+	const pipelinePageErrorParsed = $derived(error ? parsePipelineDefinitionError(error) : null);
 </script>
 
 <svelte:head>
@@ -1477,8 +1480,21 @@
 	</div>
 
 	{#if error}
-		<Alert variant="error" title="Error" dismissible ondismiss={() => (error = null)}>
-			{error}
+		<Alert
+			variant="error"
+			title={pipelinePageErrorParsed ? pipelinePageErrorParsed.title : 'Error'}
+			dismissible
+			ondismiss={() => (error = null)}
+		>
+			{#if pipelinePageErrorParsed}
+				<ul class="list-disc space-y-2 pl-5 [overflow-wrap:anywhere]">
+					{#each pipelinePageErrorParsed.bullets as line}
+						<li>{line}</li>
+					{/each}
+				</ul>
+			{:else}
+				{error}
+			{/if}
 		</Alert>
 	{/if}
 
