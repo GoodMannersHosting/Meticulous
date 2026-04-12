@@ -628,6 +628,45 @@ impl<'a> RunRepo<'a> {
 
         Ok(runs)
     }
+
+    /// Delete at most `batch_size` runs for the given project that were created before `before`.
+    ///
+    /// Only terminal runs (`succeeded`, `failed`, `cancelled`) are deleted so that runs that are
+    /// still being processed are never removed mid-flight.  Cascade `ON DELETE` constraints on
+    /// `job_runs`, `step_runs`, `run_events`, `run_logs`, `run_binary_executions`,
+    /// `run_network_connections`, `run_syscall_events`, `run_runtime_script_artifacts`,
+    /// `log_cache`, `log_archives`, `pipeline_run_workflow_outputs`, and `oidc_token_audit` take
+    /// care of all child rows automatically.
+    ///
+    /// Returns the number of rows deleted.
+    pub async fn delete_old_runs_for_project(
+        &self,
+        project_id: ProjectId,
+        before: DateTime<Utc>,
+        batch_size: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            WITH to_delete AS (
+                SELECT r.id
+                FROM runs r
+                JOIN pipelines p ON r.pipeline_id = p.id
+                WHERE p.project_id = $1
+                  AND r.created_at < $2
+                  AND r.status IN ('succeeded', 'failed', 'cancelled')
+                LIMIT $3
+            )
+            DELETE FROM runs WHERE id IN (SELECT id FROM to_delete)
+            "#,
+        )
+        .bind(project_id.as_uuid())
+        .bind(before)
+        .bind(batch_size)
+        .execute(self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
 }
 
 /// Run with associated job runs.

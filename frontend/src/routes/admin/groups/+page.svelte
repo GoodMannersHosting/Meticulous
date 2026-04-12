@@ -386,8 +386,14 @@
 
 <!-- Create Group Modal -->
 {#if showCreateModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => showCreateModal = false}>
-		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button
+			type="button"
+			class="absolute inset-0 bg-black/50"
+			aria-label="Close dialog"
+			onclick={() => (showCreateModal = false)}
+		></button>
+		<div class="relative z-10 w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
 			<div class="flex items-center justify-between">
 				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Create Group</h3>
 				<button
@@ -448,8 +454,14 @@
 
 <!-- Edit Group Modal -->
 {#if showEditModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => showEditModal = false}>
-		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button
+			type="button"
+			class="absolute inset-0 bg-black/50"
+			aria-label="Close dialog"
+			onclick={() => (showEditModal = false)}
+		></button>
+		<div class="relative z-10 w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
 			<div class="flex items-center justify-between">
 				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Edit Group</h3>
 				<button
@@ -508,8 +520,14 @@
 
 <!-- OIDC Mappings Modal -->
 {#if showOidcMappingsModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => showOidcMappingsModal = false}>
-		<div class="w-full max-w-2xl rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button
+			type="button"
+			class="absolute inset-0 bg-black/50"
+			aria-label="Close dialog"
+			onclick={() => (showOidcMappingsModal = false)}
+		></button>
+		<div class="relative z-10 w-full max-w-2xl rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
 			<div class="flex items-center justify-between">
 				<div>
 					<h3 class="text-lg font-semibold text-[var(--text-primary)]">OIDC Group Mappings</h3>
@@ -606,8 +624,14 @@
 
 <!-- Add OIDC Mapping Modal -->
 {#if showAddOidcMappingModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => showAddOidcMappingModal = false}>
-		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button
+			type="button"
+			class="absolute inset-0 bg-black/50"
+			aria-label="Close dialog"
+			onclick={() => (showAddOidcMappingModal = false)}
+		></button>
+		<div class="relative z-10 w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
 			<div class="flex items-center justify-between">
 				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Add OIDC Mapping</h3>
 				<button

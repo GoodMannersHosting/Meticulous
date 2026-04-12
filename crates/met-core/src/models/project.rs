@@ -62,6 +62,10 @@ pub struct Project {
     /// When the project is scheduled for permanent deletion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduled_deletion_at: Option<DateTime<Utc>>,
+    /// Per-project run data retention in days.  `None` = inherit the global platform default.
+    /// `Some(0)` = retention disabled for this project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_retention_days: Option<i32>,
 }
 
 impl Project {
@@ -88,6 +92,7 @@ impl Project {
             deleted_at: None,
             archived_at: None,
             scheduled_deletion_at: None,
+            run_retention_days: None,
         }
     }
 
@@ -114,6 +119,7 @@ impl Project {
             deleted_at: None,
             archived_at: None,
             scheduled_deletion_at: None,
+            run_retention_days: None,
         }
     }
 
@@ -213,6 +219,44 @@ pub struct UpdateProject {
     /// New visibility tier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<ResourceVisibility>,
+    /// Per-project run retention override in days.
+    ///
+    /// - `None` (field absent from JSON) → leave unchanged.
+    /// - `Some(None)` (`null` in JSON) → clear override, inherit global default.
+    /// - `Some(Some(n))` → set override to `n` days (0 = disabled for this project).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_with_double_option"
+    )]
+    pub run_retention_days: Option<Option<i32>>,
+}
+
+/// Double-`Option` serde helper: absent field → `None`; JSON `null` → `Some(None)`; value → `Some(Some(v))`.
+mod serde_with_double_option {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S, T: Serialize>(
+        value: &Option<Option<T>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            None => serializer.serialize_none(),
+            Some(inner) => inner.serialize(serializer),
+        }
+    }
+
+    pub fn deserialize<'de, D, T: Deserialize<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Option<T>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Some(Option::deserialize(deserializer)?))
+    }
 }
 
 #[cfg(test)]

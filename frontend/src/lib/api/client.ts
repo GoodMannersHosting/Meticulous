@@ -827,7 +827,12 @@ export const apiMethods = {
 			scheduleDeletion: (id: string, retentionDays?: number) =>
 				api.post<{ message: string; scheduled_deletion_at: string }>(`/api/v1/admin/projects/${id}/schedule-deletion`, { retention_days: retentionDays ?? 7 }),
 			cancelDeletion: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/cancel-deletion`),
-			forceDelete: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/force-delete`)
+			forceDelete: (id: string) => api.post<{ message: string }>(`/api/v1/admin/projects/${id}/force-delete`),
+			patchRetention: (id: string, runRetentionDays: number | null) =>
+				api.patch<{ project_id: string; run_retention_days: number | null }>(
+					`/api/v1/admin/projects/${id}/retention`,
+					{ run_retention_days: runRetentionDays }
+				)
 		},
 		workflows: {
 			approve: (workflowId: string, note?: string) =>

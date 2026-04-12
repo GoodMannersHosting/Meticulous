@@ -128,6 +128,8 @@ export interface Project {
 	visibility: ResourceVisibility;
 	created_at: string;
 	updated_at: string;
+	/** Per-project run data retention override in days.  `null` = inherit platform default. */
+	run_retention_days?: number | null;
 }
 
 export interface CreateProjectInput {
@@ -236,6 +238,10 @@ export interface PlatformSettings {
 	allow_unauthenticated_access: boolean;
 	/** When `false`, create/rotate for that external kind is rejected (`aws_sm`, `vault`, …). */
 	stored_secret_external_kinds?: Record<string, boolean>;
+	/** Hours of agent heartbeat history to retain.  0 = disabled (keep forever). */
+	heartbeat_retention_hours?: number;
+	/** Default days of pipeline run data to retain across all projects.  0 = disabled. */
+	run_retention_days?: number;
 }
 
 /** `GET /api/v1/stored-secret-policy` — readable by any authenticated user. */

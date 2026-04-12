@@ -54,4 +54,19 @@ impl<'a> PlatformSettingsRepo<'a> {
         let setting = self.get("allow_unauthenticated_access").await?;
         Ok(setting.and_then(|s| s.value.as_bool()).unwrap_or(false))
     }
+
+    /// How many hours of agent heartbeat rows to retain.  0 = disabled (keep forever).
+    pub async fn heartbeat_retention_hours(&self) -> Result<i64> {
+        let setting = self.get("heartbeat_retention_hours").await?;
+        Ok(setting
+            .and_then(|s| s.value.as_i64())
+            .unwrap_or(48)
+            .max(0))
+    }
+
+    /// Global default: how many days to retain pipeline run data.  0 = disabled.
+    pub async fn run_retention_days(&self) -> Result<i64> {
+        let setting = self.get("run_retention_days").await?;
+        Ok(setting.and_then(|s| s.value.as_i64()).unwrap_or(0).max(0))
+    }
 }

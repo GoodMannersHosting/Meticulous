@@ -450,8 +450,14 @@
 </div>
 
 {#if showResetPasswordModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => showResetPasswordModal = false}>
-		<div class="w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl" onclick={(e) => e.stopPropagation()}>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button
+			type="button"
+			class="absolute inset-0 bg-black/50"
+			aria-label="Close dialog"
+			onclick={() => (showResetPasswordModal = false)}
+		></button>
+		<div class="relative z-10 w-full max-w-md rounded-lg bg-[var(--bg-primary)] p-6 shadow-xl">
 			<div class="flex items-center justify-between">
 				<h3 class="text-lg font-semibold text-[var(--text-primary)]">Reset Password</h3>
 				<button

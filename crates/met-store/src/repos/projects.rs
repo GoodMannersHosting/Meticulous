@@ -7,6 +7,15 @@ use sqlx::PgPool;
 
 use crate::error::{Result, StoreError};
 
+/// Lightweight row used by the data-retention background task.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ProjectRetentionRow {
+    /// Project identifier.
+    pub id: ProjectId,
+    /// Effective retention in days (project override or platform default, already > 0).
+    pub effective_retention_days: i64,
+}
+
 /// Repository for project operations.
 pub struct ProjectRepo<'a> {
     pool: &'a PgPool,
@@ -31,7 +40,8 @@ impl<'a> ProjectRepo<'a> {
             INSERT INTO projects (id, org_id, name, slug, description, owner_type, owner_id, visibility, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at,
+                      run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -75,7 +85,7 @@ impl<'a> ProjectRepo<'a> {
         sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -91,7 +101,7 @@ impl<'a> ProjectRepo<'a> {
         sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE id = $1
             "#,
@@ -107,7 +117,7 @@ impl<'a> ProjectRepo<'a> {
         sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL
             "#,
@@ -129,7 +139,7 @@ impl<'a> ProjectRepo<'a> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE org_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
             ORDER BY created_at DESC
@@ -211,7 +221,7 @@ impl<'a> ProjectRepo<'a> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE org_id = $1 AND archived_at IS NOT NULL AND deleted_at IS NULL
             ORDER BY archived_at DESC
@@ -232,7 +242,7 @@ impl<'a> ProjectRepo<'a> {
         let projects = sqlx::query_as::<_, Project>(
             r#"
             SELECT id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                   created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             FROM projects
             WHERE scheduled_deletion_at IS NOT NULL AND scheduled_deletion_at <= NOW() AND deleted_at IS NULL
             ORDER BY scheduled_deletion_at ASC
@@ -291,13 +301,22 @@ impl<'a> ProjectRepo<'a> {
 
         let visibility = input.visibility.unwrap_or(existing.visibility);
 
+        // `None` = absent from request → keep existing value
+        // `Some(None)` = explicit null → clear override
+        // `Some(Some(n))` = new value
+        let run_retention_days = match input.run_retention_days {
+            None => existing.run_retention_days,
+            Some(v) => v,
+        };
+
         let project = sqlx::query_as::<_, Project>(
             r#"
             UPDATE projects
-            SET name = $2, slug = $3, description = $4, visibility = $5, updated_at = NOW()
+            SET name = $2, slug = $3, description = $4, visibility = $5,
+                run_retention_days = $6, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -305,6 +324,7 @@ impl<'a> ProjectRepo<'a> {
         .bind(&slug)
         .bind(description)
         .bind(visibility)
+        .bind(run_retention_days)
         .fetch_one(self.pool)
         .await?;
 
@@ -319,7 +339,7 @@ impl<'a> ProjectRepo<'a> {
             SET archived_at = NOW(), updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -338,7 +358,7 @@ impl<'a> ProjectRepo<'a> {
             SET archived_at = NULL, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NOT NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -359,7 +379,7 @@ impl<'a> ProjectRepo<'a> {
             SET scheduled_deletion_at = $2, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -379,7 +399,7 @@ impl<'a> ProjectRepo<'a> {
             SET scheduled_deletion_at = NULL, updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND scheduled_deletion_at IS NOT NULL
             RETURNING id, org_id, name, slug, description, owner_type, owner_id, visibility,
-                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at
+                      created_at, updated_at, deleted_at, archived_at, scheduled_deletion_at, run_retention_days
             "#,
         )
         .bind(id.as_uuid())
@@ -427,6 +447,32 @@ impl<'a> ProjectRepo<'a> {
         }
 
         Ok(())
+    }
+
+    /// List all active projects across all organisations that have data-retention configured.
+    ///
+    /// `global_days` is the platform-wide default (0 = disabled).  Projects with a non-null
+    /// `run_retention_days` override use that value; otherwise the global default applies.
+    /// Only projects where the effective value is > 0 are returned.
+    pub async fn list_with_retention(
+        &self,
+        global_days: i64,
+    ) -> Result<Vec<ProjectRetentionRow>> {
+        let rows = sqlx::query_as::<_, ProjectRetentionRow>(
+            r#"
+            SELECT
+                id,
+                COALESCE(run_retention_days::bigint, $1) AS effective_retention_days
+            FROM projects
+            WHERE deleted_at IS NULL
+              AND COALESCE(run_retention_days::bigint, $1) > 0
+            "#,
+        )
+        .bind(global_days)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     /// Count projects in an organization.

@@ -92,9 +92,9 @@ workflows:
     inputs:
       path: meticulous
 
-  - name: SAST (Semgrep)
-    id: semgrep
-    workflow: global/semgrep
+  - name: SAST (Opengrep)
+    id: opengrep
+    workflow: global/opengrep
     version: "1.0.0"
     depends-on: [checkout]
     inputs:

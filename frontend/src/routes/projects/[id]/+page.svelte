@@ -144,6 +144,13 @@
 	let archiveProjectLoading = $state(false);
 	let archiveProjectError = $state<string | null>(null);
 
+	// Per-project run retention override (admin only)
+	// Sentinel value -1 = "inherit global default" (maps to null in API)
+	let retentionValue = $state<number>(-1);
+	let retentionSaving = $state(false);
+	let retentionError = $state<string | null>(null);
+	let retentionSuccess = $state<string | null>(null);
+
 	let projectMembers = $state<import('$api/types').Member[]>([]);
 	let membersLoading = $state(false);
 	let membersError = $state<string | null>(null);
@@ -311,6 +318,13 @@
 		settingsDescription = project.description ?? '';
 		settingsVisibility = project.visibility ?? 'authenticated';
 		settingsError = null;
+	});
+
+	$effect(() => {
+		if (activeTab !== 'advanced' || !project || loading) return;
+		retentionValue = project.run_retention_days ?? -1;
+		retentionError = null;
+		retentionSuccess = null;
 	});
 
 	$effect(() => {
@@ -691,6 +705,24 @@
 			settingsError = e instanceof Error ? e.message : 'Failed to save project';
 		} finally {
 			settingsSaving = false;
+		}
+	}
+
+	async function saveRetention() {
+		if (!project) return;
+		retentionSaving = true;
+		retentionError = null;
+		retentionSuccess = null;
+		try {
+			// -1 sentinel means "clear override, inherit global"
+			const apiValue = retentionValue === -1 ? null : retentionValue;
+			await apiMethods.admin.projects.patchRetention(project.id, apiValue);
+			project = { ...project, run_retention_days: apiValue };
+			retentionSuccess = 'Retention setting saved.';
+		} catch (e) {
+			retentionError = e instanceof Error ? e.message : 'Failed to save retention setting';
+		} finally {
+			retentionSaving = false;
 		}
 	}
 
@@ -2265,15 +2297,55 @@
 
 				</div>
 			</Card>
-		{:else if activeTab === 'advanced'}
-			<Card>
-				<div class="space-y-6">
-					<div>
-						<h3 class="text-base font-medium text-[var(--text-primary)]">Danger Zone</h3>
-						<p class="mt-1 text-sm text-[var(--text-secondary)]">
-							Irreversible actions that affect the entire project.
-						</p>
-					</div>
+	{:else if activeTab === 'advanced'}
+		<!-- Per-project run retention (org admin only) -->
+		<Card>
+			<div class="space-y-4">
+				<div>
+					<h3 class="text-base font-medium text-[var(--text-primary)]">Run Data Retention</h3>
+					<p class="mt-1 text-sm text-[var(--text-secondary)]">
+						Override the platform-wide run retention policy for this project. Only organisation
+						admins can change this setting. Terminal runs (succeeded, failed, cancelled) older than
+						the window are purged automatically every 5 minutes.
+					</p>
+				</div>
+
+				{#if retentionError}
+					<Alert variant="error">{retentionError}</Alert>
+				{/if}
+				{#if retentionSuccess}
+					<Alert variant="success">{retentionSuccess}</Alert>
+				{/if}
+
+				<div class="flex items-center gap-3">
+					<select
+						bind:value={retentionValue}
+						class="block rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					>
+						<option value={-1}>Use platform default</option>
+						<option value={0}>Disabled (keep forever)</option>
+						<option value={30}>30 days</option>
+						<option value={60}>60 days</option>
+						<option value={90}>90 days</option>
+						<option value={180}>180 days</option>
+						<option value={365}>1 year</option>
+						<option value={1095}>3 years</option>
+					</select>
+					<Button variant="outline" size="sm" onclick={saveRetention} loading={retentionSaving}>
+						Save
+					</Button>
+				</div>
+			</div>
+		</Card>
+
+		<Card>
+			<div class="space-y-6">
+				<div>
+					<h3 class="text-base font-medium text-[var(--text-primary)]">Danger Zone</h3>
+					<p class="mt-1 text-sm text-[var(--text-secondary)]">
+						Irreversible actions that affect the entire project.
+					</p>
+				</div>
 					<div class="rounded-lg border border-amber-200 p-4 dark:border-amber-900/60">
 						<div class="flex items-center justify-between gap-4">
 							<div>

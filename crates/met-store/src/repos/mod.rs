@@ -78,7 +78,7 @@ pub use platform_health::{
 };
 pub use platform_settings::PlatformSettingsRepo;
 pub use project_members::{ProjectAccessRepo, ProjectMemberRow, ProjectRole};
-pub use projects::ProjectRepo;
+pub use projects::{ProjectRepo, ProjectRetentionRow};
 pub use roles::RoleRepo;
 pub use run_binary_executions::{
     RunBinaryExecutionAgg, RunBinaryExecutionRepo, RunBinaryFootprintRow,

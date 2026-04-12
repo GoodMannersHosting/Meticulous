@@ -73,11 +73,9 @@
 	const showAdminNav = $derived(auth.user?.role === 'admin');
 	const adminActive = $derived(isActive('/admin'));
 
-	/** Close the drawer after navigating (mobile only). */
-	function onSidebarClick(e: MouseEvent): void {
-		if (!sidebar.isMobile) return;
-		const el = (e.target as HTMLElement).closest('a[href]');
-		if (el) sidebar.closeMobile();
+	/** Close the mobile drawer after following an in-sidebar link. */
+	function closeMobileNav(): void {
+		if (sidebar.isMobile) sidebar.closeMobile();
 	}
 </script>
 
@@ -90,12 +88,11 @@
 	"
 	style="width: {sidebarWidth}; transform: translateX({translateX});"
 	aria-label="Sidebar navigation"
-	onclick={onSidebarClick}
 >
 	<div class="flex h-full flex-col">
 		<div class="flex h-16 items-center justify-between border-b border-[var(--border-primary)] px-4">
 			{#if !sidebar.collapsed}
-				<a href="/dashboard" class="flex items-center gap-2">
+				<a href="/dashboard" class="flex items-center gap-2" onclick={closeMobileNav}>
 					<div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700">
 						<svg class="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 							<path d="M5 12L10 17L20 7" />
@@ -104,7 +101,12 @@
 					<span class="text-lg font-semibold text-[var(--text-primary)]">Meticulous</span>
 				</a>
 			{:else}
-				<a href="/dashboard" class="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700" aria-label="Meticulous Home">
+				<a
+					href="/dashboard"
+					class="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700"
+					aria-label="Meticulous Home"
+					onclick={closeMobileNav}
+				>
 					<svg class="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 						<path d="M5 12L10 17L20 7" />
 					</svg>
@@ -138,6 +140,7 @@
 														: 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'}
 												"
 												aria-current={active ? 'page' : undefined}
+												onclick={closeMobileNav}
 											>
 												<Icon class="h-5 w-5" />
 											</a>
@@ -153,6 +156,7 @@
 													: 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'}
 											"
 											aria-current={active ? 'page' : undefined}
+											onclick={closeMobileNav}
 										>
 											<Icon class="h-5 w-5" />
 											<span class="text-sm font-medium">{item.label}</span>
@@ -183,6 +187,7 @@
 									{adminActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-[var(--bg-secondary)]' : ''}
 								"
 								aria-current={adminActive ? 'page' : undefined}
+								onclick={closeMobileNav}
 							>
 								<Shield class="h-5 w-5" strokeWidth={2.25} />
 							</a>
@@ -200,6 +205,7 @@
 									: ''}
 							"
 							aria-current={adminActive ? 'page' : undefined}
+							onclick={closeMobileNav}
 						>
 							<Shield class="h-5 w-5 shrink-0" strokeWidth={2.25} />
 							<span>Admin</span>

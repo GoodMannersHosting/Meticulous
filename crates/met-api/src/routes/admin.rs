@@ -89,6 +89,10 @@ pub fn router() -> Router<AppState> {
             post(cancel_project_deletion),
         )
         .route("/projects/{id}/force-delete", post(force_delete_project))
+        .route(
+            "/projects/{id}/retention",
+            axum::routing::patch(patch_project_retention),
+        )
         .route("/archive", get(list_org_archive))
         .route("/projects/{id}/unarchive", post(admin_unarchive_project))
         .route("/pipelines/{id}/unarchive", post(admin_unarchive_pipeline))
@@ -2040,6 +2044,61 @@ async fn force_delete_project(
     Ok(Json(
         serde_json::json!({ "message": "project permanently deleted" }),
     ))
+}
+
+// ============================================================================
+// Project Retention Override
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct PatchProjectRetentionRequest {
+    /// Per-project run retention in days.  `null` clears the override (reverts to global default).
+    /// `0` disables retention for this project.
+    run_retention_days: Option<i32>,
+}
+
+#[instrument(skip(state, req))]
+async fn patch_project_retention(
+    State(state): State<AppState>,
+    Auth(admin): Auth,
+    Path(project_id): Path<ProjectId>,
+    Json(req): Json<PatchProjectRetentionRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_admin(&admin)?;
+
+    if let Some(days) = req.run_retention_days {
+        if days < 0 {
+            return Err(ApiError::bad_request("run_retention_days must be >= 0"));
+        }
+    }
+
+    let repo = ProjectRepo::new(state.db());
+    let project = repo.get(project_id).await?;
+
+    if project.org_id != admin.org_id {
+        return Err(ApiError::forbidden(
+            "cannot modify projects in other organizations",
+        ));
+    }
+
+    let update = met_core::models::UpdateProject {
+        run_retention_days: Some(req.run_retention_days),
+        ..Default::default()
+    };
+
+    let updated = repo.update(project_id, &update).await?;
+
+    tracing::info!(
+        admin_id = %admin.user_id,
+        project_id = %project_id,
+        run_retention_days = ?updated.run_retention_days,
+        "project run retention updated"
+    );
+
+    Ok(Json(serde_json::json!({
+        "project_id": project_id.to_string(),
+        "run_retention_days": updated.run_retention_days,
+    })))
 }
 
 // ============================================================================

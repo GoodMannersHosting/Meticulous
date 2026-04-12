@@ -13,6 +13,27 @@
 		{ value: 1440, label: 'Daily' }
 	];
 
+	const HEARTBEAT_RETENTION_OPTIONS = [
+		{ value: 2, label: '2 hours' },
+		{ value: 6, label: '6 hours' },
+		{ value: 12, label: '12 hours' },
+		{ value: 24, label: '24 hours' },
+		{ value: 48, label: '48 hours (default)' },
+		{ value: 168, label: '7 days' },
+		{ value: 720, label: '30 days' },
+		{ value: 0, label: 'Disabled (keep forever)' }
+	];
+
+	const RUN_RETENTION_OPTIONS = [
+		{ value: 0, label: 'Disabled (keep forever)' },
+		{ value: 30, label: '30 days' },
+		{ value: 60, label: '60 days' },
+		{ value: 90, label: '90 days' },
+		{ value: 180, label: '180 days' },
+		{ value: 365, label: '1 year' },
+		{ value: 1095, label: '3 years' }
+	];
+
 	const EXTERNAL_KIND_TOGGLES: { key: string; label: string; description: string }[] = [
 		{
 			key: 'aws_sm',
@@ -48,6 +69,8 @@
 	let allowUnauth = $state(false);
 	/** Merged policy (defaults true when unset). */
 	let extKindEnabled = $state<Record<string, boolean>>({});
+	let heartbeatRetentionHours = $state(48);
+	let runRetentionDays = $state(0);
 
 	// Global workflow sync default
 	let globalSyncInterval = $state(0);
@@ -63,6 +86,8 @@
 			const base: Record<string, boolean> = {};
 			for (const { key } of EXTERNAL_KIND_TOGGLES) base[key] = true;
 			extKindEnabled = { ...base, ...(settings.stored_secret_external_kinds ?? {}) };
+			heartbeatRetentionHours = settings.heartbeat_retention_hours ?? 48;
+			runRetentionDays = settings.run_retention_days ?? 0;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load settings';
 		} finally {
@@ -108,12 +133,16 @@
 			}
 			const updated = await apiMethods.platformSettings.update({
 				allow_unauthenticated_access: allowUnauth,
-				stored_secret_external_kinds
+				stored_secret_external_kinds,
+				heartbeat_retention_hours: heartbeatRetentionHours,
+				run_retention_days: runRetentionDays
 			});
 			allowUnauth = updated.allow_unauthenticated_access;
 			const base: Record<string, boolean> = {};
 			for (const { key } of EXTERNAL_KIND_TOGGLES) base[key] = true;
 			extKindEnabled = { ...base, ...(updated.stored_secret_external_kinds ?? {}) };
+			heartbeatRetentionHours = updated.heartbeat_retention_hours ?? 48;
+			runRetentionDays = updated.run_retention_days ?? 0;
 			success = 'Settings saved';
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to save';
@@ -167,6 +196,55 @@
 						Save
 					</Button>
 				{/if}
+			</div>
+		</div>
+
+		<!-- Data Retention -->
+		<div class="max-w-xl rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-6">
+			<h3 class="mb-1 text-sm font-medium text-[var(--text-primary)]">Data Retention</h3>
+			<p class="mb-4 text-xs text-[var(--text-secondary)]">
+				Control how long historical data is kept.  Runs are purged in the background every 5 minutes;
+				only terminal runs (succeeded, failed, cancelled) are eligible for deletion.
+				Per-project overrides can be set from the project admin panel.
+			</p>
+
+			<div class="space-y-5">
+				<div>
+					<label for="heartbeat-retention" class="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
+						Agent heartbeat history
+					</label>
+					<select
+						id="heartbeat-retention"
+						bind:value={heartbeatRetentionHours}
+						class="block w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					>
+						{#each HEARTBEAT_RETENTION_OPTIONS as opt (opt.value)}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+					<p class="mt-1 text-xs text-[var(--text-secondary)]">
+						CPU/memory/disk samples recorded each heartbeat.  Short windows (2–48 h) are usually sufficient.
+					</p>
+				</div>
+
+				<div>
+					<label for="run-retention" class="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
+						Pipeline run data (platform default)
+					</label>
+					<select
+						id="run-retention"
+						bind:value={runRetentionDays}
+						class="block w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-primary-500"
+					>
+						{#each RUN_RETENTION_OPTIONS as opt (opt.value)}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+					<p class="mt-1 text-xs text-[var(--text-secondary)]">
+						Deletes run records, job logs, execution telemetry, and related data.  Audit log entries are
+						not affected.  Set to <em>Disabled</em> to keep data indefinitely.
+					</p>
+				</div>
 			</div>
 		</div>
 

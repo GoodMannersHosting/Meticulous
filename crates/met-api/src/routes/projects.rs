@@ -290,6 +290,7 @@ async fn update_project(
         slug: req.slug,
         description: req.description,
         visibility: None,
+        run_retention_days: None,
     };
 
     let project = repo.update(id, &update).await?;
