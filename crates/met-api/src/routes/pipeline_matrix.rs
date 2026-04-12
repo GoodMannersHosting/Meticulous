@@ -78,18 +78,16 @@ async fn pipeline_matrix(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut environments = vec![MatrixEnvironment {
-        id: None,
-        name: "Global".to_string(),
-        tier: "global".to_string(),
-    }];
-    for e in &envs {
-        environments.push(MatrixEnvironment {
+    // Only real project environments are matrix columns. Unscoped runs (`environment_id` NULL) are
+    // not an "environment" — they are visible in the run list, not as a pseudo-Global column.
+    let environments: Vec<MatrixEnvironment> = envs
+        .iter()
+        .map(|e| MatrixEnvironment {
             id: Some(e.id.to_string()),
             name: e.name.clone(),
             tier: e.tier.clone(),
-        });
-    }
+        })
+        .collect();
 
     let cell_rows: Vec<MatrixCellRow> = sqlx::query_as(
         r#"

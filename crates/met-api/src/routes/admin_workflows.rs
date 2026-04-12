@@ -475,6 +475,10 @@ pub struct ModerationEventRow {
     pub workflow_id: Uuid,
     pub action: String,
     pub actor_user_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_display_name: Option<String>,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -512,10 +516,19 @@ async fn list_moderation_events(
 
     let events: Vec<ModerationEventRow> = sqlx::query_as(
         r#"
-        SELECT id, workflow_id, action, actor_user_id, note, created_at
-        FROM workflow_moderation_events
-        WHERE workflow_id = $1 AND org_id = $2
-        ORDER BY created_at DESC
+        SELECT
+            m.id,
+            m.workflow_id,
+            m.action,
+            m.actor_user_id,
+            u.email AS actor_email,
+            u.display_name AS actor_display_name,
+            m.note,
+            m.created_at
+        FROM workflow_moderation_events m
+        LEFT JOIN users u ON u.id = m.actor_user_id AND u.org_id = m.org_id
+        WHERE m.workflow_id = $1 AND m.org_id = $2
+        ORDER BY m.created_at DESC
         LIMIT 200
         "#,
     )

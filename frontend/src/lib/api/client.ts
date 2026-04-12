@@ -477,6 +477,7 @@ export const apiMethods = {
 				value: string;
 				is_sensitive?: boolean;
 				pipeline_id?: string;
+				environment_id?: string;
 				scope?: string;
 			}
 		) =>
@@ -484,8 +485,16 @@ export const apiMethods = {
 				scope: 'project',
 				...body
 			}),
-		update: (id: string, body: { name?: string; value?: string; is_sensitive?: boolean }) =>
-			api.patch<import('./types').ProjectVariable>(`/api/v1/variables/${id}`, body),
+		update: (
+			id: string,
+			body: {
+				name?: string;
+				value?: string;
+				is_sensitive?: boolean;
+				/** Omit to leave unchanged; `null` clears environment scope. */
+				environment_id?: string | null;
+			}
+		) => api.patch<import('./types').ProjectVariable>(`/api/v1/variables/${id}`, body),
 		delete: (id: string) => api.delete<{ message: string }>(`/api/v1/variables/${id}`)
 	},
 

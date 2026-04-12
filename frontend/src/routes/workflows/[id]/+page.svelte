@@ -562,8 +562,41 @@
 		goto(`/workflows/${row.id}`);
 	}
 
+	/** Past-tense labels for the moderation timeline. */
 	function moderationActionLabel(action: string) {
-		return { approve: 'Approve', reject: 'Reject', trust: 'Trust', untrust: 'Untrust' }[action] ?? action;
+		return (
+			{
+				approve: 'Approved',
+				reject: 'Rejected',
+				trust: 'Marked trusted',
+				untrust: 'Marked untrusted',
+				delete: 'Deleted'
+			}[action] ?? action
+		);
+	}
+
+	/** Imperative labels for confirm dialogs and primary buttons. */
+	function moderationDialogVerb(action: string) {
+		return (
+			{
+				approve: 'Approve',
+				reject: 'Reject',
+				trust: 'Mark trusted',
+				untrust: 'Mark untrusted'
+			}[action] ?? action
+		);
+	}
+
+	function moderationActorLine(ev: ModerationEvent): string {
+		const name = ev.actor_display_name?.trim();
+		const email = ev.actor_email?.trim();
+		if (name && email && name !== email) {
+			return `${name} (${email})`;
+		}
+		if (name) return name;
+		if (email) return email;
+		const id = ev.actor_user_id ?? '';
+		return id.length > 12 ? `${id.slice(0, 8)}…` : id || 'Unknown user';
 	}
 
 	function moderationActionIcon(action: string): 'check' | 'x' | 'shield' | 'minus' {
@@ -888,35 +921,51 @@
 				{:else if moderationEvents.length === 0}
 					<p class="text-sm text-[var(--text-tertiary)]">No moderation actions recorded.</p>
 				{:else}
-					<ol class="relative border-l border-[var(--border-primary)] pl-5 space-y-5">
-						{#each moderationEvents as ev (ev.id)}
+					<ol class="space-y-0">
+						{#each moderationEvents as ev, idx (ev.id)}
 							{@const isGood = ev.action === 'approve' || ev.action === 'trust'}
 							{@const isBad = ev.action === 'reject' || ev.action === 'untrust' || ev.action === 'delete'}
-							<li class="relative">
-								<span
-									class="absolute -left-[1.125rem] flex h-5 w-5 items-center justify-center rounded-full ring-2 ring-[var(--bg-secondary)] {isGood
-										? 'bg-success-100 dark:bg-success-900/30'
-										: isBad
-											? 'bg-error-100 dark:bg-error-900/30'
-											: 'bg-secondary-100 dark:bg-secondary-800'}"
-								>
-									{#if isGood}
-										<CheckCircle class="h-3.5 w-3.5 text-success-600 dark:text-success-400" />
-									{:else if isBad}
-										<XCircle class="h-3.5 w-3.5 text-error-600 dark:text-error-400" />
-									{:else}
-										<Clock class="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+							{@const isLast = idx === moderationEvents.length - 1}
+							<li class="flex gap-4">
+								<div class="flex w-9 shrink-0 flex-col items-center">
+									<span
+										class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-[var(--bg-secondary)] {isGood
+											? 'bg-success-100 dark:bg-success-900/30'
+											: isBad
+												? 'bg-error-100 dark:bg-error-900/30'
+												: 'bg-secondary-100 dark:bg-secondary-800'}"
+									>
+										{#if isGood}
+											<CheckCircle class="h-4 w-4 text-success-600 dark:text-success-400" />
+										{:else if isBad}
+											<XCircle class="h-4 w-4 text-error-600 dark:text-error-400" />
+										{:else}
+											<Clock class="h-4 w-4 text-[var(--text-tertiary)]" />
+										{/if}
+									</span>
+									{#if !isLast}
+										<div
+											class="mt-1 w-px flex-1 min-h-[1.25rem] bg-[var(--border-primary)]"
+											aria-hidden="true"
+										></div>
 									{/if}
-								</span>
-								<div>
-									<p class="text-sm font-medium text-[var(--text-primary)]">
-										<span class="capitalize">{ev.action}</span>
-										<span class="ml-2 text-xs font-normal text-[var(--text-tertiary)]">
-											{formatRelativeTime(ev.created_at)}
-										</span>
-									</p>
+								</div>
+								<div class="min-w-0 flex-1 space-y-1.5 {isLast ? 'pb-0' : 'pb-6'}">
+									<div>
+										<p class="text-sm font-medium text-[var(--text-primary)]">
+											{moderationActionLabel(ev.action)}
+										</p>
+										<p class="mt-0.5 text-xs text-[var(--text-secondary)]">
+											<span class="text-[var(--text-tertiary)]">By</span>
+											<span class="ml-1 font-medium text-[var(--text-primary)]">{moderationActorLine(ev)}</span>
+											<span class="mx-1.5 text-[var(--text-tertiary)]">·</span>
+											<span class="text-[var(--text-tertiary)]">{formatRelativeTime(ev.created_at)}</span>
+										</p>
+									</div>
 									{#if ev.note}
-										<div class="mt-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+										<div
+											class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2"
+										>
 											<MarkdownBlock source={ev.note} />
 										</div>
 									{/if}
@@ -994,7 +1043,7 @@
 {#if isModerator}
 	<Dialog
 		bind:open={moderationDialogOpen}
-		title="{moderationDialogAction ? moderationActionLabel(moderationDialogAction) : ''} workflow"
+		title="{moderationDialogAction ? `${moderationDialogVerb(moderationDialogAction)} workflow` : ''}"
 		description="Optionally add a markdown note explaining your decision. Security engineers must provide a note."
 	>
 		{#if moderationDialogAction}
@@ -1045,7 +1094,7 @@
 						loading={moderationDialogLoading}
 						onclick={() => void submitModerationAction()}
 					>
-						{moderationActionLabel(moderationDialogAction)}
+						{moderationDialogVerb(moderationDialogAction)}
 					</Button>
 				</div>
 			</div>

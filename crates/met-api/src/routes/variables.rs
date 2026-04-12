@@ -7,7 +7,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use met_core::ids::{PipelineId, ProjectId, VariableId};
-use met_store::repos::PipelineRepo;
+use met_store::repos::{EnvironmentRepo, PipelineRepo};
+use met_store::StoreError;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -22,6 +23,26 @@ use crate::{
     },
     state::AppState,
 };
+
+async fn ensure_environment_in_project(
+    pool: &sqlx::PgPool,
+    project_id: ProjectId,
+    environment_id: Uuid,
+) -> ApiResult<()> {
+    let row = EnvironmentRepo::new(pool)
+        .get(environment_id)
+        .await
+        .map_err(|e| match e {
+            StoreError::NotFound { .. } => ApiError::bad_request("environment not found"),
+            _ => ApiError::internal(e.to_string()),
+        })?;
+    if row.project_id != project_id.as_uuid() {
+        return Err(ApiError::bad_request(
+            "environment does not belong to this project",
+        ));
+    }
+    Ok(())
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -113,10 +134,10 @@ async fn list_variables(
 
     let rows = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, environment_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE project_id = $1 AND org_id = $2
-        ORDER BY pipeline_id NULLS FIRST, name ASC
+        ORDER BY pipeline_id NULLS FIRST, environment_id NULLS FIRST, name ASC
         LIMIT $3 OFFSET 0
         "#,
     )
@@ -197,20 +218,25 @@ async fn create_variable(
         }
     }
 
+    if let Some(eid) = req.environment_id {
+        ensure_environment_in_project(state.db(), project_id, eid).await?;
+    }
+
     let id = Uuid::now_v7();
     let now = Utc::now();
 
     let row = sqlx::query_as::<_, VariableRow>(
         r#"
-        INSERT INTO variables (id, project_id, org_id, pipeline_id, name, value, scope, is_sensitive, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::variable_scope, $8, $9, $9)
-        RETURNING id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        INSERT INTO variables (id, project_id, org_id, pipeline_id, environment_id, name, value, scope, is_sensitive, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::variable_scope, $9, $10, $10)
+        RETURNING id, project_id, org_id, pipeline_id, environment_id, name, value, scope::text, is_sensitive, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(project_id.as_uuid())
     .bind(user.org_id.as_uuid())
     .bind(req.pipeline_id.map(|p| p.as_uuid()))
+    .bind(req.environment_id)
     .bind(&req.name)
     .bind(&req.value)
     .bind(&req.scope)
@@ -230,6 +256,9 @@ pub struct UpdateVariableRequest {
     pub name: Option<String>,
     pub value: Option<String>,
     pub is_sensitive: Option<bool>,
+    /// Omit: unchanged. `null`: clear environment scope. UUID: set scope.
+    #[serde(default)]
+    pub environment_id: Option<Option<Uuid>>,
 }
 
 #[utoipa::path(
@@ -253,7 +282,7 @@ async fn update_variable(
 ) -> ApiResult<Json<VariableResponse>> {
     let existing = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, environment_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE id = $1
         "#,
@@ -282,18 +311,28 @@ async fn update_variable(
     let value = req.value.unwrap_or(existing.value);
     let is_sensitive = req.is_sensitive.unwrap_or(existing.is_sensitive);
 
+    let new_environment_id: Option<Uuid> = match &req.environment_id {
+        None => existing.environment_id,
+        Some(None) => None,
+        Some(Some(eid)) => {
+            ensure_environment_in_project(state.db(), project_id, *eid).await?;
+            Some(*eid)
+        }
+    };
+
     let row = sqlx::query_as::<_, VariableRow>(
         r#"
         UPDATE variables
-        SET name = $2, value = $3, is_sensitive = $4, updated_at = NOW()
+        SET name = $2, value = $3, is_sensitive = $4, environment_id = $5, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        RETURNING id, project_id, org_id, pipeline_id, environment_id, name, value, scope::text, is_sensitive, created_at, updated_at
         "#,
     )
     .bind(id.as_uuid())
     .bind(&name)
     .bind(&value)
     .bind(is_sensitive)
+    .bind(new_environment_id)
     .fetch_one(state.db())
     .await
     .map_err(met_store::StoreError::from)?;
@@ -322,7 +361,7 @@ async fn delete_variable(
 ) -> ApiResult<Json<serde_json::Value>> {
     let existing = sqlx::query_as::<_, VariableRow>(
         r#"
-        SELECT id, project_id, org_id, pipeline_id, name, value, scope::text, is_sensitive, created_at, updated_at
+        SELECT id, project_id, org_id, pipeline_id, environment_id, name, value, scope::text, is_sensitive, created_at, updated_at
         FROM variables
         WHERE id = $1
         "#,

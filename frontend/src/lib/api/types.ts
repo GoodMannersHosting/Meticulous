@@ -538,6 +538,8 @@ export interface ProjectVariable {
 	id: string;
 	project_id: string;
 	pipeline_id?: string | null;
+	/** When set, this value applies only to runs targeting this pipeline environment. */
+	environment_id?: string | null;
 	name: string;
 	/** Omitted when `is_sensitive` is true. */
 	value?: string | null;
@@ -555,6 +557,7 @@ export interface WorkspaceVariableListItem extends ProjectVariable {
 	project_name: string;
 	project_slug: string;
 	pipeline_name?: string | null;
+	environment_name?: string | null;
 }
 
 /** Row from GET /api/v1/workspace/stored-secrets (secret fields flattened in JSON). */
@@ -1008,6 +1011,8 @@ export interface ModerationEvent {
 	/** approve | reject | trust | untrust | delete */
 	action: string;
 	actor_user_id: string;
+	actor_email?: string | null;
+	actor_display_name?: string | null;
 	note?: string | null;
 	created_at: string;
 }

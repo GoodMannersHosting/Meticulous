@@ -58,6 +58,8 @@
 	let hubVarSensitive = $state(false);
 	let hubVarPipelines = $state<Pipeline[]>([]);
 	let hubVarPipelinesLoading = $state(false);
+	let hubVarEnvironments = $state<Environment[]>([]);
+	let hubVarEnvironmentId = $state('');
 	let hubVariableActionLoading = $state(false);
 	let hubVarError = $state<string | null>(null);
 
@@ -164,6 +166,14 @@
 		}))
 	]);
 
+	const hubVarEnvOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...hubVarEnvironments.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
+
 	const hubEditScopePipelineOptions = $derived([
 		{ value: '', label: 'Project-wide (all pipelines)' },
 		...hubEditScopePipelines.map((p) => ({ value: p.id, label: p.name }))
@@ -259,6 +269,33 @@
 			})
 			.finally(() => {
 				if (!cancelled) hubVarPipelinesLoading = false;
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		if (!showHubCreateVariable || !hubVarProjectId) {
+			if (!showHubCreateVariable) {
+				hubVarEnvironments = [];
+				hubVarEnvironmentId = '';
+			}
+			return;
+		}
+		const pid = hubVarProjectId;
+		let cancelled = false;
+		void apiMethods.environments
+			.list(pid)
+			.then((list) => {
+				if (cancelled) return;
+				hubVarEnvironments = list;
+				if (hubVarEnvironmentId && !list.some((e) => e.id === hubVarEnvironmentId)) {
+					hubVarEnvironmentId = '';
+				}
+			})
+			.catch(() => {
+				if (!cancelled) hubVarEnvironments = [];
 			});
 		return () => {
 			cancelled = true;
@@ -405,6 +442,7 @@
 		hubVarError = null;
 		hubVarProjectId = projectId || '';
 		hubVarPipelineId = projectId && pipelineId ? pipelineId : '';
+		hubVarEnvironmentId = '';
 		hubVarName = '';
 		hubVarValue = '';
 		hubVarSensitive = false;
@@ -427,7 +465,8 @@
 				name: hubVarName.trim(),
 				value: hubVarValue,
 				is_sensitive: hubVarSensitive,
-				pipeline_id: hubVarPipelineId || undefined
+				pipeline_id: hubVarPipelineId || undefined,
+				environment_id: hubVarEnvironmentId || undefined
 			});
 			showHubCreateVariable = false;
 			await reloadList();
@@ -816,6 +855,7 @@
 						<tr>
 							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
 							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
+							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Environment</th>
 							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Project</th>
 							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Pipeline</th>
 							<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Value</th>
@@ -828,6 +868,9 @@
 							<tr class="bg-[var(--bg-secondary)]">
 								<td class="px-4 py-3 font-mono text-xs">{v.name}</td>
 								<td class="px-4 py-3">{variableScopeLabel(v)}</td>
+								<td class="px-4 py-3 text-[var(--text-secondary)]">
+									{v.environment_name ?? '—'}
+								</td>
 								<td class="px-4 py-3">
 									<div class="font-medium text-[var(--text-primary)]">{v.project_name}</div>
 									<div class="text-xs text-[var(--text-secondary)]">{v.project_slug}</div>
@@ -1024,6 +1067,14 @@
 				disabled={!hubVarProjectId || hubVarPipelinesLoading}
 			/>
 		</div>
+		{#if hubVarEnvironments.length > 0}
+			<div>
+				<label class="mb-1 block text-sm font-medium text-[var(--text-primary)]" for="hub-v-env"
+					>Environment (optional)</label
+				>
+				<Select id="hub-v-env" options={hubVarEnvOptions} bind:value={hubVarEnvironmentId} />
+			</div>
+		{/if}
 		<div>
 			<label class="mb-1 block text-sm font-medium" for="hub-v-name">Name</label>
 			<Input id="hub-v-name" bind:value={hubVarName} placeholder="e.g. NODE_VERSION" />

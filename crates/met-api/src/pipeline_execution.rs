@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use uuid::Uuid;
 use met_core::ids::{OrganizationId, PipelineId, ProjectId, RunId, TriggerId};
 use met_core::models::{Pipeline, Run};
 use met_parser::ir::PipelineIR;
@@ -16,24 +17,34 @@ use crate::github_scm;
 use crate::state::AppState;
 use crate::workflow_diagnostics;
 
-/// Project-level variables first, then pipeline-level overrides (same name wins for narrower scope).
+/// Merge variables with precedence: project base, then project env, then pipeline base, then pipeline env
+/// (for a run targeting environment `run_environment_id`; omit env-only rows when it is `None`).
 async fn load_platform_variables_merged(
     pool: &PgPool,
     org_id: OrganizationId,
     project_id: ProjectId,
     pipeline_id: PipelineId,
+    run_environment_id: Option<Uuid>,
 ) -> Result<IndexMap<String, String>, sqlx::Error> {
     let rows: Vec<(String, String)> = sqlx::query_as(
         r#"
         SELECT name, value FROM variables
         WHERE org_id = $1 AND project_id = $2
           AND (pipeline_id IS NULL OR pipeline_id = $3)
-        ORDER BY CASE WHEN pipeline_id IS NULL THEN 0 ELSE 1 END, name ASC
+          AND (
+            environment_id IS NULL
+            OR ($4::uuid IS NOT NULL AND environment_id = $4)
+          )
+        ORDER BY
+          CASE WHEN pipeline_id IS NULL THEN 0 ELSE 1 END,
+          CASE WHEN environment_id IS NULL THEN 0 ELSE 1 END,
+          name ASC
         "#,
     )
     .bind(org_id.as_uuid())
     .bind(project_id.as_uuid())
     .bind(pipeline_id.as_uuid())
+    .bind(run_environment_id)
     .fetch_all(pool)
     .await?;
 
@@ -44,7 +55,7 @@ async fn load_platform_variables_merged(
     Ok(map)
 }
 
-/// Precedence: DB project < DB pipeline < YAML `variables:` < one-off trigger payload.
+/// Precedence: DB (project/pipeline × environment, narrowest wins) < YAML `variables:` < one-off trigger payload.
 pub(crate) fn merge_runtime_variables_into_ir(
     pipeline_ir: &mut PipelineIR,
     platform: IndexMap<String, String>,
@@ -154,11 +165,25 @@ pub async fn start_engine_for_existing_run_from_state(
     };
 
     pipeline_ir.id = pipeline_id;
-    pipeline_ir.project_id = Some(project_id);
+       pipeline_ir.project_id = Some(project_id);
 
-    let platform_vars = load_platform_variables_merged(state.db(), org_id, project_id, pipeline_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("load variables: {e}")))?;
+    let run_environment_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT environment_id FROM runs WHERE id = $1"#,
+    )
+    .bind(run_id.as_uuid())
+    .fetch_one(state.db())
+    .await
+    .map_err(|e| ApiError::internal(format!("load run environment: {e}")))?;
+
+    let platform_vars = load_platform_variables_merged(
+        state.db(),
+        org_id,
+        project_id,
+        pipeline_id,
+        run_environment_id,
+    )
+    .await
+    .map_err(|e| ApiError::internal(format!("load variables: {e}")))?;
     merge_runtime_variables_into_ir(&mut pipeline_ir, platform_vars, trigger_variables);
 
     let permit = state

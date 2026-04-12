@@ -32,9 +32,7 @@
 	});
 
 	function cellForWfEnv(workflow: string, env: MatrixEnvironment): MatrixCell | undefined {
-		return data.cells.find(
-			(c) => c.workflow === workflow && (env.id === null ? c.environment === null : c.environment === env.name)
-		);
+		return data.cells.find((c) => c.workflow === workflow && c.environment === env.name);
 	}
 
 	function statusColor(status: string | null): string {

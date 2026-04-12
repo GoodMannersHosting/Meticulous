@@ -195,11 +195,13 @@
 	let cvValue = $state('');
 	let cvSensitive = $state(false);
 	let cvPipelineId = $state('');
+	let cvEnvironmentId = $state('');
 	let variableActionLoading = $state(false);
 	let editVariableTarget = $state<ProjectVariable | null>(null);
 	let evName = $state('');
 	let evValue = $state('');
 	let evSensitive = $state(false);
+	let evEnvironmentId = $state('');
 	let showEditVariableDialog = $state(false);
 	let deleteVariableTarget = $state<ProjectVariable | null>(null);
 	let showDeleteVariableDialog = $state(false);
@@ -287,6 +289,14 @@
 		}))
 	]);
 
+	const plVariableEnvironmentOptions = $derived([
+		{ value: '', label: 'All environments (default)' },
+		...pipelineProjectEnvs.map((e) => ({
+			value: e.id,
+			label: `${e.display_name} (${e.name})`
+		}))
+	]);
+
 	const plSecretsEnvFilterOptions = $derived([
 		{ value: '', label: 'All environments' },
 		...pipelineProjectEnvs.map((e) => ({ value: e.id, label: e.display_name }))
@@ -350,8 +360,10 @@
 		matrixLoading = true;
 		try {
 			matrixData = await apiMethods.pipelines.matrix(pipeline.id);
-			if (matrixData.environments.length > 1) {
+			if (matrixData.environments.length > 0) {
 				runsViewMode = 'matrix';
+			} else {
+				runsViewMode = 'list';
 			}
 		} catch {
 			matrixData = null;
@@ -1189,6 +1201,7 @@
 		cvValue = '';
 		cvSensitive = false;
 		cvPipelineId = pipeline?.id ?? '';
+		cvEnvironmentId = '';
 		showCreateVariable = true;
 	}
 
@@ -1201,7 +1214,8 @@
 				name: cvName.trim(),
 				value: cvValue,
 				is_sensitive: cvSensitive,
-				pipeline_id: cvPipelineId || undefined
+				pipeline_id: cvPipelineId || undefined,
+				environment_id: cvEnvironmentId || undefined
 			});
 			showCreateVariable = false;
 			await loadPipelineVariables();
@@ -1217,6 +1231,7 @@
 		evName = v.name;
 		evValue = v.value ?? '';
 		evSensitive = v.is_sensitive;
+		evEnvironmentId = v.environment_id ?? '';
 		showEditVariableDialog = true;
 	}
 
@@ -1225,11 +1240,21 @@
 		variableActionLoading = true;
 		variablesError = null;
 		try {
-			await apiMethods.variables.update(editVariableTarget.id, {
+			const oldEnv = editVariableTarget.environment_id ?? null;
+			const newEnv = evEnvironmentId || null;
+			const body: {
+				name: string;
+				value?: string;
+				is_sensitive: boolean;
+				environment_id?: string | null;
+			} = {
 				name: evName.trim(),
-				...(evValue !== '' ? { value: evValue } : {}),
 				is_sensitive: evSensitive
-			});
+			};
+			if (evValue !== '') body.value = evValue;
+			if (newEnv !== oldEnv) body.environment_id = newEnv;
+
+			await apiMethods.variables.update(editVariableTarget.id, body);
 			showEditVariableDialog = false;
 			editVariableTarget = null;
 			await loadPipelineVariables();
@@ -1509,7 +1534,7 @@
 		{/if}
 
 		{#if activeTab === 'runs'}
-			{#if matrixData && matrixData.environments.length > 1}
+			{#if matrixData && matrixData.environments.length > 0}
 				<div class="flex items-center gap-2 mb-3">
 					<button
 						class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {runsViewMode === 'matrix'
@@ -1530,7 +1555,7 @@
 				</div>
 			{/if}
 
-			{#if runsViewMode === 'matrix' && matrixData}
+			{#if runsViewMode === 'matrix' && matrixData && matrixData.environments.length > 0}
 				{#await import('$lib/components/pipeline/RunMatrix.svelte') then mod}
 					<svelte:component this={mod.default} data={matrixData} onrefresh={loadMatrix} />
 				{/await}
@@ -1920,7 +1945,8 @@
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<p class="text-sm text-[var(--text-secondary)]">
 					Variables that apply to this pipeline: <strong>project-wide</strong> entries plus any
-					<strong>pipeline-only</strong> overrides. YAML and trigger-time variables still override for the same name.
+					<strong>pipeline-only</strong> overrides. Optional <strong>environment</strong> scope limits a row to
+					runs for that pipeline environment. YAML and trigger-time variables still override for the same name.
 				</p>
 				<div class="flex gap-2">
 					<Button variant="outline" size="sm" href="/projects/{pipeline.project_id}">
@@ -1968,6 +1994,7 @@
 							<tr>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Scope</th>
+								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Environment</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Value</th>
 								<th class="px-4 py-3 text-left font-medium text-[var(--text-secondary)]">Sensitive</th>
 								<th class="px-4 py-3 text-right font-medium text-[var(--text-secondary)]">Actions</th>
@@ -1978,6 +2005,14 @@
 								<tr class="bg-[var(--bg-secondary)]">
 									<td class="px-4 py-3 font-mono text-sm">{v.name}</td>
 									<td class="px-4 py-3">{variableScopeLabel(v)}</td>
+									<td class="px-4 py-3 text-[var(--text-secondary)]">
+										{#if v.environment_id && pipelineProjectEnvs.length}
+											{pipelineProjectEnvs.find((e) => e.id === v.environment_id)?.display_name ??
+												'—'}
+										{:else}
+											—
+										{/if}
+									</td>
 									<td class="px-4 py-3 text-[var(--text-secondary)]">
 										{#if v.is_sensitive}
 											<span class="italic">hidden</span>
@@ -2449,6 +2484,16 @@
 			<label class="mb-1 block text-sm font-medium" for="pv-scope">Scope</label>
 			<Select id="pv-scope" options={pipelineVarScopeOptions} bind:value={cvPipelineId} />
 		</div>
+		{#if pipelineProjectEnvs.length > 0}
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="pv-env">Environment (optional)</label>
+				<Select
+					id="pv-env"
+					options={plVariableEnvironmentOptions}
+					bind:value={cvEnvironmentId}
+				/>
+			</div>
+		{/if}
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showCreateVariable = false)}>Cancel</Button>
 			<Button
@@ -2488,6 +2533,16 @@
 				<input type="checkbox" bind:checked={evSensitive} class="rounded border-[var(--border-primary)]" />
 				Mask value in API responses
 			</label>
+			{#if pipelineProjectEnvs.length > 0}
+				<div>
+					<label class="mb-1 block text-sm font-medium" for="pev-env">Environment</label>
+					<Select
+						id="pev-env"
+						options={plVariableEnvironmentOptions}
+						bind:value={evEnvironmentId}
+					/>
+				</div>
+			{/if}
 			<div class="flex justify-end gap-2 pt-2">
 				<Button variant="outline" onclick={() => (showEditVariableDialog = false)}>Cancel</Button>
 				<Button variant="primary" onclick={submitEditVariable} loading={variableActionLoading}>

@@ -69,6 +69,10 @@ pub struct WorkspaceVariableListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
     pub pipeline_id: Option<PipelineId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_name: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
@@ -87,6 +91,7 @@ struct VariableHubRow {
     id: Uuid,
     project_id: Uuid,
     pipeline_id: Option<Uuid>,
+    environment_id: Option<Uuid>,
     name: String,
     value: String,
     scope: String,
@@ -96,6 +101,7 @@ struct VariableHubRow {
     project_name: String,
     project_slug: String,
     pipeline_name: Option<String>,
+    environment_name: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -290,13 +296,15 @@ async fn list_workspace_variables(
     let rows = sqlx::query_as::<_, VariableHubRow>(
         r#"
         SELECT
-          v.id, v.project_id, v.pipeline_id, v.name, v.value, v.scope::text, v.is_sensitive,
+          v.id, v.project_id, v.pipeline_id, v.environment_id, v.name, v.value, v.scope::text, v.is_sensitive,
           v.created_at, v.updated_at,
           p.name AS project_name, p.slug AS project_slug,
-          pl.name AS pipeline_name
+          pl.name AS pipeline_name,
+          e.display_name AS environment_name
         FROM variables v
         INNER JOIN projects p ON p.id = v.project_id
         LEFT JOIN pipelines pl ON pl.id = v.pipeline_id
+        LEFT JOIN environments e ON e.id = v.environment_id
         WHERE v.org_id = $1
           AND (NOT $2::bool OR v.project_id = ANY($3))
           AND ($4::uuid IS NULL OR v.project_id = $4)
@@ -333,6 +341,8 @@ async fn list_workspace_variables(
             id: VariableId::from_uuid(r.id),
             project_id: ProjectId::from_uuid(r.project_id),
             pipeline_id: r.pipeline_id.map(PipelineId::from_uuid),
+            environment_id: r.environment_id,
+            environment_name: r.environment_name,
             name: r.name,
             value: if r.is_sensitive { None } else { Some(r.value) },
             scope: r.scope,

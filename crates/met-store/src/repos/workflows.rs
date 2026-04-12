@@ -249,7 +249,11 @@ impl<'a> WorkflowRepo<'a> {
         Ok(workflow)
     }
 
-    /// Global catalog import: pending review, untrusted by default.
+    /// Global catalog import: pending review, untrusted by default for **new** rows.
+    ///
+    /// On conflict (same org, name, version), content and SCM pointers are refreshed. If the
+    /// existing row was already **`approved`**, submission status, trust, reviewer fields, and
+    /// submitter are left unchanged so scheduled sync and bulk re-import do not queue it again.
     pub async fn create_global_catalog_git(
         &self,
         org_id: OrganizationId,
@@ -277,11 +281,26 @@ impl<'a> WorkflowRepo<'a> {
                 scm_path = EXCLUDED.scm_path,
                 scm_revision = EXCLUDED.scm_revision,
                 catalog_metadata = EXCLUDED.catalog_metadata,
-                submission_status = 'pending',
-                trust_state = 'untrusted',
-                submitted_by = EXCLUDED.submitted_by,
-                reviewed_by = NULL,
-                reviewed_at = NULL,
+                submission_status = CASE
+                    WHEN reusable_workflows.submission_status = 'approved' THEN reusable_workflows.submission_status
+                    ELSE 'pending'
+                END,
+                trust_state = CASE
+                    WHEN reusable_workflows.submission_status = 'approved' THEN reusable_workflows.trust_state
+                    ELSE 'untrusted'
+                END,
+                submitted_by = CASE
+                    WHEN reusable_workflows.submission_status = 'approved' THEN reusable_workflows.submitted_by
+                    ELSE EXCLUDED.submitted_by
+                END,
+                reviewed_by = CASE
+                    WHEN reusable_workflows.submission_status = 'approved' THEN reusable_workflows.reviewed_by
+                    ELSE NULL
+                END,
+                reviewed_at = CASE
+                    WHEN reusable_workflows.submission_status = 'approved' THEN reusable_workflows.reviewed_at
+                    ELSE NULL
+                END,
                 deleted_at = NULL,
                 deprecated = false,
                 updated_at = EXCLUDED.updated_at

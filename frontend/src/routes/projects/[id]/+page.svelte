@@ -114,11 +114,13 @@
 	let cvValue = $state('');
 	let cvSensitive = $state(false);
 	let cvPipelineId = $state('');
+	let cvEnvironmentId = $state('');
 	let variableActionLoading = $state(false);
 	let editVariableTarget = $state<ProjectVariable | null>(null);
 	let evName = $state('');
 	let evValue = $state('');
 	let evSensitive = $state(false);
+	let evEnvironmentId = $state('');
 	let showEditVariableDialog = $state(false);
 	let deleteVariableTarget = $state<ProjectVariable | null>(null);
 	let showDeleteVariableDialog = $state(false);
@@ -1163,6 +1165,7 @@
 		cvValue = '';
 		cvSensitive = false;
 		cvPipelineId = '';
+		cvEnvironmentId = '';
 		showCreateVariable = true;
 	}
 
@@ -1175,7 +1178,8 @@
 				name: cvName.trim(),
 				value: cvValue,
 				is_sensitive: cvSensitive,
-				pipeline_id: cvPipelineId || undefined
+				pipeline_id: cvPipelineId || undefined,
+				environment_id: cvEnvironmentId || undefined
 			});
 			showCreateVariable = false;
 			await loadVariables();
@@ -1191,6 +1195,7 @@
 		evName = v.name;
 		evValue = v.value ?? '';
 		evSensitive = v.is_sensitive;
+		evEnvironmentId = v.environment_id ?? '';
 		showEditVariableDialog = true;
 	}
 
@@ -1199,11 +1204,21 @@
 		variableActionLoading = true;
 		variablesError = null;
 		try {
-			await apiMethods.variables.update(editVariableTarget.id, {
+			const oldEnv = editVariableTarget.environment_id ?? null;
+			const newEnv = evEnvironmentId || null;
+			const body: {
+				name: string;
+				value?: string;
+				is_sensitive: boolean;
+				environment_id?: string | null;
+			} = {
 				name: evName.trim(),
-				...(evValue !== '' ? { value: evValue } : {}),
 				is_sensitive: evSensitive
-			});
+			};
+			if (evValue !== '') body.value = evValue;
+			if (newEnv !== oldEnv) body.environment_id = newEnv;
+
+			await apiMethods.variables.update(editVariableTarget.id, body);
 			showEditVariableDialog = false;
 			editVariableTarget = null;
 			await loadVariables();
@@ -1231,8 +1246,13 @@
 	}
 
 	function variableScopeLabel(v: ProjectVariable): string {
-		if (!v.pipeline_id) return 'Project';
-		return pipelineLabel(v.pipeline_id);
+		const env =
+			v.environment_id && projectEnvs.length
+				? projectEnvs.find((e) => e.id === v.environment_id)
+				: null;
+		const envPart = env ? ` · ${env.display_name}` : v.environment_id ? ' · Environment' : '';
+		if (!v.pipeline_id) return 'Project' + envPart;
+		return pipelineLabel(v.pipeline_id) + envPart;
 	}
 
 	function storedSecretScopeLabel(s: StoredSecret): string {
@@ -1597,7 +1617,8 @@
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<p class="text-sm text-[var(--text-secondary)]">
 					Non-secret configuration merged into runs: <strong>project</strong> variables apply to all pipelines;
-					<strong>pipeline</strong> rows override for that pipeline. Pipeline YAML <code
+					<strong>pipeline</strong> rows override for that pipeline. Optional <strong>environment</strong> scope
+					limits a row to runs targeting that environment. Pipeline YAML <code
 						class="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-xs">variables:</code
 					>
 					and trigger payloads override these for the same name.
@@ -2869,6 +2890,12 @@
 			<label class="mb-1 block text-sm font-medium" for="v-scope">Scope</label>
 			<Select id="v-scope" options={pipelineScopeOptions} bind:value={cvPipelineId} />
 		</div>
+		{#if projectEnvs.length > 0}
+			<div>
+				<label class="mb-1 block text-sm font-medium" for="v-env">Environment (optional)</label>
+				<Select id="v-env" options={secretEnvironmentOptions} bind:value={cvEnvironmentId} />
+			</div>
+		{/if}
 		<div class="flex justify-end gap-2 pt-2">
 			<Button variant="outline" onclick={() => (showCreateVariable = false)}>Cancel</Button>
 			<Button
@@ -2908,6 +2935,12 @@
 				<input type="checkbox" bind:checked={evSensitive} class="rounded border-[var(--border-primary)]" />
 				Mask value in API responses
 			</label>
+			{#if projectEnvs.length > 0}
+				<div>
+					<label class="mb-1 block text-sm font-medium" for="ev-env">Environment</label>
+					<Select id="ev-env" options={secretEnvironmentOptions} bind:value={evEnvironmentId} />
+				</div>
+			{/if}
 			<div class="flex justify-end gap-2 pt-2">
 				<Button variant="outline" onclick={() => (showEditVariableDialog = false)}>Cancel</Button>
 				<Button variant="primary" onclick={submitEditVariable} loading={variableActionLoading}>
