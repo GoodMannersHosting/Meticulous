@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{ArtifactId, JobRunId, RunId};
 
+/// `storage_path` value when SBOM JSON is stored in `artifacts.metadata` instead of object storage.
+pub const INLINE_SBOM_STORAGE_PATH: &str = "agent-job-status-inline";
+
 /// A build artifact produced by a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]

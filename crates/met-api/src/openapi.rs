@@ -212,6 +212,7 @@ use crate::workflow_diagnostics::WorkflowDiagnosticItem;
         // Artifacts
         crate::routes::artifacts::list_run_artifacts,
         crate::routes::artifacts::get_artifact,
+        crate::routes::artifacts::download_artifact,
         crate::routes::artifacts::get_run_sbom,
         crate::routes::artifacts::get_run_attestation,
         // Debug

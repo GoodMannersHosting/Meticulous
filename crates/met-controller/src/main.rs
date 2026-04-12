@@ -10,11 +10,12 @@ use met_controller::nats::NatsDispatcher;
 use met_controller::registry::AgentRegistry;
 use met_core::redact::database_url_for_log;
 use met_core::MetConfig;
+use met_objstore::ObjectStore;
 use met_proto::agent::v1::agent_service_server::AgentServiceServer;
 use met_store::{PoolConfig, create_pool};
 use tokio::signal;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(name = "met-controller")]
@@ -137,13 +138,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|k| met_secrets::BuiltinStoredCrypto::from_master_key_b64(&k, None).ok())
         .map(std::sync::Arc::new);
 
+    let object_store: Option<Arc<dyn ObjectStore + Send + Sync>> =
+        match met_objstore::S3ObjectStore::new(met_config.storage.clone().into()).await {
+            Ok(store) => {
+                info!(
+                    bucket = %store.bucket(),
+                    endpoint = %met_config.storage.endpoint,
+                    "object store initialized for log archival"
+                );
+                Some(Arc::new(store) as Arc<dyn ObjectStore + Send + Sync>)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "object store not initialized; finished job logs will not be archived to S3 (Postgres log cache TTL only)"
+                );
+                None
+            }
+        };
+
     let registry = AgentRegistry::new();
     let grpc = AgentServiceImpl::new(
         ctrl.clone(),
         pool,
         registry,
         nats,
-        None,
+        object_store,
         stored_secret_crypto,
     );
 

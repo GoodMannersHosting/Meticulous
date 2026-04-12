@@ -10,7 +10,8 @@ use met_core::ids::{
     AgentId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId, StepId, StepRunId,
 };
 use met_core::models::{
-    Agent, AgentHeartbeat, AgentStatus, EnvironmentType, JobStatus, JoinTokenScope,
+    Agent, AgentHeartbeat, AgentStatus, EnvironmentType, INLINE_SBOM_STORAGE_PATH, JobStatus,
+    JoinTokenScope,
 };
 use met_logging::{Redactor, RedactorConfig};
 use met_objstore::ObjectStore;
@@ -1444,7 +1445,7 @@ async fn persist_job_sbom_cyclonedx(
     .bind("sbom.cdx.json")
     .bind("application/vnd.cyclonedx+json")
     .bind(size_bytes)
-    .bind("agent-job-status-inline")
+    .bind(INLINE_SBOM_STORAGE_PATH)
     .bind(&sha256)
     .bind(metadata)
     .execute(pool)
