@@ -283,16 +283,3 @@ workflows:
       target: "${REGISTRY_PREFIX}/met-sqlx-migrate:${IMAGE_TAG}"
       cyclonedx_path: sbom.cdx.json
       registry_host: "${REGISTRY_HOST}"
-
-  # ── Deploy (main branch only) ──────────────────────────────────────────────
-  - name: Deploy to Kubernetes
-    id: kubectl-deploy
-    workflow: global/kubectl-deploy
-    version: "1.0.0"
-    depends-on: [scan-sqlx-migrate]
-    condition: "trigger.branch == 'main'"
-    inputs:
-      namespace: "${K8S_NAMESPACE}"
-      deployments: "${K8S_DEPLOYMENTS}"
-      rollout_timeout: "180s"
-      health_url: "${HEALTH_URL}"
