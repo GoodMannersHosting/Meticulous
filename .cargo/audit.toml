@@ -1,0 +1,18 @@
+# cargo-audit configuration (see https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md)
+#
+# Codeguard: no credentials in this file — only advisory IDs and risk rationale.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — rsa: Marvin / timing side-channel in PKCS#1 v1.5 *decryption*.
+    # - There is no patched `rsa` release yet; `cargo audit` reports "No fixed upgrade".
+    # - Transitive via `jsonwebtoken` (JWT RSA verify/sign), `openidconnect`, and `sqlx-mysql`
+    #   (pulled by `sqlx-macros` / expand-time metadata; runtime DB is Postgres-only).
+    # - Meticulous JWT paths use signature verification (not decrypting attacker-chosen
+    #   ciphertext in a timing-sensitive oracle). Revisit when `rsa`, `jsonwebtoken`, or
+    #   `sqlx` publish a fix or drop this dependency edge.
+    "RUSTSEC-2023-0071",
+]
+
+# Warnings (unmaintained / informational) are not denied in CI by default; run
+# `cargo audit --deny warnings` locally when triaging RUSTSEC warnings.

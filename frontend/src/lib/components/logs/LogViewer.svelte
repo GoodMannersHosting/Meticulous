@@ -47,6 +47,12 @@
 	}: LogViewerProps = $props();
 
 	let lines = $state<LogLinePayload[]>([]);
+	/**
+	 * Rows already consumed from the logs API (SQL OFFSET). Must not use `lines.length`:
+	 * WebSocket lines merge into `lines` without existing in prior API pages, so an offset
+	 * based on line count skips DB rows and the viewer shows output starting "mid-command".
+	 */
+	let apiLogOffset = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let autoScroll = $state(true);
@@ -303,9 +309,12 @@
 
 	const MAX_LOG_PAGES = 200;
 
-	async function loadLogPagesFrom(offset: number): Promise<LogLinePayload[]> {
+	async function loadLogPagesFrom(startOffset: number): Promise<{
+		lines: LogLinePayload[];
+		nextApiOffset: number;
+	}> {
 		const acc: LogLinePayload[] = [];
-		let o = offset;
+		let o = startOffset;
 		for (let page = 0; page < MAX_LOG_PAGES; page++) {
 			const response = await apiMethods.runs.logs(runId, jobRunId, {
 				offset: o,
@@ -313,20 +322,24 @@
 			});
 			const batch = normalizeLogResponse(response, jobRunId, runId);
 			acc.push(...batch);
-			if (!response.has_more || batch.length === 0) break;
 			o += batch.length;
+			if (!response.has_more || batch.length === 0) break;
 		}
-		return acc;
+		return { lines: acc, nextApiOffset: o };
 	}
 
 	async function loadLogsInitial() {
 		loading = true;
 		error = null;
+		apiLogOffset = 0;
 		try {
-			lines = await loadLogPagesFrom(0);
+			const { lines: initial, nextApiOffset } = await loadLogPagesFrom(0);
+			lines = initial;
+			apiLogOffset = nextApiOffset;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load logs';
 			lines = [];
+			apiLogOffset = 0;
 		} finally {
 			loading = false;
 		}
@@ -335,14 +348,15 @@
 	}
 
 	async function loadLogsPoll() {
+		if (loading) return;
 		try {
-			const offset = lines.length;
 			const response = await apiMethods.runs.logs(runId, jobRunId, {
-				offset,
+				offset: apiLogOffset,
 				limit: 10000
 			});
 			const batch = normalizeLogResponse(response, jobRunId, runId);
 			if (batch.length === 0) return;
+			apiLogOffset += batch.length;
 			lines = mergeAppendBySequence(lines, batch);
 			scrollToBottomIfFollowing();
 		} catch {
