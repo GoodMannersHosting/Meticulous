@@ -592,7 +592,8 @@ impl RbacPolicy {
         // (Only if actor is project-scoped)
         if let (Some(actor_project), Some(resource_project)) =
             (&actor.project_id, &resource.project_id)
-            && actor.role < Role::OrgAdmin && actor_project != resource_project
+            && actor.role < Role::OrgAdmin
+            && actor_project != resource_project
         {
             return false;
         }

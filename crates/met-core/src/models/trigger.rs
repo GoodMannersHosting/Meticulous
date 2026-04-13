@@ -306,7 +306,9 @@ impl WebhookConfig {
             out.insert(name.clone(), s);
         }
 
-        if self.flatten_top_level && let JsonValue::Object(map) = &root {
+        if self.flatten_top_level
+            && let JsonValue::Object(map) = &root
+        {
             for (k, v) in map {
                 if out.contains_key(k) {
                     continue;

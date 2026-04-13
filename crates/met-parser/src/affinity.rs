@@ -43,7 +43,9 @@ pub fn validate_share_workspace_affinity(ir: &PipelineIR, diagnostics: &mut Pars
 
     let mut groups: HashMap<String, Vec<JobId>> = HashMap::new();
     for j in &ir.jobs {
-        if j.share_workspace && let Some(ref g) = j.affinity_group {
+        if j.share_workspace
+            && let Some(ref g) = j.affinity_group
+        {
             groups.entry(g.clone()).or_default().push(j.id);
         }
     }

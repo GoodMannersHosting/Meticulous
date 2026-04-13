@@ -22,7 +22,7 @@
     clippy::type_complexity,
     clippy::unnecessary_map_or,
     clippy::unwrap_or_default,
-    clippy::useless_conversion,
+    clippy::useless_conversion
 )]
 
 pub mod auth;

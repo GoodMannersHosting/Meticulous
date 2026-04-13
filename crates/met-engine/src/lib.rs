@@ -54,7 +54,7 @@
     clippy::too_many_arguments,
     dead_code,
     unused_imports,
-    unused_variables,
+    unused_variables
 )]
 
 pub mod affinity;

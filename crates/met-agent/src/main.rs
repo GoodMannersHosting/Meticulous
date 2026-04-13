@@ -141,9 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-    if registration_needs_join_token(&config, force_register)?
-        && config.join_token.is_none()
-    {
+    if registration_needs_join_token(&config, force_register)? && config.join_token.is_none() {
         if std::io::stdin().is_terminal() {
             let theme = ColorfulTheme::default();
             let url: String = Input::with_theme(&theme)

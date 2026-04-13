@@ -79,7 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("CORS allowed from any origin - DO NOT use in production");
     }
 
-    if let Ok(secret) = std::env::var("MET_JWT__SECRET") && !secret.is_empty() {
+    if let Ok(secret) = std::env::var("MET_JWT__SECRET")
+        && !secret.is_empty()
+    {
         api_config.jwt.secret = secret;
     }
 
