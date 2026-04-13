@@ -41,6 +41,7 @@ pub mod security;
 pub mod step_log;
 pub mod telemetry;
 mod workflow_outputs;
+mod workspace_archive;
 
 pub use config::{AgentConfig, ExecutionRuntime, JoinTokenSource};
 pub use error::{AgentError, Result};

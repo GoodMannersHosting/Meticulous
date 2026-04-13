@@ -20,6 +20,10 @@ use crate::error::{EngineError, Result};
 use crate::events::EventBroadcaster;
 use crate::persistence::RunPersistence;
 use crate::state::RunState;
+use crate::workspace_snapshots::{
+    snapshot_object_key_for_job_run, workspace_snapshot_predecessor, WorkspaceSnapshotConfig,
+    WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+};
 
 /// Job dispatch message for NATS.
 #[derive(Debug, Clone)]
@@ -46,6 +50,8 @@ pub struct JobDispatchMessage {
     pub suppress_exit_after_jobs_increment: bool,
     pub workflow_invocation_id: String,
     pub output_wrap_x25519_public_key: Vec<u8>,
+    pub workspace_restore: Option<met_proto::controller::v1::WorkspaceSnapshot>,
+    pub workspace_snapshot_upload: Option<met_proto::controller::v1::WorkspaceSnapshotUploadSpec>,
 }
 
 /// Step specification for dispatch.
@@ -84,6 +90,7 @@ pub struct JobCompletionNotification {
     pub outputs: IndexMap<String, String>,
     /// Structured workflow invocation outputs (public map + sealed secrets).
     pub workflow_outputs: Vec<met_proto::controller::v1::WorkflowInvocationOutputs>,
+    pub workspace_snapshot_result: Option<met_proto::controller::v1::WorkspaceSnapshotUploadResult>,
 }
 
 /// Scheduler configuration.
@@ -115,6 +122,8 @@ pub struct Scheduler {
     events: Arc<EventBroadcaster>,
     persistence: Arc<dyn RunPersistence>,
     active_jobs: RwLock<std::collections::HashMap<JobRunId, ActiveJob>>,
+    workspace_snapshots: WorkspaceSnapshotConfig,
+    workspace_presigner: Option<std::sync::Arc<dyn WorkspaceSnapshotPresigner>>,
 }
 
 /// Active job tracking.
@@ -134,6 +143,27 @@ impl Scheduler {
         config: SchedulerConfig,
         persistence: Arc<dyn RunPersistence>,
     ) -> Self {
+        Self::with_workspace_snapshots(
+            jetstream,
+            pool,
+            events,
+            config,
+            persistence,
+            WorkspaceSnapshotConfig::default(),
+            None,
+        )
+    }
+
+    /// Create a scheduler with optional passive workspace snapshot support (S3 presign).
+    pub fn with_workspace_snapshots(
+        jetstream: JetStreamContext,
+        pool: PgPool,
+        events: Arc<EventBroadcaster>,
+        config: SchedulerConfig,
+        persistence: Arc<dyn RunPersistence>,
+        workspace_snapshots: WorkspaceSnapshotConfig,
+        workspace_presigner: Option<std::sync::Arc<dyn WorkspaceSnapshotPresigner>>,
+    ) -> Self {
         Self {
             jetstream,
             pool,
@@ -141,6 +171,8 @@ impl Scheduler {
             events,
             persistence,
             active_jobs: RwLock::new(std::collections::HashMap::new()),
+            workspace_snapshots,
+            workspace_presigner,
         }
     }
 
@@ -378,10 +410,16 @@ impl Scheduler {
         variables: IndexMap<String, String>,
         required_tags: Vec<String>,
     ) -> Result<JobDispatchMessage> {
+        use met_proto::controller::v1::{WorkspaceSnapshot, WorkspaceSnapshotUploadSpec};
+
         let (requires_secret_exchange, secret_resolution_hints_json) =
             met_secret_resolve::hints_json_from_secret_refs(&ctx.pipeline().secret_refs);
 
-        let workspace_root_id = if job.share_workspace {
+        let passive_snapshots = self.workspace_snapshots.enabled
+            && self.workspace_presigner.is_some()
+            && job.share_workspace;
+
+        let workspace_root_id = if job.share_workspace && !passive_snapshots {
             job.affinity_group
                 .as_ref()
                 .map(|g| crate::affinity::workspace_root_dir_name(ctx.run_id(), g))
@@ -389,6 +427,69 @@ impl Scheduler {
         } else {
             String::new()
         };
+
+        let pred_job_id = workspace_snapshot_predecessor(ctx.pipeline(), job);
+
+        let mut workspace_restore: Option<WorkspaceSnapshot> = None;
+        let mut workspace_snapshot_upload: Option<WorkspaceSnapshotUploadSpec> = None;
+
+        if passive_snapshots {
+            let presigner = self
+                .workspace_presigner
+                .as_ref()
+                .expect("presigner when passive_snapshots");
+
+            if let Some(p_id) = pred_job_id {
+                let Some(rec) = run_state.get_workspace_snapshot_record(&p_id).await else {
+                    return Err(EngineError::WorkspaceSnapshotMissing {
+                        predecessor_job_id: p_id,
+                    });
+                };
+                let url = presigner
+                    .presign_get(
+                        ctx.org_id(),
+                        &rec.object_key,
+                        self.workspace_snapshots.presign_get_ttl,
+                    )
+                    .await?;
+                let pred_run = run_state
+                    .get_job(&p_id)
+                    .await
+                    .map(|j| j.job_run_id.to_string())
+                    .unwrap_or_default();
+                let pred_inv = ctx
+                    .pipeline()
+                    .jobs
+                    .iter()
+                    .find(|j| j.id == p_id)
+                    .and_then(|j| j.workflow_invocation_id.clone())
+                    .unwrap_or_default();
+                workspace_restore = Some(WorkspaceSnapshot {
+                    snapshot_download_url: url,
+                    expected_sha256: rec.sha256.clone(),
+                    restore_paths: Vec::new(),
+                    producing_job_run_id: pred_run,
+                    producing_workflow_invocation_id: pred_inv,
+                    archive_sha256: rec.sha256.clone(),
+                    snapshot_generation: rec.generation,
+                });
+            }
+
+            let object_key =
+                snapshot_object_key_for_job_run(ctx.org_id(), ctx.project_id(), ctx.run_id(), job_run_id);
+            let put_url = presigner
+                .presign_put(
+                    ctx.org_id(),
+                    &object_key,
+                    self.workspace_snapshots.presign_put_ttl,
+                )
+                .await?;
+            workspace_snapshot_upload = Some(WorkspaceSnapshotUploadSpec {
+                snapshot_upload_url: put_url,
+                object_key,
+                max_bytes: self.workspace_snapshots.max_archive_bytes,
+            });
+        }
 
         let workspace_delete_after_job =
             crate::affinity::workspace_delete_after_job(ctx.pipeline(), job, run_state).await;
@@ -420,6 +521,8 @@ impl Scheduler {
                 .output_wrap_public_key_for_job_run(job_run_id)
                 .await
                 .unwrap_or_default(),
+            workspace_restore,
+            workspace_snapshot_upload,
         })
     }
 
@@ -486,8 +589,9 @@ impl Scheduler {
             workflow_invocation_id: msg.workflow_invocation_id.clone(),
             output_wrap_x25519_public_key: msg.output_wrap_x25519_public_key.clone(),
             environment: None,
-            workspace_restore: None,
+            workspace_restore: msg.workspace_restore.clone(),
             agent_resolved_secrets: Vec::new(),
+            workspace_snapshot_upload: msg.workspace_snapshot_upload.clone(),
         })
     }
 
@@ -523,6 +627,38 @@ impl Scheduler {
                     .await
                 {
                     warn!(error = %e, "workflow outputs ingest rejected");
+                }
+            }
+
+            if notification.success {
+                let passive = self.workspace_snapshots.enabled && self.workspace_presigner.is_some();
+                if passive {
+                    if let Some(job_ir) = ctx.pipeline().jobs.iter().find(|j| j.id == job_state.job_id)
+                    {
+                        if job_ir.share_workspace {
+                            if let Some(ref res) = notification.workspace_snapshot_result {
+                                if res.uploaded && !res.sha256.is_empty() && !res.object_key.is_empty()
+                                {
+                                    let generation =
+                                        run_state.next_workspace_snapshot_generation().await;
+                                    let record = WorkspaceSnapshotRecord {
+                                        object_key: res.object_key.clone(),
+                                        sha256: res.sha256.clone(),
+                                        size_bytes: res.size_bytes,
+                                        producer_job_run_id: notification.job_run_id,
+                                        workflow_invocation_id: job_ir
+                                            .workflow_invocation_id
+                                            .clone()
+                                            .unwrap_or_default(),
+                                        generation,
+                                    };
+                                    run_state
+                                        .put_workspace_snapshot(job_state.job_id, record)
+                                        .await;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

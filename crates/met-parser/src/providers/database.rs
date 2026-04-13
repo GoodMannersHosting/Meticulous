@@ -329,7 +329,10 @@ mod tests {
         let result = provider
             .fetch(WorkflowScope::Global, "nonexistent", "1.0.0")
             .await;
-        assert!(matches!(result, Err(WorkflowFetchError::NotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(WorkflowFetchError::VersionNotFound { .. })
+        ));
     }
 
     #[sqlx::test(migrations = "../met-store/migrations")]

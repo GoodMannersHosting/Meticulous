@@ -1,6 +1,6 @@
 # ADR-014: Workspace snapshots and soft affinity
 
-**Status:** Proposed  
+**Status:** Proposed (passive affinity snapshots implemented 2026-04-12)  
 **Date:** 2026-04-11  
 **PRDs:** [030](../prd/030-pipeline-authoring-dag-workflows.md), [040](../prd/040-scheduling-and-nats-dispatch.md)
 
@@ -31,26 +31,57 @@ workflow_invocations:
 
 `from` references a prior invocation id within the same pipeline run. `outputs` declares paths to archive relative to the workspace root.
 
+### Passive mode vs explicit `workspace:` (summary)
+
+| | **Passive (affinity + S3)** | **Explicit `workspace:` (future / opt-in)** |
+|--|-----------------------------|---------------------------------------------|
+| **Trigger** | `share_workspace: true` + explicit `affinity-group` + engine snapshot config + S3 | Invocation declares `workspace.from` / `workspace.outputs` |
+| **What is archived** | Entire workspace tree under `METICULOUS_WORKSPACE` (see exclusions below) | Only paths listed under `outputs` |
+| **Consumer** | Engine picks **maximal in-group predecessor** from `depends_on` (same affinity group) | Consumer named by `from` (invocation id) |
+| **Object key** | `…/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst` | `…/workspace-snapshots/…` keyed by invocation (see `ObjectKeyBuilder`) |
+| **Per-job workspace dir** | Yes (`workspace_root_id` cleared; each job run gets its own directory, restored from blob) | As implemented for that mode |
+
+Passive mode does **not** add workflow YAML beyond what affinity already requires.
+
+### Passive mode (no extra YAML): `share_workspace` + object storage
+
+**Gating (met-api):** Passive snapshots are **on** when an object-store client is configured **and** `MET_WORKSPACE_SNAPSHOTS_DISABLED` is **not** set to a truthy value (`1`, `true`, `yes`). If snapshots are off (no S3 or disabled flag), the engine keeps **shared-directory** semantics: `workspace_root_id` + stable directory name per affinity group.
+
+When passive snapshots are **on**, jobs with **`share_workspace: true`** and an explicit **`affinity-group`** automatically:
+
+1. Use a **per-`job_run_id` workspace directory** (engine omits `workspace_root_id` for these jobs).
+2. **Restore:** If a **workspace snapshot predecessor** exists (see below), `JobDispatch.workspace_restore` carries a presigned **GET** URL, `expected_sha256`, and provenance (`producing_job_run_id`, `producing_workflow_invocation_id`, `archive_sha256`, `snapshot_generation`). The agent downloads, verifies the digest, and extracts into the workspace root before steps.
+3. **Upload:** `JobDispatch.workspace_snapshot_upload` carries a presigned **PUT** URL, `object_key`, and `max_bytes` (compressed cap, default 10 GiB in `WorkspaceSnapshotConfig`). After **successful** steps, the agent packs the workspace, uploads, and reports **`WorkspaceSnapshotUploadResult`** on the terminal status update. Upload failure fails the job; the engine does not register a snapshot, so consumers that need that predecessor are not dispatched with a stale assumption.
+4. **Registry:** The engine keeps a **run-scoped** map from producer **job id** → `{ object_key, sha256, size_bytes, producer_job_run_id, workflow_invocation_id, generation }`. A monotonic **`snapshot_generation`** is assigned per registration to help consumers detect unexpected replays.
+
+**Predecessor selection:** Among `depends_on` edges to jobs in the **same** `(share_workspace, affinity_group)` class, the engine chooses the **maximal** predecessor (the one that runs “latest” among those dependencies—formally: the candidate reachable from every other candidate via the DAG). If there is no in-group predecessor, the job starts from an **empty** workspace (after normal checkout/bootstrap steps).
+
+**Scheduling note:** Affinity groups are still **pinned** to the first agent that ran a job in that group; later jobs target that agent. If the pinned agent is unavailable or no longer matches pool/tags, dispatch fails with an affinity error—**passive snapshots do not, by themselves, reroute work to another agent** in the current scheduler. Snapshots ensure **filesystem continuity** (checkout → build) using object storage + per-job directories, and they preserve the option to relax pinning in a future change.
+
+**Configuration (operators):**
+
+| Variable | Where | Meaning |
+|----------|--------|---------|
+| `MET_WORKSPACE_SNAPSHOTS_DISABLED` | met-api | If `1` / `true` / `yes`, passive snapshots off; shared disk path used when applicable. |
+| `MET_WORKSPACE_SNAPSHOT_TTL_HOURS` | met-api | Hint for lifecycle design: default **24**, clamped **1–168** (7d). Stored in engine `WorkspaceSnapshotConfig.object_ttl_hours`; **S3 does not read this**—configure lifecycle on the bucket prefix to match. |
+
+Presign TTLs default to **1 hour** each for GET and PUT (`WorkspaceSnapshotConfig`); if a job waits longer than that in a queue, the engine must **re-dispatch** with fresh URLs (normal dispatch path).
+
 ### Snapshot format and storage
 
-1. **Archive:** `tar` with `zstd` compression (level 3 default, tunable via agent config). Symlinks are preserved; files outside the workspace root are excluded (path traversal prevention via `tar --anchored`).
-2. **Object key:** `met-workspace/{org_id}/{run_id}/{invocation_id}.tar.zst` — built by a new `workspace_snapshot()` method on `ObjectKeyBuilder` in `crates/met-objstore/src/paths.rs`.
-3. **Upload:** Agent uploads via presigned PUT URL generated by the engine. Maximum snapshot size enforced server-side (default 10 GiB, configurable per org).
-4. **Download:** Engine generates a presigned GET URL with a 1-hour TTL, attached to `JobDispatch.workspace_restore`.
+1. **Archive:** `tar` stream compressed with **zstd** (level **3** in the agent). The agent walks the workspace with the Rust **`ignore`** crate (`WalkBuilder::standard_filters(true)`), which honors **`.gitignore`** (and related standard ignore rules) from the workspace root. Entries under **`.git/`** are **never** included (large, not needed for typical build trees). **Non-file** entries (directories as separate tar members, devices, etc.) are skipped as appropriate; symlinks are **not** followed when packing.
+2. **Extract:** The consumer uses `tar` **`unpack_in`** with path checks: **absolute** paths and **`..`** components in archive members are rejected.
+3. **Object key (passive):** `<org[/project] prefix>/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst` via `ObjectKeyBuilder::workspace_snapshot_job_run` (`crates/met-objstore/src/paths.rs`). Using **`job_run_id`** avoids collisions when a logical job is retried with a new run id.
+4. **Size limits:** `WorkspaceSnapshotUploadSpec.max_bytes` caps the **compressed** archive; the agent also tracks **uncompressed** bytes while tarring and can fail early if an uncompressed cap is exceeded (implementation uses the same budget for streaming totals). Exceeding the cap fails the upload path with a clear error.
+5. **Download:** Presigned GET on `JobDispatch.workspace_restore`, TTL from `WorkspaceSnapshotConfig.presign_get_ttl` (default 1h).
 
-### Proto changes
+**Repositories without `.git`:** The same walker still applies ignore files present in the tree; there is no separate documented deny list beyond ignore rules and the hard `.git/` exclusion. Teams should rely on `.gitignore` or keep large artifacts outside the workspace. (Org-level exclude globs are a possible future extension.)
 
-Add to `controller.proto`:
+### Proto surface (`controller.proto` / agent types)
 
-```protobuf
-message WorkspaceSnapshot {
-    string snapshot_download_url = 1;
-    string expected_sha256 = 2;
-    repeated string restore_paths = 3;
-}
-```
-
-Add `WorkspaceSnapshot workspace_restore = 28` to `JobDispatch`.
+- **`WorkspaceSnapshot`** on dispatch: download URL, expected SHA-256, optional restore path list, provenance fields (`producing_job_run_id`, `producing_workflow_invocation_id`, `archive_sha256`, `snapshot_generation`).
+- **`WorkspaceSnapshotUploadSpec`** on `JobDispatch`: presigned PUT URL, `object_key`, `max_bytes`.
+- **`WorkspaceSnapshotUploadResult`** on **`JobCompletion`** and **`JobStatusUpdate`**: `uploaded`, `sha256`, `size_bytes`, `object_key`, `skipped`, `error_message`.
 
 ### Digest verification
 
@@ -58,32 +89,42 @@ The producing agent computes a SHA-256 digest of the archive before upload and r
 
 ### Scheduling and affinity
 
-1. **Soft preference:** The scheduler tries the same agent that produced the snapshot first (skip upload/download round-trip). If that agent is unavailable within a configurable timeout (default 30 seconds), any eligible agent is selected and the snapshot transfer path is used.
-2. **Fallback modes** (set per invocation):
-   - `snapshot` (default): Fall back to snapshot download on any agent.
-   - `fail`: Require the same agent; fail the job if unavailable.
-3. **Backward compatibility:** Existing `share-workspace: true` with hard affinity continues to work unchanged. The new `workspace:` block is opt-in.
+1. **Affinity pin:** For jobs with `affinity-group`, the first dispatched job picks an available agent; the run state **pins** that group to that agent. Later jobs in the group must use the pinned agent or dispatch fails (see `scheduler.rs`).
+2. **Passive snapshots** complement that model by **restoring** the previous job’s workspace into each new **`job_run_id`** directory so serial jobs see the same tree without relying on a shared path on disk.
+3. **Explicit `workspace:`** (when implemented end-to-end) remains **opt-in** for subset restores or different naming; it does not replace passive mode for affinity chains.
 
 ### Agent behavior
 
-**Producer side** (job declares `outputs`):
-1. After all steps complete, archive declared paths into `tar.zst`.
-2. Compute SHA-256 of the archive.
-3. Upload to the presigned PUT URL.
-4. Report digest and byte size in the job completion message.
+**Passive producer** (`workspace_snapshot_upload` present and not skipped):
 
-**Consumer side** (job declares `from`):
-1. Download archive from `snapshot_download_url`.
-2. Verify SHA-256 against `expected_sha256`; abort on mismatch.
-3. Extract into workspace root.
-4. Proceed to step execution.
+1. Run steps in the (possibly restored) workspace.
+2. On success, pack workspace (`tar` + zstd), compute SHA-256, `PUT` to presigned URL.
+3. Emit `WorkspaceSnapshotUploadResult` on the terminal update so the controller/engine can register the snapshot.
+
+**Passive consumer** (`workspace_restore` populated):
+
+1. `GET` blob, verify **`expected_sha256`**, extract with traversal guards, then run steps.
+
+**Explicit YAML producer** (future / separate path; job declares `workspace.outputs`):
+
+1. After steps, archive **only** declared paths into `tar.zst`, then upload and report digest (as specified for that feature).
+
+**Explicit YAML consumer** (job declares `workspace.from`):
+
+1. Download, verify digest, extract, run steps.
 
 ### Engine orchestration
 
-In `crates/met-engine/src/scheduler.rs`:
-- After a producing job completes with workspace outputs: store the S3 key and digest in a run-scoped workspace registry (in-memory map, keyed by invocation id).
-- Before dispatching a consuming job with `workspace.from`: look up the snapshot, generate presigned GET URL, populate `JobDispatch.workspace_restore`.
-- If the snapshot is missing (producer failed or didn't upload): fail the consuming job immediately with a dependency error.
+**Passive mode** (`crates/met-engine/src/workspace_snapshots.rs`, `scheduler.rs`, run state):
+
+- Compute `workspace_snapshot_predecessor` from `PipelineIR` for each `share_workspace` job.
+- On dispatch: if predecessor exists, require a **registered** snapshot for that predecessor’s job id (or fail with a workspace-snapshot error if the predecessor succeeded but registration is missing). Presign GET and fill `WorkspaceSnapshot` provenance.
+- Always attach presign **PUT** for passive snapshot producers (same chain).
+- On completion: parse `workspace_snapshot_result`; if upload succeeded, **register** `WorkspaceSnapshotRecord` under the **producer job id** for this run.
+
+**Explicit `workspace:` mode** (when wired): registry keyed by **invocation id** (or as in ADR), populate restore only for consumers that declare `from`.
+
+**Retries:** A new **`job_run_id`** implies a new object key (`workspace_snapshot_job_run`); consumers must not read an object keyed for a **previous** attempt once the engine registers the new blob. Partial uploads should not be registered; lifecycle rules eventually expire abandoned objects.
 
 ## Consequences
 
@@ -101,16 +142,24 @@ In `crates/met-engine/src/scheduler.rs`:
 
 ### Migration
 
-- New proto field on `JobDispatch`; agents that do not understand `workspace_restore` ignore it (proto3 unknown field handling).
+- Passive mode requires **current agents** that implement `workspace_restore`, `workspace_snapshot_upload`, and `workspace_snapshot_result` reporting; older agents will not populate snapshots correctly.
 - No DB migration required; snapshot metadata is transient per-run.
-- `ObjectKeyBuilder` gains one new method; no breaking changes.
+- `ObjectKeyBuilder` gains `workspace_snapshot_job_run`; the earlier invocation-scoped key remains for explicit YAML-mode.
+
+### Operations (S3 lifecycle and cost)
+
+- **Prefix:** `{org base}/workspace-snapshots/{run_id}/` (see `ObjectKeyBuilder`).
+- **Retention:** Add a bucket **lifecycle rule** that expires objects under `workspace-snapshots/` after **N days** (or transitions to Glacier if desired). Match **N** to org policy: default narrative is **24 hours**; **7 days** is the documented upper bound for TTL hint (`MET_WORKSPACE_SNAPSHOT_TTL_HOURS` ≤ 168).
+- **Metadata:** Operators *may* set object tags or `x-amz-meta-*` in future for auditing; the engine’s `object_ttl_hours` is for **documentation and future hooks**, not automatic S3 expiry.
+- **Presigned URLs:** Short-lived (default 1h); independent of object lifetime. Long-queued jobs need **redispatch** with fresh URLs.
+- **Cost:** Charged for storage, PUT/GET, and egress; gitignore-aware packing and excluding `.git/` reduce average object size.
 
 ## Threat model
 
 - **Assets:** Workspace file contents (may include build artifacts, source code, test data); presigned URLs.
 - **Adversaries:** Compromised agent tampering with snapshot contents; network observer intercepting presigned URLs; replay of stale snapshots.
 - **Mitigations:**
-  - SHA-256 digest verified by consumer agent before extraction.
+  - SHA-256 digest verified by consumer agent before extraction; dispatch carries provenance (`producing_job_run_id`, generation) so the consumer can reject mismatched metadata.
   - Presigned URLs are short-lived (1 hour) and scoped to the specific object key.
   - Snapshots are scoped to `{org_id}/{run_id}` — cross-org access requires guessing a UUID + valid presigned signature.
   - `tar` extraction rejects absolute paths and path traversal (`../`).

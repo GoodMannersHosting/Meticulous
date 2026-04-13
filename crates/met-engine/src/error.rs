@@ -36,6 +36,11 @@ pub enum EngineError {
     #[error("affinity scheduling failed for job {job}: {reason}")]
     AffinityScheduling { job: String, reason: String },
 
+    #[error(
+        "workspace snapshot from predecessor job {predecessor_job_id} is not available; producer may have failed to upload"
+    )]
+    WorkspaceSnapshotMissing { predecessor_job_id: JobId },
+
     #[error("job {job} timed out after {timeout_secs}s")]
     JobTimeout { job: String, timeout_secs: u64 },
 

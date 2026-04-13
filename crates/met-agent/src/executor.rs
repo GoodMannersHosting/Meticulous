@@ -14,7 +14,9 @@ use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient,
 };
 use met_proto::common::v1::{RunStatus, Timestamp};
-use met_proto::controller::v1::WorkflowInvocationOutputs;
+use met_proto::controller::v1::{
+    WorkflowInvocationOutputs, WorkspaceSnapshotUploadResult,
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, mpsc, watch};
@@ -364,6 +366,7 @@ impl JobExecutor {
                 merged,
                 sbom,
                 None,
+                None,
             )
             .await;
 
@@ -458,6 +461,7 @@ impl JobExecutor {
                         merged,
                         sbom,
                         None,
+                        None,
                     )
                     .await;
                 Ok(())
@@ -516,6 +520,12 @@ impl JobExecutor {
         job: &met_proto::controller::v1::JobDispatch,
         workspace: &std::path::Path,
     ) -> Result<()> {
+        if let Some(ref snap) = job.workspace_restore {
+            if !snap.snapshot_download_url.is_empty() {
+                crate::workspace_archive::restore_workspace(workspace, snap).await?;
+            }
+        }
+
         // Generate per-job PKI and exchange keys
         let pki = JobPki::generate().map_err(AgentError::Certificate)?;
 
@@ -529,6 +539,7 @@ impl JobExecutor {
         self.report_job_status(
             &job.job_run_id,
             RunStatus::Running,
+            None,
             None,
             None,
             None,
@@ -614,6 +625,34 @@ impl JobExecutor {
             }
         };
 
+        let mut snapshot_upload_result: Option<WorkspaceSnapshotUploadResult> = None;
+        let mut snapshot_failure: Option<String> = None;
+        if job_success {
+            if let Some(ref spec) = job.workspace_snapshot_upload {
+                if !spec.snapshot_upload_url.is_empty() {
+                    match crate::workspace_archive::snapshot_and_upload(workspace, spec).await {
+                        Ok(r) => {
+                            if r.uploaded || r.skipped {
+                                snapshot_upload_result = Some(r);
+                            } else {
+                                job_success = false;
+                                snapshot_failure = Some(if r.error_message.is_empty() {
+                                    "workspace snapshot upload was not successful".into()
+                                } else {
+                                    r.error_message.clone()
+                                });
+                                snapshot_upload_result = Some(r);
+                            }
+                        }
+                        Err(e) => {
+                            job_success = false;
+                            snapshot_failure = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         // Report job completion with execution metadata
         let final_status = if job_success {
             RunStatus::Succeeded
@@ -625,14 +664,16 @@ impl JobExecutor {
         } else {
             last_exit_code.or(Some(1))
         };
+        let err_msg = snapshot_failure;
         self.report_job_status(
             &job.job_run_id,
             final_status,
             job_exit,
-            None,
+            err_msg,
             job_metadata,
             sbom_json,
             workflow_outputs,
+            snapshot_upload_result,
         )
         .await?;
 
@@ -979,6 +1020,7 @@ impl JobExecutor {
         execution_metadata: Option<JobExecutionMetadata>,
         sbom_cyclonedx_json: Option<String>,
         workflow_invocation_outputs: Option<WorkflowInvocationOutputs>,
+        workspace_snapshot_result: Option<WorkspaceSnapshotUploadResult>,
     ) -> Result<()> {
         // Convert execution metadata to protobuf format
         let proto_metadata = execution_metadata.map(|meta| {
@@ -1023,6 +1065,7 @@ impl JobExecutor {
             agent_id: Some(self.identity.agent_id.clone()),
             sbom_cyclonedx_json,
             workflow_invocation_outputs,
+            workspace_snapshot_result,
         };
 
         self.client

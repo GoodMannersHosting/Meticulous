@@ -205,6 +205,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let workspace_snapshots_disabled = matches!(
+        std::env::var("MET_WORKSPACE_SNAPSHOTS_DISABLED").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    );
+    let mut workspace_snapshots = met_engine::WorkspaceSnapshotConfig::default();
+    workspace_snapshots.enabled = object_store.is_some() && !workspace_snapshots_disabled;
+    workspace_snapshots.object_ttl_hours = std::env::var("MET_WORKSPACE_SNAPSHOT_TTL_HOURS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24)
+        .clamp(1, 168);
+    let workspace_snapshot_presigner = object_store.clone().map(|s| {
+        std::sync::Arc::new(met_api::workspace_presigner::S3WorkspaceSnapshotPresigner::new(s))
+            as std::sync::Arc<dyn met_engine::WorkspaceSnapshotPresigner>
+    });
+
     let (engine, engine_init_error) = match met_engine::Engine::new(met_engine::EngineConfig {
         nats_url: met_config.nats.url.clone(),
         nats_credentials_file: met_config.nats.credentials_file.clone(),
@@ -214,6 +230,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cache_prefix: String::new(),
         builtin_secrets_master_key: std::env::var("MET_BUILTIN_SECRETS_MASTER_KEY").ok(),
         builtin_secrets_key_id: None,
+        workspace_snapshots,
+        workspace_snapshot_presigner,
     })
     .await
     {

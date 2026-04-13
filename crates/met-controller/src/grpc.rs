@@ -948,6 +948,7 @@ impl AgentService for AgentServiceImpl {
                                     nanos: ts.timestamp_subsec_nanos() as i32,
                                 }),
                                 workflow_outputs: workflow_completion_proto,
+                                workspace_snapshot_result: update.workspace_snapshot_result.clone(),
                                 ..Default::default()
                             };
                             if let Err(e) = self

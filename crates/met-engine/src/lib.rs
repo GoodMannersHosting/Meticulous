@@ -63,6 +63,7 @@ pub mod retry;
 pub mod scheduler;
 pub mod secrets;
 pub mod state;
+pub mod workspace_snapshots;
 
 pub use artifacts::{ArtifactBackend, ArtifactManager, ArtifactMetadata, MemoryArtifactStore};
 pub use cache::{
@@ -84,6 +85,10 @@ pub use scheduler::{
 mod output_crypto;
 pub use secrets::SecretEncryption;
 pub use state::{JobState, RunState, StepState};
+pub use workspace_snapshots::{
+    snapshot_object_key_for_job_run, workspace_snapshot_predecessor, WorkspaceSnapshotConfig,
+    WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+};
 
 use async_nats::jetstream::Context as JetStreamContext;
 use met_core::ids::{OrganizationId, RunId};
@@ -96,7 +101,7 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 
 /// Engine configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineConfig {
     /// NATS connection URL.
     pub nats_url: String,
@@ -114,6 +119,29 @@ pub struct EngineConfig {
     pub builtin_secrets_master_key: Option<String>,
     /// Optional key id label stored with ciphertext (default `v1`).
     pub builtin_secrets_key_id: Option<String>,
+    /// Passive workspace snapshots for `share_workspace` jobs (requires presigner when enabled).
+    pub workspace_snapshots: WorkspaceSnapshotConfig,
+    pub workspace_snapshot_presigner: Option<Arc<dyn WorkspaceSnapshotPresigner>>,
+}
+
+impl std::fmt::Debug for EngineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineConfig")
+            .field("nats_url", &self.nats_url)
+            .field("nats_credentials_file", &self.nats_credentials_file)
+            .field("pool", &"<PgPool>")
+            .field("executor", &self.executor)
+            .field("scheduler", &self.scheduler)
+            .field("cache_prefix", &self.cache_prefix)
+            .field("builtin_secrets_master_key", &self.builtin_secrets_master_key.is_some())
+            .field("builtin_secrets_key_id", &self.builtin_secrets_key_id)
+            .field("workspace_snapshots", &self.workspace_snapshots)
+            .field(
+                "workspace_snapshot_presigner",
+                &self.workspace_snapshot_presigner.is_some(),
+            )
+            .finish()
+    }
 }
 
 async fn connect_nats_client(
@@ -160,12 +188,14 @@ impl Engine {
         let persistence: Arc<dyn RunPersistence> =
             Arc::new(PostgresRunPersistence::new(config.pool.clone()));
 
-        let scheduler = Arc::new(Scheduler::new(
+        let scheduler = Arc::new(Scheduler::with_workspace_snapshots(
             jetstream.clone(),
             config.pool.clone(),
             events.clone(),
             config.scheduler,
             persistence.clone(),
+            config.workspace_snapshots.clone(),
+            config.workspace_snapshot_presigner.clone(),
         ));
 
         let builtin_stored_crypto = Self::make_builtin_crypto(
@@ -250,12 +280,14 @@ impl Engine {
         let persistence: Arc<dyn RunPersistence> =
             Arc::new(PostgresRunPersistence::new(pool.clone()));
 
-        let scheduler = Arc::new(Scheduler::new(
+        let scheduler = Arc::new(Scheduler::with_workspace_snapshots(
             jetstream.clone(),
             pool.clone(),
             events.clone(),
             scheduler_config,
             persistence.clone(),
+            WorkspaceSnapshotConfig::default(),
+            None,
         ));
 
         let builtin_stored_crypto = Self::make_builtin_crypto(None, None);
@@ -500,6 +532,7 @@ pub(crate) fn parse_completion_message(payload: &[u8]) -> Result<JobCompletionNo
         duration_ms: proto.duration_ms as u64,
         outputs: proto.outputs.into_iter().collect(),
         workflow_outputs: proto.workflow_outputs,
+        workspace_snapshot_result: proto.workspace_snapshot_result,
     })
 }
 

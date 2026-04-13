@@ -55,6 +55,9 @@ aes-gcm = { workspace = true }
 hkdf = { workspace = true }
 hex = "0.4"
 regex = { workspace = true }
+ignore = "0.4"
+tar = "0.4"
+zstd = "0.13"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

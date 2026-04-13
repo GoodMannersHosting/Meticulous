@@ -26,6 +26,7 @@ pub mod state;
 pub mod stored_secret_policy;
 pub mod trigger_sync;
 pub mod workflow_diagnostics;
+pub mod workspace_presigner;
 
 pub use config::ApiConfig;
 pub use error::{ApiError, ApiResult};

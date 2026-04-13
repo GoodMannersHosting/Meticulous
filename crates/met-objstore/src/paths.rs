@@ -165,6 +165,16 @@ impl ObjectKeyBuilder {
             "{base}/workspace-snapshots/{run_id}/{invocation_id}.tar.zst"
         ))
     }
+
+    /// Workspace snapshot keyed by producer `job_run_id` (unique per attempt; passive affinity uploads).
+    ///
+    /// Path: `<base>/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst`
+    pub fn workspace_snapshot_job_run(&self, run_id: &str, producer_job_run_id: &str) -> ObjectKey {
+        let base = self.base_prefix();
+        ObjectKey::new(format!(
+            "{base}/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst"
+        ))
+    }
 }
 
 impl Default for ObjectKeyBuilder {

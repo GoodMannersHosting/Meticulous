@@ -9,6 +9,8 @@ use met_core::models::{JobStatus, RunStatus};
 use std::collections::hash_map::Entry;
 use tokio::sync::RwLock;
 
+use crate::workspace_snapshots::WorkspaceSnapshotRecord;
+
 /// State of a single job within a run.
 #[derive(Debug, Clone)]
 pub struct JobState {
@@ -82,6 +84,10 @@ struct RunStateInner {
     cancellation_requested: RwLock<bool>,
     /// First successful dispatch pins `(affinity group string) -> agent` for the lifetime of the run.
     affinity_pins: RwLock<HashMap<String, AgentId>>,
+    /// Passive workspace snapshots: producer [`JobId`] → digest and object key (ADR-014 extension).
+    workspace_snapshots: RwLock<HashMap<JobId, WorkspaceSnapshotRecord>>,
+    /// Monotonic generation counter for snapshot provenance within this run.
+    workspace_snapshot_generation: RwLock<i32>,
 }
 
 impl RunState {
@@ -101,8 +107,44 @@ impl RunState {
                 running_jobs: RwLock::new(HashSet::new()),
                 cancellation_requested: RwLock::new(false),
                 affinity_pins: RwLock::new(HashMap::new()),
+                workspace_snapshots: RwLock::new(HashMap::new()),
+                workspace_snapshot_generation: RwLock::new(0),
             }),
         }
+    }
+
+    /// Next snapshot generation number for this run (producer registration).
+    pub async fn next_workspace_snapshot_generation(&self) -> i32 {
+        let mut g = self.inner.workspace_snapshot_generation.write().await;
+        *g += 1;
+        *g
+    }
+
+    /// Store snapshot metadata after a producer job uploads successfully.
+    pub async fn put_workspace_snapshot(&self, producer_job_id: JobId, record: WorkspaceSnapshotRecord) {
+        self.inner
+            .workspace_snapshots
+            .write()
+            .await
+            .insert(producer_job_id, record);
+    }
+
+    /// Lookup snapshot metadata from a completed producer job.
+    pub async fn get_workspace_snapshot_record(
+        &self,
+        producer_job_id: &JobId,
+    ) -> Option<WorkspaceSnapshotRecord> {
+        self.inner
+            .workspace_snapshots
+            .read()
+            .await
+            .get(producer_job_id)
+            .cloned()
+    }
+
+    /// Snapshot records (read-only) for dispatch validation.
+    pub async fn workspace_snapshot_records(&self) -> HashMap<JobId, WorkspaceSnapshotRecord> {
+        self.inner.workspace_snapshots.read().await.clone()
     }
 
     /// Resolved agent for an affinity group, if already pinned.

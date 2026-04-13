@@ -175,6 +175,8 @@ message JobStatusUpdate {
     optional string sbom_cyclonedx_json = 8;
     // Declared workflow outputs for this job (public map + wrapped secrets); see design/workflow-invocation-outputs.md.
     optional meticulous.controller.v1.WorkflowInvocationOutputs workflow_invocation_outputs = 9;
+    // Workspace passive snapshot upload result (tar.zst to object store).
+    optional meticulous.controller.v1.WorkspaceSnapshotUploadResult workspace_snapshot_result = 10;
 }
 
 // Step status update from agent.
