@@ -285,12 +285,7 @@ async fn untrust_catalog_workflow(
         .parse()
         .map_err(|_| ApiError::bad_request("invalid workflow ID"))?;
     let row = WorkflowRepo::new(state.db())
-        .set_global_trust(
-            user.org_id,
-            id,
-            WorkflowTrustState::Untrusted,
-            user.user_id,
-        )
+        .set_global_trust(user.org_id, id, WorkflowTrustState::Untrusted, user.user_id)
         .await
         .map_err(|_| ApiError::not_found("workflow not found"))?;
 
@@ -501,7 +496,9 @@ async fn list_moderation_events(
 ) -> ApiResult<Json<ModerationEventsResponse>> {
     // Auditor, SecurityEngineer, or SuperAdmin may view the history.
     if !user.has_any_permission(&["*", "workflow:approve", "audit:read", "read:*"]) {
-        return Err(ApiError::forbidden("insufficient permissions to view moderation events"));
+        return Err(ApiError::forbidden(
+            "insufficient permissions to view moderation events",
+        ));
     }
 
     let id: Uuid = workflow_id

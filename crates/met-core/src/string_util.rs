@@ -18,10 +18,7 @@ mod tests {
 
     #[test]
     fn first_equals_splits() {
-        assert_eq!(
-            split_key_value("a=b=c"),
-            Some(("a", "b=c"))
-        );
+        assert_eq!(split_key_value("a=b=c"), Some(("a", "b=c")));
     }
 
     #[test]

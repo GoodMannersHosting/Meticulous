@@ -58,10 +58,7 @@ impl<'a> PlatformSettingsRepo<'a> {
     /// How many hours of agent heartbeat rows to retain.  0 = disabled (keep forever).
     pub async fn heartbeat_retention_hours(&self) -> Result<i64> {
         let setting = self.get("heartbeat_retention_hours").await?;
-        Ok(setting
-            .and_then(|s| s.value.as_i64())
-            .unwrap_or(48)
-            .max(0))
+        Ok(setting.and_then(|s| s.value.as_i64()).unwrap_or(48).max(0))
     }
 
     /// Global default: how many days to retain pipeline run data.  0 = disabled.

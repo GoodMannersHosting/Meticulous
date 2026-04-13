@@ -125,7 +125,10 @@ pub fn workspace_snapshot_predecessor(pipeline: &PipelineIR, job: &JobIR) -> Opt
     None
 }
 
-fn object_base_prefix(org_id: OrganizationId, project_id: Option<met_core::ids::ProjectId>) -> String {
+fn object_base_prefix(
+    org_id: OrganizationId,
+    project_id: Option<met_core::ids::ProjectId>,
+) -> String {
     let org = org_id.as_uuid().to_string();
     match project_id {
         Some(p) => format!("orgs/{org}/projects/{}", p.as_uuid()),
@@ -144,8 +147,7 @@ pub fn snapshot_object_key_for_job_run(
     let base = object_base_prefix(org_id, project_id);
     format!(
         "{base}/workspace-snapshots/{}/{}.tar.zst",
-        run_id,
-        producer_job_run_id
+        run_id, producer_job_run_id
     )
 }
 

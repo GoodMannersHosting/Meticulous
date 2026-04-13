@@ -773,30 +773,27 @@ impl<'a> PipelineParser<'a> {
                 // workspace; only an explicit `affinity-group` on the invocation does (together
                 // with `agent-affinity.share-workspace`). Otherwise parallel jobs would have to be
                 // totally ordered for a group that only meant "prefer same agent".
-                let invocation_affinity_explicit = workflow.invocation.affinity_group.as_ref().and_then(
-                    |s| {
+                let invocation_affinity_explicit =
+                    workflow.invocation.affinity_group.as_ref().and_then(|s| {
                         let t = s.trim();
                         if t.is_empty() {
                             None
                         } else {
                             Some(t.to_string())
                         }
-                    },
-                );
-                let affinity_group = invocation_affinity_explicit
-                    .clone()
-                    .or_else(|| {
-                        pipeline.agent_affinity.as_ref().and_then(|a| {
-                            a.default_group.as_ref().and_then(|s| {
-                                let t = s.trim();
-                                if t.is_empty() {
-                                    None
-                                } else {
-                                    Some(t.to_string())
-                                }
-                            })
-                        })
                     });
+                let affinity_group = invocation_affinity_explicit.clone().or_else(|| {
+                    pipeline.agent_affinity.as_ref().and_then(|a| {
+                        a.default_group.as_ref().and_then(|s| {
+                            let t = s.trim();
+                            if t.is_empty() {
+                                None
+                            } else {
+                                Some(t.to_string())
+                            }
+                        })
+                    })
+                });
                 let share_workspace = affinity_group.is_some()
                     && pipeline
                         .agent_affinity

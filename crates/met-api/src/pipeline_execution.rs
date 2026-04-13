@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use uuid::Uuid;
 use met_core::ids::{OrganizationId, PipelineId, ProjectId, RunId, TriggerId};
 use met_core::models::{Pipeline, Run};
 use met_parser::ir::PipelineIR;
 use met_parser::{DatabaseWorkflowProvider, PipelineParser};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult, STORED_SECRETS_UNAVAILABLE};
 use crate::github_scm;
@@ -165,15 +165,14 @@ pub async fn start_engine_for_existing_run_from_state(
     };
 
     pipeline_ir.id = pipeline_id;
-       pipeline_ir.project_id = Some(project_id);
+    pipeline_ir.project_id = Some(project_id);
 
-    let run_environment_id: Option<Uuid> = sqlx::query_scalar(
-        r#"SELECT environment_id FROM runs WHERE id = $1"#,
-    )
-    .bind(run_id.as_uuid())
-    .fetch_one(state.db())
-    .await
-    .map_err(|e| ApiError::internal(format!("load run environment: {e}")))?;
+    let run_environment_id: Option<Uuid> =
+        sqlx::query_scalar(r#"SELECT environment_id FROM runs WHERE id = $1"#)
+            .bind(run_id.as_uuid())
+            .fetch_one(state.db())
+            .await
+            .map_err(|e| ApiError::internal(format!("load run environment: {e}")))?;
 
     let platform_vars = load_platform_variables_merged(
         state.db(),

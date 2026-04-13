@@ -1789,7 +1789,9 @@ async fn list_roles(
         },
         RoleInfo {
             name: "security_engineer".to_string(),
-            description: "Approve, reject, trust, and untrust global catalog workflows; notes required".to_string(),
+            description:
+                "Approve, reject, trust, and untrust global catalog workflows; notes required"
+                    .to_string(),
             permissions: PermissionRole::SecurityEngineer
                 .permissions()
                 .iter()

@@ -121,7 +121,11 @@ impl RunState {
     }
 
     /// Store snapshot metadata after a producer job uploads successfully.
-    pub async fn put_workspace_snapshot(&self, producer_job_id: JobId, record: WorkspaceSnapshotRecord) {
+    pub async fn put_workspace_snapshot(
+        &self,
+        producer_job_id: JobId,
+        record: WorkspaceSnapshotRecord,
+    ) {
         self.inner
             .workspace_snapshots
             .write()

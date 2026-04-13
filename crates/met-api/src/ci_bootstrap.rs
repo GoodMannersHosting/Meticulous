@@ -39,9 +39,7 @@ pub async fn run(db: &PgPool, password: Option<&str>) -> Result<(), Box<dyn std:
         return Ok(());
     }
 
-    tracing::warn!(
-        "CI MODE ACTIVE — creating bootstrap org/users/data. DO NOT run in production."
-    );
+    tracing::warn!("CI MODE ACTIVE — creating bootstrap org/users/data. DO NOT run in production.");
 
     // Create org
     let org = org_repo
@@ -124,9 +122,21 @@ async fn seed_data(
     let pipeline_repo = PipelineRepo::new(db);
 
     let seed_projects = [
-        ("Platform Services", "platform-services", "Core infrastructure services"),
-        ("Data Pipeline", "data-pipeline", "ETL and streaming data jobs"),
-        ("Frontend", "frontend", "Web application builds and deployments"),
+        (
+            "Platform Services",
+            "platform-services",
+            "Core infrastructure services",
+        ),
+        (
+            "Data Pipeline",
+            "data-pipeline",
+            "ETL and streaming data jobs",
+        ),
+        (
+            "Frontend",
+            "frontend",
+            "Web application builds and deployments",
+        ),
     ];
 
     let simple_def = json!({

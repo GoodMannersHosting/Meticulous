@@ -119,7 +119,9 @@ async fn update_platform_settings(
     }
     if let Some(hours) = req.heartbeat_retention_hours {
         if hours < 0 {
-            return Err(ApiError::bad_request("heartbeat_retention_hours must be >= 0"));
+            return Err(ApiError::bad_request(
+                "heartbeat_retention_hours must be >= 0",
+            ));
         }
         repo.set(
             "heartbeat_retention_hours",

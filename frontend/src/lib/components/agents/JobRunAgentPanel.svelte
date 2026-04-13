@@ -9,7 +9,7 @@
 		hostMetadataValueCellClass
 	} from '$lib/utils/agentHostMetadata';
 	import { formatRelativeTime } from '$utils/format';
-	import { Server, Search, ExternalLink } from 'lucide-svelte';
+	import { Server, Search, ExternalLink, ChevronRight } from 'lucide-svelte';
 
 	let {
 		jobName,
@@ -24,19 +24,35 @@
 		assignedAgentId?: string | null;
 	} = $props();
 
+	/** Collapsed by default so the Agents tab stays scannable on pipelines with many jobs. */
+	let expanded = $state(false);
+
 	let hostMetadataFilter = $state('');
 
 	const hostRows = $derived(filterHostMetadataEntries(audit?.last_security_bundle ?? null, hostMetadataFilter));
 </script>
 
-<div
-	class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] overflow-hidden"
+<!-- Native details/summary: panels start collapsed to limit scroll on large pipelines. -->
+<details
+	class="group rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] overflow-hidden open:shadow-sm"
+	bind:open={expanded}
 	aria-label="Agent details for job {jobName}"
 >
-	<div class="border-b border-[var(--border-secondary)] px-4 py-3 flex flex-wrap items-center gap-2">
+	<summary
+		class="flex cursor-pointer list-none items-center gap-2 border-b border-[var(--border-secondary)] px-4 py-3 [&::-webkit-details-marker]:hidden"
+	>
+		<ChevronRight
+			class="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition-transform group-open:rotate-90"
+			aria-hidden="true"
+		/>
 		<StatusBadge status={jobStatus} size="sm" showIcon={true} />
-		<span class="font-medium text-[var(--text-primary)]">{jobName}</span>
-	</div>
+		<span class="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">{jobName}</span>
+		{#if audit?.name}
+			<span class="hidden max-w-[40%] truncate text-xs text-[var(--text-tertiary)] sm:inline" title={audit.name}>
+				{audit.name}
+			</span>
+		{/if}
+	</summary>
 
 	<div class="p-4 space-y-4">
 		{#if audit}
@@ -188,4 +204,4 @@
 			</p>
 		{/if}
 	</div>
-</div>
+</details>

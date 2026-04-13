@@ -3,7 +3,9 @@
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use met_core::ids::{AgentId, JobRunId, OrganizationId, PipelineId, ProjectId, RunId};
-use met_secrets::{BuiltinStoredCrypto, decrypt_pkcs8_private_key, ec_private_key_pem_from_pkcs8_der};
+use met_secrets::{
+    BuiltinStoredCrypto, decrypt_pkcs8_private_key, ec_private_key_pem_from_pkcs8_der,
+};
 use met_store::PgPool;
 use met_store::repos::{JobRunRepo, OidcJobIdentityRow, OidcSigningKeyRepo};
 use serde::Serialize;
@@ -104,9 +106,8 @@ pub(crate) async fn mint_workload_identity_token(
     let iss = resolve_oidc_issuer_base(config);
     let sub = build_oidc_sub(&row);
     let now = Utc::now();
-    let ttl = chrono::Duration::from_std(config.oidc_id_token_ttl).map_err(|_| {
-        Status::internal("oidc_id_token_ttl out of range for chrono::Duration")
-    })?;
+    let ttl = chrono::Duration::from_std(config.oidc_id_token_ttl)
+        .map_err(|_| Status::internal("oidc_id_token_ttl out of range for chrono::Duration"))?;
     let exp = now + ttl;
     let jti = Uuid::new_v4();
 

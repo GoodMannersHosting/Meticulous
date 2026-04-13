@@ -82,7 +82,7 @@ pub struct PutWorkflowSyncScheduleRequest {
 #[utoipa::path(
     get,
     path = "/api/v1/workflows/catalog/sync-settings",
-    tag = "workflows",
+    tag = "workflows"
 )]
 #[instrument(skip(state))]
 async fn get_sync_settings(
@@ -119,9 +119,7 @@ async fn put_sync_settings(
 ) -> ApiResult<Json<OrgSyncSettingsResponse>> {
     require_admin(&user)?;
 
-    let interval = req
-        .default_sync_interval_minutes
-        .filter(|&v| v > 0);
+    let interval = req.default_sync_interval_minutes.filter(|&v| v > 0);
 
     sqlx::query(
         "UPDATE organizations SET default_workflow_sync_interval_minutes = $1 WHERE id = $2",
@@ -144,7 +142,7 @@ async fn put_sync_settings(
 #[utoipa::path(
     get,
     path = "/api/v1/workflows/{workflow_name}/sync-schedule",
-    tag = "workflows",
+    tag = "workflows"
 )]
 #[instrument(skip(state))]
 async fn get_workflow_sync_schedule(
@@ -228,7 +226,7 @@ async fn put_workflow_sync_schedule(
 #[utoipa::path(
     post,
     path = "/api/v1/workflows/{workflow_name}/sync-now",
-    tag = "workflows",
+    tag = "workflows"
 )]
 #[instrument(skip(state))]
 async fn trigger_sync_now(

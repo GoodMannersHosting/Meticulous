@@ -85,7 +85,13 @@ async fn process_due_schedules(state: &AppState) -> Result<(), Box<dyn std::erro
         }
 
         // Advance the schedule regardless of success so a bad workflow doesn't thrash.
-        let _ = advance_schedule(state.db(), schedule.org_id, &workflow_name, schedule.interval_minutes).await;
+        let _ = advance_schedule(
+            state.db(),
+            schedule.org_id,
+            &workflow_name,
+            schedule.interval_minutes,
+        )
+        .await;
     }
 
     Ok(())

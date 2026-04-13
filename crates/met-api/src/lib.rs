@@ -11,7 +11,6 @@
 
 pub mod auth;
 pub mod ci_bootstrap;
-pub mod tasks;
 pub mod config;
 pub mod error;
 pub mod extractors;
@@ -24,6 +23,7 @@ pub mod routes;
 pub mod scheduling_hints;
 pub mod state;
 pub mod stored_secret_policy;
+pub mod tasks;
 pub mod trigger_sync;
 pub mod workflow_diagnostics;
 pub mod workspace_presigner;

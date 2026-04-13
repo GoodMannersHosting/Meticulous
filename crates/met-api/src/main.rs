@@ -5,8 +5,7 @@
 
 use clap::Parser;
 use met_api::{
-    ApiDoc,
-    ci_bootstrap,
+    ApiDoc, ci_bootstrap,
     config::ApiConfig,
     routes,
     state::{AppState, ObjectStoragePublicConfig},
@@ -100,8 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_config.ci_mode = true;
         // Force password auth on in CI mode regardless of other config.
         api_config.auth.password_enabled = true;
-        api_config.ci_bootstrap_password =
-            std::env::var("MET_CI_BOOTSTRAP_PASSWORD").ok().filter(|s| !s.is_empty());
+        api_config.ci_bootstrap_password = std::env::var("MET_CI_BOOTSTRAP_PASSWORD")
+            .ok()
+            .filter(|s| !s.is_empty());
     }
 
     // Create database pool
@@ -123,7 +123,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CI mode: bootstrap org/users/data before serving.
     if api_config.ci_mode {
         let pw = api_config.ci_bootstrap_password.as_deref();
-        ci_bootstrap::run(&db, pw).await.map_err(|e| format!("CI bootstrap failed: {e}"))?;
+        ci_bootstrap::run(&db, pw)
+            .await
+            .map_err(|e| format!("CI bootstrap failed: {e}"))?;
     }
 
     let stale_after = api_config.agent_stale_after_secs;

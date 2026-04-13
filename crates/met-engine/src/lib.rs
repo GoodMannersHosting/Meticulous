@@ -86,8 +86,8 @@ mod output_crypto;
 pub use secrets::SecretEncryption;
 pub use state::{JobState, RunState, StepState};
 pub use workspace_snapshots::{
-    snapshot_object_key_for_job_run, workspace_snapshot_predecessor, WorkspaceSnapshotConfig,
-    WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+    WorkspaceSnapshotConfig, WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+    snapshot_object_key_for_job_run, workspace_snapshot_predecessor,
 };
 
 use async_nats::jetstream::Context as JetStreamContext;
@@ -133,7 +133,10 @@ impl std::fmt::Debug for EngineConfig {
             .field("executor", &self.executor)
             .field("scheduler", &self.scheduler)
             .field("cache_prefix", &self.cache_prefix)
-            .field("builtin_secrets_master_key", &self.builtin_secrets_master_key.is_some())
+            .field(
+                "builtin_secrets_master_key",
+                &self.builtin_secrets_master_key.is_some(),
+            )
             .field("builtin_secrets_key_id", &self.builtin_secrets_key_id)
             .field("workspace_snapshots", &self.workspace_snapshots)
             .field(

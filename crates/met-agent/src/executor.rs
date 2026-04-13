@@ -14,9 +14,7 @@ use met_proto::agent::v1::{
     agent_service_client::AgentServiceClient,
 };
 use met_proto::common::v1::{RunStatus, Timestamp};
-use met_proto::controller::v1::{
-    WorkflowInvocationOutputs, WorkspaceSnapshotUploadResult,
-};
+use met_proto::controller::v1::{WorkflowInvocationOutputs, WorkspaceSnapshotUploadResult};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, mpsc, watch};

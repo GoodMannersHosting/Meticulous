@@ -21,8 +21,8 @@ use crate::events::EventBroadcaster;
 use crate::persistence::RunPersistence;
 use crate::state::RunState;
 use crate::workspace_snapshots::{
-    snapshot_object_key_for_job_run, workspace_snapshot_predecessor, WorkspaceSnapshotConfig,
-    WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+    WorkspaceSnapshotConfig, WorkspaceSnapshotPresigner, WorkspaceSnapshotRecord,
+    snapshot_object_key_for_job_run, workspace_snapshot_predecessor,
 };
 
 /// Job dispatch message for NATS.
@@ -475,8 +475,12 @@ impl Scheduler {
                 });
             }
 
-            let object_key =
-                snapshot_object_key_for_job_run(ctx.org_id(), ctx.project_id(), ctx.run_id(), job_run_id);
+            let object_key = snapshot_object_key_for_job_run(
+                ctx.org_id(),
+                ctx.project_id(),
+                ctx.run_id(),
+                job_run_id,
+            );
             let put_url = presigner
                 .presign_put(
                     ctx.org_id(),
@@ -631,13 +635,20 @@ impl Scheduler {
             }
 
             if notification.success {
-                let passive = self.workspace_snapshots.enabled && self.workspace_presigner.is_some();
+                let passive =
+                    self.workspace_snapshots.enabled && self.workspace_presigner.is_some();
                 if passive {
-                    if let Some(job_ir) = ctx.pipeline().jobs.iter().find(|j| j.id == job_state.job_id)
+                    if let Some(job_ir) = ctx
+                        .pipeline()
+                        .jobs
+                        .iter()
+                        .find(|j| j.id == job_state.job_id)
                     {
                         if job_ir.share_workspace {
                             if let Some(ref res) = notification.workspace_snapshot_result {
-                                if res.uploaded && !res.sha256.is_empty() && !res.object_key.is_empty()
+                                if res.uploaded
+                                    && !res.sha256.is_empty()
+                                    && !res.object_key.is_empty()
                                 {
                                     let generation =
                                         run_state.next_workspace_snapshot_generation().await;

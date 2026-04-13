@@ -535,8 +535,7 @@ pub async fn list_github_directory_yaml_files(
     let paths = entries
         .into_iter()
         .filter(|e| {
-            e.entry_type == "file"
-                && (e.name.ends_with(".yaml") || e.name.ends_with(".yml"))
+            e.entry_type == "file" && (e.name.ends_with(".yaml") || e.name.ends_with(".yml"))
         })
         .map(|e| e.path)
         .collect();

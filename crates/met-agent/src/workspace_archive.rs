@@ -62,7 +62,10 @@ fn unpack_tar_zst(workspace: &Path, compressed: &[u8]) -> Result<()> {
     let dec = zstd::decode_all(compressed)
         .map_err(|e| AgentError::Workspace(format!("zstd decompress: {e}")))?;
     let mut archive = tar::Archive::new(std::io::Cursor::new(dec));
-    for entry in archive.entries().map_err(|e| AgentError::Workspace(e.to_string()))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| AgentError::Workspace(e.to_string()))?
+    {
         let mut entry = entry.map_err(|e| AgentError::Workspace(e.to_string()))?;
         let path = entry
             .path()
@@ -98,9 +101,9 @@ fn pack_blocking(workspace: &Path, max_uncompressed: u64) -> Result<Vec<u8>> {
     for entry in walk {
         let entry = entry.map_err(|e| AgentError::Workspace(e.to_string()))?;
         let path = entry.path();
-        let rel = path.strip_prefix(workspace).map_err(|e| {
-            AgentError::Workspace(format!("strip_prefix {}: {e}", path.display()))
-        })?;
+        let rel = path
+            .strip_prefix(workspace)
+            .map_err(|e| AgentError::Workspace(format!("strip_prefix {}: {e}", path.display())))?;
 
         if rel.as_os_str().is_empty() {
             continue;
@@ -111,7 +114,9 @@ fn pack_blocking(workspace: &Path, max_uncompressed: u64) -> Result<Vec<u8>> {
             continue;
         }
 
-        let meta = entry.metadata().map_err(|e| AgentError::Workspace(e.to_string()))?;
+        let meta = entry
+            .metadata()
+            .map_err(|e| AgentError::Workspace(e.to_string()))?;
         if meta.is_dir() {
             continue;
         }
@@ -128,9 +133,8 @@ fn pack_blocking(workspace: &Path, max_uncompressed: u64) -> Result<Vec<u8>> {
             )));
         }
 
-        tar.append_path_with_name(path, rel).map_err(|e| {
-            AgentError::Workspace(format!("tar append {}: {e}", rel.display()))
-        })?;
+        tar.append_path_with_name(path, rel)
+            .map_err(|e| AgentError::Workspace(format!("tar append {}: {e}", rel.display())))?;
     }
 
     tar.into_inner()
@@ -177,11 +181,7 @@ pub async fn snapshot_and_upload(
         let root = workspace.to_path_buf();
         let max = spec.max_bytes;
         move || {
-            let max_u = if max <= 0 {
-                u64::MAX
-            } else {
-                max as u64
-            };
+            let max_u = if max <= 0 { u64::MAX } else { max as u64 };
             let raw = pack_blocking(&root, max_u)?;
             let mut hasher = Sha256::new();
             hasher.update(&raw);

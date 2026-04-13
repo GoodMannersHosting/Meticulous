@@ -32,8 +32,7 @@ pub fn spawn(state: AppState) {
 }
 
 async fn run_loop(state: &AppState) {
-    let mut interval =
-        tokio::time::interval(tokio::time::Duration::from_secs(POLL_INTERVAL_SECS));
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(POLL_INTERVAL_SECS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;

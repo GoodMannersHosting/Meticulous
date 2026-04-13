@@ -8,11 +8,11 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use met_controller::rehydrate_job_logs_from_store;
 use met_core::{
     ids::{JobId, JobRunId, PipelineId, ProjectId, RunId, StepRunId},
     models::{JobRun, Run, RunStatus},
 };
-use met_controller::rehydrate_job_logs_from_store;
 use met_objstore::ObjectStore;
 use met_store::{
     PgPool,

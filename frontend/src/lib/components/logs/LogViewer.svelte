@@ -78,10 +78,21 @@
 		});
 	}
 
+	/**
+	 * Sequences restart from 0 per workflow step (`log_cache` PK is job_run_id + step_key + sequence).
+	 * Keys and poll dedupe must include step scope, or multi-step jobs (e.g. SAST) collide and {#each} breaks.
+	 */
+	function logLineSequenceKey(line: LogLinePayload): string | null {
+		if (line.sequence == null || !Number.isFinite(line.sequence)) return null;
+		const step = (line.step_run_id ?? '').trim();
+		return `${step}\0${line.sequence}`;
+	}
+
 	/** Stable {#each} key: DB sequence when present; else hash of content (WS / legacy). */
 	function lineStableKey(line: LogLinePayload): string {
-		if (line.sequence != null && Number.isFinite(line.sequence)) {
-			return `seq:${line.sequence}`;
+		const seqKey = logLineSequenceKey(line);
+		if (seqKey != null) {
+			return `seq:${seqKey}`;
 		}
 		let h = 5381;
 		const s = `${line.timestamp}\0${line.level}\0${line.step_run_id ?? ''}\0${line.line}`;
@@ -93,13 +104,14 @@
 
 	function mergeAppendBySequence(base: LogLinePayload[], incoming: LogLinePayload[]): LogLinePayload[] {
 		const seen = new Set(
-			base.map((l) => l.sequence).filter((n): n is number => n != null && Number.isFinite(n))
+			base.map((l) => logLineSequenceKey(l)).filter((k): k is string => k != null)
 		);
 		const out = [...base];
 		for (const l of incoming) {
-			if (l.sequence != null && Number.isFinite(l.sequence)) {
-				if (seen.has(l.sequence)) continue;
-				seen.add(l.sequence);
+			const k = logLineSequenceKey(l);
+			if (k != null) {
+				if (seen.has(k)) continue;
+				seen.add(k);
 			}
 			out.push(l);
 		}

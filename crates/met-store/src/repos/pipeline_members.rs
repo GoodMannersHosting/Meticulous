@@ -108,10 +108,7 @@ mod tests {
             PipelineRole::from_str("superuser"),
             std::result::Result::Err(())
         );
-        assert_eq!(
-            PipelineRole::from_str(""),
-            std::result::Result::Err(())
-        );
+        assert_eq!(PipelineRole::from_str(""), std::result::Result::Err(()));
     }
 
     #[test]

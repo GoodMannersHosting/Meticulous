@@ -454,10 +454,7 @@ impl<'a> ProjectRepo<'a> {
     /// `global_days` is the platform-wide default (0 = disabled).  Projects with a non-null
     /// `run_retention_days` override use that value; otherwise the global default applies.
     /// Only projects where the effective value is > 0 are returned.
-    pub async fn list_with_retention(
-        &self,
-        global_days: i64,
-    ) -> Result<Vec<ProjectRetentionRow>> {
+    pub async fn list_with_retention(&self, global_days: i64) -> Result<Vec<ProjectRetentionRow>> {
         let rows = sqlx::query_as::<_, ProjectRetentionRow>(
             r#"
             SELECT

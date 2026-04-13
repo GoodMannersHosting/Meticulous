@@ -504,9 +504,10 @@ impl<C: CacheBackend> Executor<C> {
             .ok_or_else(|| EngineError::JobNotFound(job.id))?;
         let job_run_id = job_record.job_run_id;
 
-        let any_dep_failed = job.depends_on.iter().any(|dep_id| {
-            futures::executor::block_on(run_state.failed_jobs()).contains(dep_id)
-        });
+        let any_dep_failed = job
+            .depends_on
+            .iter()
+            .any(|dep_id| futures::executor::block_on(run_state.failed_jobs()).contains(dep_id));
 
         if any_dep_failed && !condition_allows_run_after_failed_deps(job.condition.as_deref()) {
             let msg = "Cancelled because an upstream job failed";
@@ -531,7 +532,9 @@ impl<C: CacheBackend> Executor<C> {
                     run_state
                         .mark_job_skipped(&job.id, Some(reason.clone()))
                         .await;
-                    self.persistence.skip_job(job_run_id, Some(reason.as_str())).await?;
+                    self.persistence
+                        .skip_job(job_run_id, Some(reason.as_str()))
+                        .await?;
                     return Ok(());
                 }
                 Err(e) => {
@@ -685,7 +688,9 @@ impl<C: CacheBackend> Executor<C> {
             run_state
                 .mark_job_cancelled(&job_id, Some(msg.to_string()))
                 .await;
-            self.persistence.cancel_job(js.job_run_id, Some(msg)).await?;
+            self.persistence
+                .cancel_job(js.job_run_id, Some(msg))
+                .await?;
         }
         Ok(())
     }
