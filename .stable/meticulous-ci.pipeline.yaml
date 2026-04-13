@@ -85,7 +85,7 @@ workflows:
   - name: Typo check
     id: typos
     workflow: global/typos
-    version: "1.0.0"
+    version: "1.1.0"
     depends-on: [checkout]
     inputs:
       path: meticulous
@@ -93,7 +93,7 @@ workflows:
   - name: SAST (Opengrep)
     id: opengrep
     workflow: global/opengrep
-    version: "1.0.0"
+    version: "1.1.0"
     depends-on: [checkout]
     inputs:
       scan_path: meticulous
@@ -151,13 +151,13 @@ workflows:
   - name: API smoke tests
     id: api-smoke
     workflow: global/api-smoke-test
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [ci-seed]
 
   - name: Playwright E2E tests
     id: playwright
     workflow: global/playwright-test
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [ci-seed]
     inputs:
       workspace_path: meticulous
@@ -166,7 +166,7 @@ workflows:
   - name: DAST scan (ZAP)
     id: zap
     workflow: global/zap-scan
-    version: "1.0.0"
+    version: "1.0.1"
     depends-on: [ci-seed]
     inputs:
       fail_on_warn: "false"
@@ -175,7 +175,7 @@ workflows:
   - name: Build and push met-agent
     id: push-agent
     workflow: global/docker-buildx-push
-    version: "1.0.1"
+    version: &dbxpushversion "1.0.2"
     affinity-group: ci
     depends-on: [playwright, api-smoke, zap]
     inputs:
@@ -187,7 +187,7 @@ workflows:
   - name: Trivy scan met-agent
     id: scan-agent
     workflow: global/trivy-scan
-    version: "1.1.2"
+    version: &trivyscanversion "1.2.0"
     affinity-group: ci
     depends-on: [push-agent]
     inputs:
@@ -199,7 +199,7 @@ workflows:
   - name: Build and push met-api
     id: push-api
     workflow: global/docker-buildx-push
-    version: "1.0.1"
+    version: *dbxpushversion
     affinity-group: ci
     depends-on: [scan-agent]
     inputs:
@@ -211,7 +211,7 @@ workflows:
   - name: Trivy scan met-api
     id: scan-api
     workflow: global/trivy-scan
-    version: "1.1.2"
+    version: *trivyscanversion
     affinity-group: ci
     depends-on: [push-api]
     inputs:
@@ -223,7 +223,7 @@ workflows:
   - name: Build and push met-controller
     id: push-controller
     workflow: global/docker-buildx-push
-    version: "1.0.1"
+    version: *dbxpushversion
     affinity-group: ci
     depends-on: [scan-api]
     inputs:
@@ -235,7 +235,7 @@ workflows:
   - name: Trivy scan met-controller
     id: scan-controller
     workflow: global/trivy-scan
-    version: "1.1.2"
+    version: *trivyscanversion
     affinity-group: ci
     depends-on: [push-controller]
     inputs:
@@ -247,7 +247,7 @@ workflows:
   - name: Build and push met-frontend
     id: push-frontend
     workflow: global/docker-buildx-push
-    version: "1.0.1"
+    version: *dbxpushversion
     affinity-group: ci
     depends-on: [scan-controller]
     inputs:
@@ -259,7 +259,7 @@ workflows:
   - name: Trivy scan met-frontend
     id: scan-frontend
     workflow: global/trivy-scan
-    version: "1.1.2"
+    version: *trivyscanversion
     affinity-group: ci
     depends-on: [push-frontend]
     inputs:
@@ -271,7 +271,7 @@ workflows:
   - name: Build and push sqlx-migrate
     id: push-sqlx-migrate
     workflow: global/docker-buildx-push
-    version: "1.0.1"
+    version: *dbxpushversion
     affinity-group: ci
     depends-on: [scan-frontend]
     inputs:
@@ -283,7 +283,7 @@ workflows:
   - name: Trivy scan sqlx-migrate
     id: scan-sqlx-migrate
     workflow: global/trivy-scan
-    version: "1.1.2"
+    version: *trivyscanversion
     affinity-group: ci
     depends-on: [push-sqlx-migrate]
     inputs:
