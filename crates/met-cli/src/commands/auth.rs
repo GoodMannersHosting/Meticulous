@@ -1,5 +1,5 @@
 use crate::OutputFormat;
-use crate::api_client::{ApiClient, ApiError, Result};
+use crate::api_client::{ApiClient, Result};
 use crate::auth;
 use crate::output::{build_table, format_timestamp, print_serialized, print_success, print_table};
 use comfy_table::Cell;

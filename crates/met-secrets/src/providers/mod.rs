@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::{Result, SecretsError};
 use crate::traits::{SecretRef, SecretsBroker, SecretsProvider};
@@ -64,10 +64,10 @@ impl CircuitBreaker {
             return true;
         }
         let last = self.last_failure.read().await;
-        if let Some(last_failure) = *last {
-            if last_failure.elapsed() > self.recovery_timeout {
-                return true; // Half-open: allow a trial request
-            }
+        if let Some(last_failure) = *last
+            && last_failure.elapsed() > self.recovery_timeout
+        {
+            return true; // Half-open: allow a trial request
         }
         false
     }
@@ -176,13 +176,13 @@ impl MultiProviderBroker {
             }
 
             let cb = self.circuit_breakers.get(&provider_type);
-            if let Some(cb) = cb {
-                if !cb.is_available().await {
-                    return Err(SecretsError::provider_unavailable(
-                        provider_type.as_str(),
-                        "circuit breaker open",
-                    ));
-                }
+            if let Some(cb) = cb
+                && !cb.is_available().await
+            {
+                return Err(SecretsError::provider_unavailable(
+                    provider_type.as_str(),
+                    "circuit breaker open",
+                ));
             }
 
             let provider = &self.providers[&provider_type];

@@ -246,18 +246,18 @@ impl JobExecutor {
                                                 Ok(()) => {
                                                     if let Err(e) = message.ack().await {
                                                         warn!(error = %e, "failed to ack message after job success");
-                                                    } else if let Some(limit) = self.config.exit_after_jobs {
-                                                        if !suppress_exit_after_jobs {
-                                                            self.jobs_completed =
-                                                                self.jobs_completed.saturating_add(1);
-                                                            if self.jobs_completed >= limit {
-                                                                info!(
-                                                                    jobs_completed = self.jobs_completed,
-                                                                    limit,
-                                                                    "exit_after_jobs reached; requesting graceful shutdown"
-                                                                );
-                                                                let _ = self.shutdown_tx.send(true);
-                                                            }
+                                                    } else if let Some(limit) = self.config.exit_after_jobs
+                                                        && !suppress_exit_after_jobs
+                                                    {
+                                                        self.jobs_completed =
+                                                            self.jobs_completed.saturating_add(1);
+                                                        if self.jobs_completed >= limit {
+                                                            info!(
+                                                                jobs_completed = self.jobs_completed,
+                                                                limit,
+                                                                "exit_after_jobs reached; requesting graceful shutdown"
+                                                            );
+                                                            let _ = self.shutdown_tx.send(true);
                                                         }
                                                     }
                                                 }
@@ -375,10 +375,10 @@ impl JobExecutor {
 
     async fn clear_step_trace_slot(&self, job_run_id: &str) {
         let mut g = self.active_trace.write().await;
-        if let Some(t) = g.as_mut() {
-            if t.job_run_id == job_run_id {
-                t.step_run_id = None;
-            }
+        if let Some(t) = g.as_mut()
+            && t.job_run_id == job_run_id
+        {
+            t.step_run_id = None;
         }
     }
 
@@ -518,10 +518,10 @@ impl JobExecutor {
         job: &met_proto::controller::v1::JobDispatch,
         workspace: &std::path::Path,
     ) -> Result<()> {
-        if let Some(ref snap) = job.workspace_restore {
-            if !snap.snapshot_download_url.is_empty() {
-                crate::workspace_archive::restore_workspace(workspace, snap).await?;
-            }
+        if let Some(ref snap) = job.workspace_restore
+            && !snap.snapshot_download_url.is_empty()
+        {
+            crate::workspace_archive::restore_workspace(workspace, snap).await?;
         }
 
         // Generate per-job PKI and exchange keys
@@ -625,28 +625,27 @@ impl JobExecutor {
 
         let mut snapshot_upload_result: Option<WorkspaceSnapshotUploadResult> = None;
         let mut snapshot_failure: Option<String> = None;
-        if job_success {
-            if let Some(ref spec) = job.workspace_snapshot_upload {
-                if !spec.snapshot_upload_url.is_empty() {
-                    match crate::workspace_archive::snapshot_and_upload(workspace, spec).await {
-                        Ok(r) => {
-                            if r.uploaded || r.skipped {
-                                snapshot_upload_result = Some(r);
-                            } else {
-                                job_success = false;
-                                snapshot_failure = Some(if r.error_message.is_empty() {
-                                    "workspace snapshot upload was not successful".into()
-                                } else {
-                                    r.error_message.clone()
-                                });
-                                snapshot_upload_result = Some(r);
-                            }
-                        }
-                        Err(e) => {
-                            job_success = false;
-                            snapshot_failure = Some(e.to_string());
-                        }
+        if job_success
+            && let Some(ref spec) = job.workspace_snapshot_upload
+            && !spec.snapshot_upload_url.is_empty()
+        {
+            match crate::workspace_archive::snapshot_and_upload(workspace, spec).await {
+                Ok(r) => {
+                    if r.uploaded || r.skipped {
+                        snapshot_upload_result = Some(r);
+                    } else {
+                        job_success = false;
+                        snapshot_failure = Some(if r.error_message.is_empty() {
+                            "workspace snapshot upload was not successful".into()
+                        } else {
+                            r.error_message.clone()
+                        });
+                        snapshot_upload_result = Some(r);
                     }
+                }
+                Err(e) => {
+                    job_success = false;
+                    snapshot_failure = Some(e.to_string());
                 }
             }
         }
@@ -675,13 +674,12 @@ impl JobExecutor {
         )
         .await?;
 
-        if job_success {
-            if let Err(e) =
+        if job_success
+            && let Err(e) =
                 crate::job_claim::record_job_successful_completion(&self.config, &job.job_run_id)
                     .await
-            {
-                warn!(error = %e, "failed to persist local job completion idempotency marker");
-            }
+        {
+            warn!(error = %e, "failed to persist local job completion idempotency marker");
         }
 
         info!(
@@ -729,10 +727,10 @@ impl JobExecutor {
 
         {
             let mut g = self.active_trace.write().await;
-            if let Some(t) = g.as_mut() {
-                if t.job_run_id == job_run_id {
-                    t.step_run_id = Some(step.step_run_id.clone());
-                }
+            if let Some(t) = g.as_mut()
+                && t.job_run_id == job_run_id
+            {
+                t.step_run_id = Some(step.step_run_id.clone());
             }
         }
 

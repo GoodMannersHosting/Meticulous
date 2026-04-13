@@ -57,6 +57,7 @@ pub enum EnvironmentType {
 
 /// Collector for security bundle information.
 pub struct SecurityBundleCollector {
+    #[allow(dead_code)]
     key_pair: Option<KeyPair>,
 }
 
@@ -158,11 +159,11 @@ impl SecurityBundleCollector {
         #[cfg(target_os = "linux")]
         {
             // Check timedatectl
-            if let Ok(output) = Command::new("timedatectl").arg("status").output() {
-                if let Ok(stdout) = String::from_utf8(output.stdout) {
-                    return stdout.contains("synchronized: yes")
-                        || stdout.contains("NTP synchronized: yes");
-                }
+            if let Ok(output) = Command::new("timedatectl").arg("status").output()
+                && let Ok(stdout) = String::from_utf8(output.stdout)
+            {
+                return stdout.contains("synchronized: yes")
+                    || stdout.contains("NTP synchronized: yes");
             }
             // Assume synced if we can't check
             true
@@ -177,43 +178,43 @@ impl SecurityBundleCollector {
     /// Detect container runtime.
     fn detect_container_runtime(&self) -> (String, String) {
         // Check for Docker
-        if let Ok(output) = Command::new("docker").arg("--version").output() {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout);
-                let version = version
-                    .split_whitespace()
-                    .nth(2)
-                    .unwrap_or("unknown")
-                    .trim_end_matches(',')
-                    .to_string();
-                return ("docker".to_string(), version);
-            }
+        if let Ok(output) = Command::new("docker").arg("--version").output()
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version = version
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .trim_end_matches(',')
+                .to_string();
+            return ("docker".to_string(), version);
         }
 
         // Check for Podman
-        if let Ok(output) = Command::new("podman").arg("--version").output() {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout);
-                let version = version
-                    .split_whitespace()
-                    .nth(2)
-                    .unwrap_or("unknown")
-                    .to_string();
-                return ("podman".to_string(), version);
-            }
+        if let Ok(output) = Command::new("podman").arg("--version").output()
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version = version
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .to_string();
+            return ("podman".to_string(), version);
         }
 
         // Check for containerd
-        if let Ok(output) = Command::new("ctr").arg("--version").output() {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout);
-                let version = version
-                    .split_whitespace()
-                    .nth(2)
-                    .unwrap_or("unknown")
-                    .to_string();
-                return ("containerd".to_string(), version);
-            }
+        if let Ok(output) = Command::new("ctr").arg("--version").output()
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version = version
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .to_string();
+            return ("containerd".to_string(), version);
         }
 
         ("none".to_string(), String::new())
@@ -225,22 +226,22 @@ impl SecurityBundleCollector {
         if std::path::Path::new("/.dockerenv").exists() {
             return EnvironmentType::Container;
         }
-        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
-            if cgroup.contains("docker") || cgroup.contains("kubepods") {
-                return EnvironmentType::Container;
-            }
+        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup")
+            && (cgroup.contains("docker") || cgroup.contains("kubepods"))
+        {
+            return EnvironmentType::Container;
         }
 
         // Check for VM
         #[cfg(target_os = "linux")]
         {
-            if let Ok(output) = Command::new("systemd-detect-virt").output() {
-                if output.status.success() {
-                    let virt = String::from_utf8_lossy(&output.stdout);
-                    let virt = virt.trim();
-                    if virt != "none" {
-                        return EnvironmentType::Virtual;
-                    }
+            if let Ok(output) = Command::new("systemd-detect-virt").output()
+                && output.status.success()
+            {
+                let virt = String::from_utf8_lossy(&output.stdout);
+                let virt = virt.trim();
+                if virt != "none" {
+                    return EnvironmentType::Virtual;
                 }
             }
         }
@@ -396,6 +397,7 @@ pub struct JobPki {
     /// One-time keypair for this job (X.509/CSR use).
     key_pair: KeyPair,
     /// Private key (zeroized on drop).
+    #[allow(dead_code)]
     private_key_der: Zeroizing<Vec<u8>>,
     /// X25519 static secret for hybrid decryption.
     x25519_secret: X25519StaticSecret,

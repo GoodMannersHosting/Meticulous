@@ -8,6 +8,22 @@
 //! - Cursor-based pagination
 //! - Structured error responses with request ID tracing
 //! - Rate limiting and CORS middleware
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_mut,
+    unused_variables,
+    clippy::collapsible_else_if,
+    clippy::collapsible_if,
+    clippy::field_reassign_with_default,
+    clippy::manual_unwrap_or_default,
+    clippy::result_unit_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_or_default,
+    clippy::useless_conversion,
+)]
 
 pub mod auth;
 pub mod ci_bootstrap;

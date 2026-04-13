@@ -340,13 +340,7 @@ impl AgentConfig {
 
         candidates.push(PathBuf::from("/etc/meticulous/agent.toml"));
 
-        for path in candidates {
-            if path.exists() {
-                return Some(path);
-            }
-        }
-
-        None
+        candidates.into_iter().find(|path| path.exists())
     }
 
     /// Apply environment variables.
@@ -369,22 +363,21 @@ impl AgentConfig {
         if let Ok(labels) = std::env::var("MET_AGENT_LABELS") {
             self.labels = labels.split(',').map(|s| s.trim().to_string()).collect();
         }
-        if let Ok(concurrency) = std::env::var("MET_AGENT_CONCURRENCY") {
-            if let Ok(c) = concurrency.parse() {
-                self.concurrency = c;
-            }
+        if let Ok(concurrency) = std::env::var("MET_AGENT_CONCURRENCY")
+            && let Ok(c) = concurrency.parse()
+        {
+            self.concurrency = c;
         }
-        if let Ok(m) = std::env::var("MET_AGENT_MAX_JOBS") {
-            if let Ok(v) = m.parse::<i32>() {
-                self.max_jobs = Some(v.max(1));
-            }
+        if let Ok(m) = std::env::var("MET_AGENT_MAX_JOBS")
+            && let Ok(v) = m.parse::<i32>()
+        {
+            self.max_jobs = Some(v.max(1));
         }
-        if let Ok(m) = std::env::var("MET_AGENT_EXIT_AFTER_JOBS") {
-            if let Ok(v) = m.parse::<u32>() {
-                if v >= 1 {
-                    self.exit_after_jobs = Some(v);
-                }
-            }
+        if let Ok(m) = std::env::var("MET_AGENT_EXIT_AFTER_JOBS")
+            && let Ok(v) = m.parse::<u32>()
+            && v >= 1
+        {
+            self.exit_after_jobs = Some(v);
         }
         if let Ok(workspace) = std::env::var("MET_WORKSPACE_DIR") {
             self.workspace_dir = PathBuf::from(workspace);

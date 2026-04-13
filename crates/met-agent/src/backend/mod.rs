@@ -198,7 +198,7 @@ async fn container_backend_or_warn_and_native() -> Box<dyn ExecutionBackend> {
             "execution_runtime=container requested but no Docker/Podman-style CLI is available; \
              using native (host) execution"
         );
-        return Box::new(NativeBackend::new());
+        Box::new(NativeBackend::new())
     }
     #[cfg(not(target_os = "linux"))]
     {

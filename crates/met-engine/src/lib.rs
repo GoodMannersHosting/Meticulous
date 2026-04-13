@@ -48,6 +48,14 @@
 //! // Execute a run
 //! let result = engine.execute(pipeline_ir, "manual").await?;
 //! ```
+#![allow(
+    clippy::collapsible_if,
+    clippy::question_mark,
+    clippy::too_many_arguments,
+    dead_code,
+    unused_imports,
+    unused_variables,
+)]
 
 pub mod affinity;
 pub mod artifacts;

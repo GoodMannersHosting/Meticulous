@@ -250,28 +250,29 @@ fn validate_expression(
                         )
                         .with_source(location),
                     );
-                } else if let Some(declared) = ctx.workflow_declared_outputs.get(inv) {
-                    if !declared.is_empty() && !declared.contains(out_name) {
-                        let mut sample: Vec<&String> = declared.iter().collect();
-                        sample.sort();
-                        diagnostics.push(
-                            crate::error::ParseError::new(
-                                ErrorCode::E4001,
-                                format!(
-                                    "workflow invocation '{inv}' has no declared output '{out_name}'"
-                                ),
-                            )
-                            .with_source(location.clone())
-                            .with_hint(format!(
-                                "declared outputs for '{inv}': {}",
-                                sample
-                                    .into_iter()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )),
-                        );
-                    }
+                } else if let Some(declared) = ctx.workflow_declared_outputs.get(inv)
+                    && !declared.is_empty()
+                    && !declared.contains(out_name)
+                {
+                    let mut sample: Vec<&String> = declared.iter().collect();
+                    sample.sort();
+                    diagnostics.push(
+                        crate::error::ParseError::new(
+                            ErrorCode::E4001,
+                            format!(
+                                "workflow invocation '{inv}' has no declared output '{out_name}'"
+                            ),
+                        )
+                        .with_source(location.clone())
+                        .with_hint(format!(
+                            "declared outputs for '{inv}': {}",
+                            sample
+                                .into_iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                    );
                 }
             }
         }

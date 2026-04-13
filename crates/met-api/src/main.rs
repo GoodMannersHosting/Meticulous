@@ -79,10 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("CORS allowed from any origin - DO NOT use in production");
     }
 
-    if let Ok(secret) = std::env::var("MET_JWT__SECRET") {
-        if !secret.is_empty() {
-            api_config.jwt.secret = secret;
-        }
+    if let Ok(secret) = std::env::var("MET_JWT__SECRET") && !secret.is_empty() {
+        api_config.jwt.secret = secret;
     }
 
     if std::env::var("MET_HTTP__ENABLE_HSTS")
@@ -211,13 +209,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("MET_WORKSPACE_SNAPSHOTS_DISABLED").as_deref(),
         Ok("1") | Ok("true") | Ok("yes")
     );
-    let mut workspace_snapshots = met_engine::WorkspaceSnapshotConfig::default();
-    workspace_snapshots.enabled = object_store.is_some() && !workspace_snapshots_disabled;
-    workspace_snapshots.object_ttl_hours = std::env::var("MET_WORKSPACE_SNAPSHOT_TTL_HOURS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(24)
-        .clamp(1, 168);
+    let workspace_snapshots = met_engine::WorkspaceSnapshotConfig {
+        enabled: object_store.is_some() && !workspace_snapshots_disabled,
+        object_ttl_hours: std::env::var("MET_WORKSPACE_SNAPSHOT_TTL_HOURS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(24)
+            .clamp(1, 168),
+        ..Default::default()
+    };
     let workspace_snapshot_presigner = object_store.clone().map(|s| {
         std::sync::Arc::new(met_api::workspace_presigner::S3WorkspaceSnapshotPresigner::new(s))
             as std::sync::Arc<dyn met_engine::WorkspaceSnapshotPresigner>

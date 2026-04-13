@@ -3,13 +3,13 @@
 //! Supports KV v1 and KV v2 secret engines with AppRole and JWT authentication.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::error::{Result, SecretsError};
-use crate::traits::{ProviderConfig, SecretsProvider, SecretsWriter};
+use crate::traits::{ProviderConfig, SecretsProvider};
 use crate::types::{ProviderType, SecretMetadata, SecretValue};
 
 /// Authentication method for Vault.
@@ -86,6 +86,8 @@ impl VaultConfig {
     }
 }
 
+// Wire format types for Vault KV/auth JSON (deserialized when KV client is extended).
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct VaultResponse<T> {
     data: T,
@@ -93,18 +95,21 @@ struct VaultResponse<T> {
     renewable: Option<bool>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct KvV2Data {
     data: std::collections::HashMap<String, serde_json::Value>,
     metadata: Option<KvV2Metadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct KvV2Metadata {
     version: Option<u64>,
     created_time: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct VaultAuthResponse {
     client_token: String,

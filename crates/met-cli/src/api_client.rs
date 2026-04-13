@@ -57,6 +57,7 @@ impl ApiClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -254,6 +255,7 @@ impl ApiClient {
         unreachable!()
     }
 
+    #[allow(dead_code)]
     pub async fn post_empty<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
         let url = self.url(path);
         self.log_request("POST", &url);
@@ -272,6 +274,7 @@ impl ApiClient {
         self.handle_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub async fn patch<T: DeserializeOwned, B: Serialize>(
         &self,
         path: &str,

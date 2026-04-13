@@ -159,7 +159,7 @@ pub async fn try_parse_pipeline_ir(
     }
 }
 
-fn job_display_name<'a>(ir: &'a PipelineIR, id: JobId) -> &'a str {
+fn job_display_name(ir: &PipelineIR, id: JobId) -> &str {
     ir.jobs
         .iter()
         .find(|j| j.id == id)

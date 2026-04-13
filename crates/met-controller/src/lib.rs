@@ -21,6 +21,12 @@
 //! let controller = Controller::new(config, pool, nats).await?;
 //! controller.run().await?;
 //! ```
+#![allow(
+    clippy::collapsible_if,
+    clippy::if_same_then_else,
+    clippy::redundant_closure,
+    clippy::unnecessary_cast,
+)]
 
 pub mod config;
 pub mod error;

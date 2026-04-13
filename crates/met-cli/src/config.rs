@@ -126,6 +126,7 @@ pub fn global_config_path() -> Option<PathBuf> {
     ProjectDirs::from("com", "meticulous", "met").map(|dirs| dirs.config_dir().join("config.toml"))
 }
 
+#[allow(dead_code)] // Used by non-keyring token path; callers may grow later
 pub fn global_config_dir() -> Option<PathBuf> {
     ProjectDirs::from("com", "meticulous", "met").map(|dirs| dirs.config_dir().to_path_buf())
 }

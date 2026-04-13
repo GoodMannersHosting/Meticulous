@@ -10,7 +10,6 @@ pub struct DefinitionSnapshotRepo;
 
 impl DefinitionSnapshotRepo {
     /// SHA-256 of `serde_json` canonical UTF-8 bytes (key order as serialized).
-    #[must_use]
     pub fn digest_json(value: &serde_json::Value) -> Result<[u8; 32]> {
         let bytes = serde_json::to_vec(value).map_err(|e| StoreError::validation(e.to_string()))?;
         Ok(Sha256::digest(bytes).into())

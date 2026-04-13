@@ -58,6 +58,7 @@ struct DerivedKey {
 /// Supports key rotation via key_id versioning.
 #[derive(Debug)]
 pub struct BuiltinSecretsProvider {
+    #[allow(dead_code)]
     config: BuiltinConfig,
     derived_key: Option<DerivedKey>,
     /// In-memory store for testing when no database is available.

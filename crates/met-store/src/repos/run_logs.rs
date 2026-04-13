@@ -5,7 +5,7 @@ use met_core::ids::{JobRunId, StepRunId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::{Result, StoreError};
+use crate::error::Result;
 
 /// A single log entry for a job/step run.
 #[derive(Debug, Clone, sqlx::FromRow)]

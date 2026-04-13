@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::error::OidcError;
 
@@ -218,12 +218,11 @@ impl OidcValidator {
     async fn get_signing_key(&self, issuer: &str, kid: &str) -> Result<DecodingKey> {
         {
             let cache = self.jwks_cache.read().await;
-            if let Some(cached) = cache.get(issuer) {
-                if cached.fetched_at.elapsed() < self.config.jwks_cache_duration {
-                    if let Some(key) = cached.keys.get(kid) {
-                        return Ok(key.clone());
-                    }
-                }
+            if let Some(cached) = cache.get(issuer)
+                && cached.fetched_at.elapsed() < self.config.jwks_cache_duration
+                && let Some(key) = cached.keys.get(kid)
+            {
+                return Ok(key.clone());
             }
         }
         self.refresh_jwks(issuer).await?;
@@ -258,10 +257,9 @@ impl OidcValidator {
             for jwk in key_array {
                 if let (Some(kid), Some(n), Some(e)) =
                     (jwk["kid"].as_str(), jwk["n"].as_str(), jwk["e"].as_str())
+                    && let Ok(key) = DecodingKey::from_rsa_components(n, e)
                 {
-                    if let Ok(key) = DecodingKey::from_rsa_components(n, e) {
-                        keys.insert(kid.to_string(), key);
-                    }
+                    keys.insert(kid.to_string(), key);
                 }
             }
         }
@@ -484,8 +482,8 @@ impl PipelineTokenIssuer {
         let now = Utc::now();
         let keys = self.signing_keys.read().await;
         keys.iter()
-            .filter(|k| k.active_from <= now && k.active_until.map_or(true, |u| u > now))
-            .last()
+            .filter(|k| k.active_from <= now && k.active_until.is_none_or(|u| u > now))
+            .next_back()
             .cloned()
             .ok_or_else(|| OidcError::Validation("no active signing key".into()))
     }

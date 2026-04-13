@@ -297,27 +297,27 @@ impl<'a> PipelineParser<'a> {
             }
 
             // Validate timeout
-            if let Some(timeout) = workflow.timeout {
-                if timeout.as_secs() == 0 {
-                    diagnostics.warning(
-                        ErrorCode::E2007,
-                        format!("workflow '{}' has zero timeout", workflow.id),
-                    );
-                }
+            if let Some(timeout) = workflow.timeout
+                && timeout.as_secs() == 0
+            {
+                diagnostics.warning(
+                    ErrorCode::E2007,
+                    format!("workflow '{}' has zero timeout", workflow.id),
+                );
             }
 
             // Validate retry policy
-            if let Some(retry) = &workflow.retry {
-                if retry.max_attempts == 0 {
-                    diagnostics.error_at(
-                        ErrorCode::E2007,
-                        format!(
-                            "workflow '{}' retry max_attempts must be at least 1",
-                            workflow.id
-                        ),
-                        location.clone(),
-                    );
-                }
+            if let Some(retry) = &workflow.retry
+                && retry.max_attempts == 0
+            {
+                diagnostics.error_at(
+                    ErrorCode::E2007,
+                    format!(
+                        "workflow '{}' retry max_attempts must be at least 1",
+                        workflow.id
+                    ),
+                    location.clone(),
+                );
             }
         }
 
@@ -844,7 +844,7 @@ impl<'a> PipelineParser<'a> {
             let shell = step
                 .shell
                 .as_deref()
-                .and_then(Shell::from_str)
+                .and_then(|s| s.parse().ok())
                 .unwrap_or(Shell::platform_default());
             StepCommand::Run {
                 shell,

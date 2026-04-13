@@ -1,4 +1,5 @@
 use crate::api_client::ApiError;
+#[cfg(not(feature = "keyring"))]
 use crate::config;
 
 const SERVICE_NAME: &str = "meticulous-cli";

@@ -66,7 +66,7 @@ pub fn hash_files_with_glob(pattern: &str, options: &HashFilesOptions) -> String
     matched_paths.sort();
 
     for path in matched_paths {
-        match hash_single_file(&path, &options, &mut hasher) {
+        match hash_single_file(&path, options, &mut hasher) {
             Ok(size) => {
                 file_count += 1;
                 total_size += size;
@@ -128,10 +128,7 @@ fn hash_single_file(
     };
 
     if metadata.len() > options.max_file_size {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "file too large",
-        ));
+        return Err(std::io::Error::other("file too large"));
     }
 
     hasher.update(path.to_string_lossy().as_bytes());

@@ -126,15 +126,15 @@ impl DatabaseWorkflowProvider {
         match row {
             Some((definition, description, deprecated_after)) => {
                 // Hard-block if the deprecation date has passed.
-                if let Some(da) = deprecated_after {
-                    if da <= chrono::Utc::now() {
-                        return Err(WorkflowFetchError::HardDeprecated {
-                            scope: "global".to_string(),
-                            name: name.to_string(),
-                            version: resolved_version.clone(),
-                            deprecated_since: da.format("%Y-%m-%d").to_string(),
-                        });
-                    }
+                if let Some(da) = deprecated_after
+                    && da <= chrono::Utc::now()
+                {
+                    return Err(WorkflowFetchError::HardDeprecated {
+                        scope: "global".to_string(),
+                        name: name.to_string(),
+                        version: resolved_version.clone(),
+                        deprecated_since: da.format("%Y-%m-%d").to_string(),
+                    });
                 }
 
                 let mut workflow: RawWorkflowDef = serde_json::from_value(definition)

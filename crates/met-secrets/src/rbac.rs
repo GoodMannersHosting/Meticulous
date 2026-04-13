@@ -582,20 +582,19 @@ impl RbacPolicy {
         }
 
         // Check organization scope
-        if let (Some(actor_org), Some(resource_org)) = (&actor.org_id, &resource.org_id) {
-            if actor_org != resource_org {
-                return false;
-            }
+        if let (Some(actor_org), Some(resource_org)) = (&actor.org_id, &resource.org_id)
+            && actor_org != resource_org
+        {
+            return false;
         }
 
         // For project-scoped resources, check project scope
         // (Only if actor is project-scoped)
         if let (Some(actor_project), Some(resource_project)) =
             (&actor.project_id, &resource.project_id)
+            && actor.role < Role::OrgAdmin && actor_project != resource_project
         {
-            if actor.role < Role::OrgAdmin && actor_project != resource_project {
-                return false;
-            }
+            return false;
         }
 
         true

@@ -1,7 +1,7 @@
 //! Agent heartbeat repository.
 
 use chrono::{DateTime, Utc};
-use met_core::ids::{AgentHeartbeatId, AgentId};
+use met_core::ids::AgentId;
 use met_core::models::{AgentHeartbeat, AgentStatus};
 use sqlx::PgPool;
 

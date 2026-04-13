@@ -141,44 +141,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-    if registration_needs_join_token(&config, force_register)? {
-        if config.join_token.is_none() {
-            if std::io::stdin().is_terminal() {
-                let theme = ColorfulTheme::default();
-                let url: String = Input::with_theme(&theme)
-                    .with_prompt("Controller gRPC URL")
-                    .default(config.controller_url.clone())
-                    .interact_text()?;
-                config.controller_url = url;
-                let token = Password::with_theme(&theme)
-                    .with_prompt("Join token")
-                    .interact()?;
-                if token.is_empty() {
-                    return Err(AgentError::Config("join token cannot be empty".to_string()).into());
-                }
-                config.join_token = Some(token);
-                let name_opt: String = Input::with_theme(&theme)
-                    .with_prompt("Agent display name (optional, empty to skip)")
-                    .allow_empty(true)
-                    .interact_text()?;
-                if !name_opt.is_empty() {
-                    config.name = Some(name_opt);
-                }
-                let pool_opt: String = Input::with_theme(&theme)
-                    .with_prompt("Agent pool (optional, empty to skip)")
-                    .allow_empty(true)
-                    .interact_text()?;
-                if !pool_opt.is_empty() {
-                    config.pool = Some(pool_opt);
-                }
-                join_token_source = JoinTokenSource::FromInteractive;
-            } else {
-                return Err(AgentError::Config(
-                    "join token required: set MET_JOIN_TOKEN or run in an interactive terminal"
-                        .to_string(),
-                )
-                .into());
+    if registration_needs_join_token(&config, force_register)?
+        && config.join_token.is_none()
+    {
+        if std::io::stdin().is_terminal() {
+            let theme = ColorfulTheme::default();
+            let url: String = Input::with_theme(&theme)
+                .with_prompt("Controller gRPC URL")
+                .default(config.controller_url.clone())
+                .interact_text()?;
+            config.controller_url = url;
+            let token = Password::with_theme(&theme)
+                .with_prompt("Join token")
+                .interact()?;
+            if token.is_empty() {
+                return Err(AgentError::Config("join token cannot be empty".to_string()).into());
             }
+            config.join_token = Some(token);
+            let name_opt: String = Input::with_theme(&theme)
+                .with_prompt("Agent display name (optional, empty to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if !name_opt.is_empty() {
+                config.name = Some(name_opt);
+            }
+            let pool_opt: String = Input::with_theme(&theme)
+                .with_prompt("Agent pool (optional, empty to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if !pool_opt.is_empty() {
+                config.pool = Some(pool_opt);
+            }
+            join_token_source = JoinTokenSource::FromInteractive;
+        } else {
+            return Err(AgentError::Config(
+                "join token required: set MET_JOIN_TOKEN or run in an interactive terminal"
+                    .to_string(),
+            )
+            .into());
         }
     }
 

@@ -250,7 +250,7 @@ async fn stream_run_logs_sse(
     let stream = stream::unfold(
         (from_line, follow, run_id),
         |(line_number, follow, run_id)| async move {
-            if line_number > 0 && line_number >= 50 && !follow {
+            if line_number >= 50 && !follow {
                 return None;
             }
 

@@ -21,8 +21,8 @@ pub fn parse_hex_ip_port(s: &str) -> Option<(String, u16)> {
         Some((ip, port))
     } else if addr_hex.len() == 32 {
         let mut b = [0u8; 16];
-        for i in 0..16 {
-            b[i] = u8::from_str_radix(addr_hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        for (i, byte) in b.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(addr_hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
         }
         let ip = std::net::Ipv6Addr::from(b).to_string();
         let port = u16::from_str_radix(port_hex, 16).ok()?;

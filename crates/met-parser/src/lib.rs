@@ -53,9 +53,9 @@ pub use dag::{DagNode, ValidatedDag, build_dag};
 pub use error::{ErrorCode, ParseDiagnostics, ParseError, Result, Severity, SourceLocation};
 pub use hash_files::{HashFilesOptions, hash_files, hash_files_with_glob};
 pub use ir::{
-    CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, PipelineIR, PoolSelector,
-    RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
-    TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
+    CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, ParseShellError, PipelineIR,
+    PoolSelector, RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR,
+    TagTrigger, TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
 };
 pub use parser::{ParserConfig, PipelineParser, secret_refs_from_raw_secrets};
 pub use providers::GitWorkflowProvider;

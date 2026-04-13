@@ -120,10 +120,7 @@ pub async fn emit_new_network_flows(
 
     let inode_pid = inode_to_pid(&tracked_pids);
 
-    let mut rows = match read_proc_tcp("/proc/net/tcp") {
-        Ok(r) => r,
-        Err(_) => Vec::new(),
-    };
+    let mut rows = read_proc_tcp("/proc/net/tcp").unwrap_or_default();
     if let Ok(r6) = read_proc_tcp("/proc/net/tcp6") {
         rows.extend(r6);
     }

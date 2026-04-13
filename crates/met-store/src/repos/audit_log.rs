@@ -116,7 +116,7 @@ impl AuditLogRepo {
         pool: &PgPool,
         filter: AuditLogFilter,
     ) -> Result<Vec<AuditLogRow>, sqlx::Error> {
-        let limit = filter.limit.min(1000).max(1);
+        let limit = filter.limit.clamp(1, 1000);
         let offset = filter.offset.max(0);
 
         // Build dynamic query

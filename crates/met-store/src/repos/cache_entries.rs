@@ -5,7 +5,7 @@ use met_core::ids::ProjectId;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::{Result, StoreError};
+use crate::error::Result;
 
 /// Cache entry model.
 #[derive(Debug, Clone, sqlx::FromRow)]

@@ -29,6 +29,10 @@ pub const OUTPUT_MSG_SECRET: u8 = 2;
 /// Max key length (UTF-8 bytes).
 pub const OUTPUT_KEY_MAX_BYTES: usize = 128;
 
+/// `KEY=value` argv did not contain a non-empty key before the first `=`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidKeyValueArg;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputIpcDecodeError {
     TooShort,
@@ -135,8 +139,8 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u8, String, Vec<u8>, usize), OutputIp
 }
 
 /// Parse `KEY=value` for a single argv (first `=` separates key from value; value may contain `=`).
-pub fn parse_key_value_arg(arg: &str) -> Result<(&str, &str), ()> {
-    crate::string_util::split_key_value(arg).ok_or(())
+pub fn parse_key_value_arg(arg: &str) -> Result<(&str, &str), InvalidKeyValueArg> {
+    crate::string_util::split_key_value(arg).ok_or(InvalidKeyValueArg)
 }
 
 #[cfg(test)]

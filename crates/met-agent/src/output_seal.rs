@@ -35,6 +35,7 @@ pub fn seal_secret_value(
 }
 
 /// Undo [`seal_secret_value`] given the job's static X25519 secret (32 bytes).
+#[allow(dead_code)] // Used by tests / controller-side tooling when wired
 pub fn open_secret_envelope(
     job_static_secret: &[u8; 32],
     envelope: &[u8],

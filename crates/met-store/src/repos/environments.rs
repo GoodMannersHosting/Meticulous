@@ -155,19 +155,16 @@ impl<'a> EnvironmentRepo<'a> {
     ) -> Result<EnvironmentRow> {
         let existing = self.get(id).await?;
         let new_name: &str = name.unwrap_or(&existing.name);
-        if let Some(n) = name {
-            if n != existing.name {
-                if let Some(other) = self
-                    .get_by_name(ProjectId::from_uuid(existing.project_id), n)
-                    .await?
-                {
-                    if other.id != id {
-                        return Err(StoreError::validation(format!(
-                            "environment name '{n}' is already in use in this project"
-                        )));
-                    }
-                }
-            }
+        if let Some(n) = name
+            && n != existing.name
+            && let Some(other) = self
+                .get_by_name(ProjectId::from_uuid(existing.project_id), n)
+                .await?
+            && other.id != id
+        {
+            return Err(StoreError::validation(format!(
+                "environment name '{n}' is already in use in this project"
+            )));
         }
         let row = sqlx::query_as::<_, EnvironmentRow>(
             r#"

@@ -223,7 +223,7 @@ impl HeartbeatLoop {
         };
 
         // Handle JWT renewal if provided
-        if let Some(new_jwt) = response.new_jwt_token {
+        if let Some(_new_jwt) = response.new_jwt_token {
             debug!("received renewed JWT token");
             // Would update the identity here
         }

@@ -57,8 +57,8 @@ impl Version {
                 self.major == v.major && self.minor == v.minor && self.patch >= v.patch
             }
             VersionConstraint::Range { min, max } => {
-                let above_min = min.as_ref().map_or(true, |m| self >= m);
-                let below_max = max.as_ref().map_or(true, |m| self < m);
+                let above_min = min.as_ref().is_none_or(|m| self >= m);
+                let below_max = max.as_ref().is_none_or(|m| self < m);
                 above_min && below_max
             }
             VersionConstraint::GreaterThan(v) => self > v,
@@ -143,38 +143,38 @@ pub fn parse_version_constraint(s: &str) -> Result<VersionConstraint, String> {
         return Ok(VersionConstraint::Any);
     }
 
-    if s.starts_with('^') {
-        let version = Version::parse(&s[1..])
+    if let Some(rest) = s.strip_prefix('^') {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::Caret(version));
     }
 
-    if s.starts_with('~') {
-        let version = Version::parse(&s[1..])
+    if let Some(rest) = s.strip_prefix('~') {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::Tilde(version));
     }
 
-    if s.starts_with(">=") {
-        let version = Version::parse(&s[2..])
+    if let Some(rest) = s.strip_prefix(">=") {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::GreaterThanOrEqual(version));
     }
 
-    if s.starts_with('>') {
-        let version = Version::parse(&s[1..])
+    if let Some(rest) = s.strip_prefix('>') {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::GreaterThan(version));
     }
 
-    if s.starts_with("<=") {
-        let version = Version::parse(&s[2..])
+    if let Some(rest) = s.strip_prefix("<=") {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::LessThanOrEqual(version));
     }
 
-    if s.starts_with('<') {
-        let version = Version::parse(&s[1..])
+    if let Some(rest) = s.strip_prefix('<') {
+        let version = Version::parse(rest)
             .ok_or_else(|| format!("Invalid version in constraint: {}", s))?;
         return Ok(VersionConstraint::LessThan(version));
     }

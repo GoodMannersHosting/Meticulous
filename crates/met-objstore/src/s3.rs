@@ -665,10 +665,10 @@ where
             } else {
                 format!("{code}: {msg}")
             };
-            if let Some(rid) = meta.request_id() {
-                if !rid.is_empty() {
-                    out.push_str(&format!(" (request_id={rid})"));
-                }
+            if let Some(rid) = meta.request_id()
+                && !rid.is_empty()
+            {
+                out.push_str(&format!(" (request_id={rid})"));
             }
             out
         }

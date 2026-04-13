@@ -214,7 +214,7 @@ impl WebhookConfig {
                 _ => return "hmac".into(),
             }
         }
-        if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+        if self.secret.as_deref().is_none_or(|s| s.is_empty()) {
             "none".into()
         } else {
             "hmac".into()
@@ -240,7 +240,7 @@ impl WebhookConfig {
         match self.resolved_inbound_auth().as_str() {
             "none" => Ok(()),
             "hmac" => {
-                if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+                if self.secret.as_deref().is_none_or(|s| s.is_empty()) {
                     Err(r#"inbound_auth "hmac" requires a non-empty secret"#.into())
                 } else {
                     Ok(())
@@ -264,7 +264,7 @@ impl WebhookConfig {
                             .into(),
                     );
                 }
-                if self.secret.as_deref().map_or(true, |s| s.is_empty()) {
+                if self.secret.as_deref().is_none_or(|s| s.is_empty()) {
                     return Err(r#"inbound_auth "query" requires a non-empty secret"#.into());
                 }
                 Ok(())
@@ -298,24 +298,22 @@ impl WebhookConfig {
         let mut out = HashMap::new();
         let mut total_mapped = 0usize;
 
-        if let Some(name) = &self.include_raw_body_variable {
-            if !name.is_empty() {
-                let s = String::from_utf8_lossy(raw_body).into_owned();
-                enforce_value_limit(name, &s, &mut total_mapped)?;
-                out.insert(name.clone(), s);
-            }
+        if let Some(name) = &self.include_raw_body_variable
+            && !name.is_empty()
+        {
+            let s = String::from_utf8_lossy(raw_body).into_owned();
+            enforce_value_limit(name, &s, &mut total_mapped)?;
+            out.insert(name.clone(), s);
         }
 
-        if self.flatten_top_level {
-            if let JsonValue::Object(map) = &root {
-                for (k, v) in map {
-                    if out.contains_key(k) {
-                        continue;
-                    }
-                    let value_str = json_value_to_mapped_string(v)?;
-                    enforce_value_limit(k, &value_str, &mut total_mapped)?;
-                    out.insert(k.clone(), value_str);
+        if self.flatten_top_level && let JsonValue::Object(map) = &root {
+            for (k, v) in map {
+                if out.contains_key(k) {
+                    continue;
                 }
+                let value_str = json_value_to_mapped_string(v)?;
+                enforce_value_limit(k, &value_str, &mut total_mapped)?;
+                out.insert(k.clone(), value_str);
             }
         }
 

@@ -187,15 +187,15 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         let filtered_usages: Vec<_> = usages
             .into_iter()
             .filter(|u| {
-                if let Some(after) = query.after {
-                    if u.used_at < after {
-                        return false;
-                    }
+                if let Some(after) = query.after
+                    && u.used_at < after
+                {
+                    return false;
                 }
-                if let Some(before) = query.before {
-                    if u.used_at > before {
-                        return false;
-                    }
+                if let Some(before) = query.before
+                    && u.used_at > before
+                {
+                    return false;
                 }
                 true
             })

@@ -24,6 +24,8 @@
 //! │   └── Log Shipper      ← streams logs to controller
 //! └── Signal Handler       ← SIGTERM/SIGINT → graceful drain
 //! ```
+#![allow(clippy::result_large_err)] // `AgentError` includes `tonic::Status`
+#![allow(clippy::too_many_arguments)]
 
 pub mod backend;
 pub mod config;

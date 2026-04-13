@@ -237,20 +237,27 @@ pub enum Shell {
     Python,
 }
 
-impl Shell {
-    /// Parse shell from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+/// Returned when [`FromStr`](std::str::FromStr) parsing does not recognize the shell name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseShellError;
+
+impl std::str::FromStr for Shell {
+    type Err = ParseShellError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "bash" => Some(Shell::Bash),
-            "sh" => Some(Shell::Sh),
-            "powershell" => Some(Shell::Powershell),
-            "pwsh" => Some(Shell::Pwsh),
-            "cmd" => Some(Shell::Cmd),
-            "python" => Some(Shell::Python),
-            _ => None,
+            "bash" => Ok(Shell::Bash),
+            "sh" => Ok(Shell::Sh),
+            "powershell" => Ok(Shell::Powershell),
+            "pwsh" => Ok(Shell::Pwsh),
+            "cmd" => Ok(Shell::Cmd),
+            "python" => Ok(Shell::Python),
+            _ => Err(ParseShellError),
         }
     }
+}
 
+impl Shell {
     /// Get the default shell for the current platform.
     pub fn platform_default() -> Self {
         #[cfg(windows)]

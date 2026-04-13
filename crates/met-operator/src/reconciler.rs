@@ -71,7 +71,7 @@ impl AgentPoolReconciler {
         // Count pods by status
         let mut ready = 0;
         let mut busy = 0;
-        let mut pending = 0;
+        let mut _pending = 0;
 
         for pod in &owned_pods {
             let phase = pod
@@ -95,7 +95,7 @@ impl AgentPoolReconciler {
                         ready += 1;
                     }
                 }
-                "Pending" => pending += 1,
+                "Pending" => _pending += 1,
                 _ => {}
             }
         }

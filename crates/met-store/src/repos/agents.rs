@@ -410,12 +410,12 @@ impl<'a> AgentRepo<'a> {
             ));
         }
 
-        if let (Some(actual), Some(expected)) = (binary_sha256, expected_binary_sha256) {
-            if actual != expected {
-                return Err(StoreError::Constraint(format!(
-                    "binary SHA-256 mismatch: expected {expected}, got {actual}"
-                )));
-            }
+        if let (Some(actual), Some(expected)) = (binary_sha256, expected_binary_sha256)
+            && actual != expected
+        {
+            return Err(StoreError::Constraint(format!(
+                "binary SHA-256 mismatch: expected {expected}, got {actual}"
+            )));
         }
 
         let result = sqlx::query(

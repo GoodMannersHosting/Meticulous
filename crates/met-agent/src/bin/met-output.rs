@@ -36,7 +36,7 @@ fn main() -> std::process::ExitCode {
 
     let (key, value_str) = match parse_key_value_arg(kv) {
         Ok(p) => p,
-        Err(()) => {
+        Err(_) => {
             eprintln!("met-output: expected KEY=value");
             return std::process::ExitCode::from(2);
         }
@@ -68,26 +68,24 @@ fn main() -> std::process::ExitCode {
     };
 
     #[cfg(unix)]
-    if let Ok(fd_s) = std::env::var("METICULOUS_OUTPUT_FD") {
-        if let Ok(fd) = fd_s.parse::<std::os::fd::RawFd>() {
-            if fd >= 0 {
-                #[allow(unsafe_code)]
-                let n =
-                    unsafe { libc::write(fd, frame.as_ptr().cast::<libc::c_void>(), frame.len()) };
-                if n < 0 {
-                    eprintln!(
-                        "met-output: write failed: {}",
-                        std::io::Error::last_os_error()
-                    );
-                    return std::process::ExitCode::from(6);
-                }
-                if n as usize != frame.len() {
-                    eprintln!("met-output: short write");
-                    return std::process::ExitCode::from(6);
-                }
-                return std::process::ExitCode::SUCCESS;
-            }
+    if let Ok(fd_s) = std::env::var("METICULOUS_OUTPUT_FD")
+        && let Ok(fd) = fd_s.parse::<std::os::fd::RawFd>()
+        && fd >= 0
+    {
+        #[allow(unsafe_code)]
+        let n = unsafe { libc::write(fd, frame.as_ptr().cast::<libc::c_void>(), frame.len()) };
+        if n < 0 {
+            eprintln!(
+                "met-output: write failed: {}",
+                std::io::Error::last_os_error()
+            );
+            return std::process::ExitCode::from(6);
         }
+        if n as usize != frame.len() {
+            eprintln!("met-output: short write");
+            return std::process::ExitCode::from(6);
+        }
+        return std::process::ExitCode::SUCCESS;
     }
 
     let path = match std::env::var("METICULOUS_OUTPUT_PATH") {

@@ -60,8 +60,10 @@ struct AwsSecretResponse {
     secret_string: Option<String>,
     #[serde(rename = "VersionId")]
     version_id: Option<String>,
+    #[allow(dead_code)]
     #[serde(rename = "CreatedDate")]
     created_date: Option<String>,
+    #[allow(dead_code)]
     #[serde(rename = "Name")]
     name: Option<String>,
 }

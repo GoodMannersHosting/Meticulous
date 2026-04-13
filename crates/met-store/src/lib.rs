@@ -2,6 +2,7 @@
 //!
 //! This crate provides PostgreSQL database access using `sqlx` with compile-time
 //! checked queries, migrations, and repository patterns for each entity type.
+#![allow(clippy::too_many_arguments)]
 
 pub mod error;
 pub mod pool;

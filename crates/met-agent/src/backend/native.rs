@@ -216,6 +216,7 @@ impl ExecutionBackend for NativeBackend {
         let ipc_ends: Option<(std::fs::File, std::os::fd::OwnedFd)> = {
             #[cfg(target_os = "linux")]
             use nix::fcntl::OFlag;
+            #[cfg(not(target_os = "linux"))]
             use nix::fcntl::{FcntlArg, FdFlag, fcntl};
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
@@ -323,16 +324,16 @@ impl ExecutionBackend for NativeBackend {
         let poll_interval = super::PROCESS_WATCHER_POLL_INTERVAL;
         let result: std::result::Result<std::process::ExitStatus, AgentError> = loop {
             // Check if we've exceeded the timeout
-            if let Some(deadline) = deadline {
-                if tokio::time::Instant::now() >= deadline {
-                    // Kill the child process on timeout
-                    let _ = child.kill().await;
-                    watcher.stop_watching().await;
-                    return Err(AgentError::Timeout(format!(
-                        "step {} timed out after {:?}",
-                        step.name, step.timeout
-                    )));
-                }
+            if let Some(deadline) = deadline
+                && tokio::time::Instant::now() >= deadline
+            {
+                // Kill the child process on timeout
+                let _ = child.kill().await;
+                watcher.stop_watching().await;
+                return Err(AgentError::Timeout(format!(
+                    "step {} timed out after {:?}",
+                    step.name, step.timeout
+                )));
             }
 
             tokio::select! {

@@ -538,13 +538,12 @@ impl<'a> WebhookRepo<'a> {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| {
-                    if let sqlx::Error::Database(ref db) = e {
-                        if db.code().as_deref() == Some("23505") {
-                            return StoreError::Validation(
-                                "target for this pipeline already exists for this webhook"
-                                    .to_string(),
-                            );
-                        }
+                    if let sqlx::Error::Database(ref db) = e
+                        && db.code().as_deref() == Some("23505")
+                    {
+                        return StoreError::Validation(
+                            "target for this pipeline already exists for this webhook".to_string(),
+                        );
                     }
                     e.into()
                 })?;
@@ -657,12 +656,12 @@ impl<'a> WebhookRepo<'a> {
         .fetch_one(self.pool)
         .await
         .map_err(|e| {
-            if let sqlx::Error::Database(ref db) = e {
-                if db.code().as_deref() == Some("23505") {
-                    return StoreError::Validation(
-                        "target for this pipeline already exists for this webhook".to_string(),
-                    );
-                }
+            if let sqlx::Error::Database(ref db) = e
+                && db.code().as_deref() == Some("23505")
+            {
+                return StoreError::Validation(
+                    "target for this pipeline already exists for this webhook".to_string(),
+                );
             }
             e.into()
         })?;

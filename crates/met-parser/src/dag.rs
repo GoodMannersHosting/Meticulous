@@ -36,7 +36,7 @@ impl ValidatedDag {
         self.order.iter().filter(|id| {
             self.reverse_adjacency
                 .get(*id)
-                .map_or(true, |deps| deps.is_empty())
+                .is_none_or(|deps| deps.is_empty())
         })
     }
 
@@ -219,7 +219,7 @@ fn topological_sort(
 
 /// Find a cycle in the graph (for error reporting).
 fn find_cycle(
-    adjacency: &IndexMap<String, Vec<String>>,
+    _adjacency: &IndexMap<String, Vec<String>>,
     reverse_adjacency: &IndexMap<String, Vec<String>>,
 ) -> Vec<String> {
     let mut visited: IndexSet<String> = IndexSet::new();
@@ -257,24 +257,23 @@ fn find_cycle(
 
     // Use reverse adjacency to find cycle in the direction of dependencies
     for node in reverse_adjacency.keys() {
-        if !visited.contains(node) {
-            if dfs(
+        if !visited.contains(node)
+            && dfs(
                 node,
                 reverse_adjacency,
                 &mut visited,
                 &mut rec_stack,
                 &mut cycle_path,
-            ) {
-                // Trim to just the cycle
-                if let Some(start) = cycle_path.last() {
-                    if let Some(pos) = cycle_path.iter().position(|n| n == start) {
-                        if pos < cycle_path.len() - 1 {
-                            return cycle_path[pos..].to_vec();
-                        }
-                    }
-                }
-                return cycle_path;
+            )
+        {
+            // Trim to just the cycle
+            if let Some(start) = cycle_path.last()
+                && let Some(pos) = cycle_path.iter().position(|n| n == start)
+                && pos < cycle_path.len() - 1
+            {
+                return cycle_path[pos..].to_vec();
             }
+            return cycle_path;
         }
     }
 

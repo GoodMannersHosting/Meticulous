@@ -59,6 +59,7 @@ pub fn print_info(message: &str) {
     println!("{} {}", "ℹ".blue(), message);
 }
 
+#[allow(dead_code)]
 pub fn spinner(message: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(

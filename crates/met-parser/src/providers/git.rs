@@ -41,10 +41,10 @@ impl GitWorkflowProvider {
     /// Get the full path to a workflow file.
     fn workflow_path(&self, name: &str, version: Option<&str>) -> PathBuf {
         let mut path = self.repo_path.join(&self.workflows_dir).join(name);
-        if let Some(v) = version {
-            if v != "latest" {
-                path = path.with_file_name(format!("{}@{}.yaml", name, v));
-            }
+        if let Some(v) = version
+            && v != "latest"
+        {
+            path = path.with_file_name(format!("{}@{}.yaml", name, v));
         }
         if path.extension().is_none() {
             path.set_extension("yaml");
@@ -60,12 +60,11 @@ impl GitWorkflowProvider {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                    if filename.starts_with(name) {
-                        if let Some(version) = extract_version_from_filename(filename, name) {
-                            workflows.push((version, path));
-                        }
-                    }
+                if let Some(filename) = path.file_stem().and_then(|s| s.to_str())
+                    && filename.starts_with(name)
+                    && let Some(version) = extract_version_from_filename(filename, name)
+                {
+                    workflows.push((version, path));
                 }
             }
         }
@@ -77,7 +76,7 @@ impl GitWorkflowProvider {
     async fn read_workflow(&self, path: &Path) -> Result<RawWorkflowDef, WorkflowFetchError> {
         let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| WorkflowFetchError::Io(e))?;
+            .map_err(WorkflowFetchError::Io)?;
 
         serde_yaml::from_str(&content).map_err(|e| WorkflowFetchError::Parse(e.to_string()))
     }

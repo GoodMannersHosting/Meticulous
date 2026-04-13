@@ -168,14 +168,14 @@ pub async fn resolve_job_secrets_for_exchange(
     pipeline_id: &str,
     hints_json: &str,
 ) -> Result<Vec<(String, String, i32)>, ResolveError> {
-    if let Ok(jrid) = JobRunId::from_str(job_run_id.trim()) {
-        if let Some(ctx) = JobRunRepo::new(pool).get_pipeline_context(jrid).await? {
-            let map = resolve_for_job_run_context(pool, crypto, &ctx).await?;
-            return Ok(map
-                .into_iter()
-                .map(|(k, (v, _kind, mat))| (k, v, mat))
-                .collect());
-        }
+    if let Ok(jrid) = JobRunId::from_str(job_run_id.trim())
+        && let Some(ctx) = JobRunRepo::new(pool).get_pipeline_context(jrid).await?
+    {
+        let map = resolve_for_job_run_context(pool, crypto, &ctx).await?;
+        return Ok(map
+            .into_iter()
+            .map(|(k, (v, _kind, mat))| (k, v, mat))
+            .collect());
     }
 
     if hints_json.trim().is_empty() {

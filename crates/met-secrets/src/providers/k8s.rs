@@ -53,6 +53,7 @@ impl KubernetesConfig {
 
 #[derive(Debug)]
 pub struct KubernetesSecretsProvider {
+    #[allow(dead_code)]
     config: KubernetesConfig,
     default_namespace: String,
     client: reqwest::Client,

@@ -1,10 +1,9 @@
 //! Auth provider repository.
 
 use chrono::Utc;
-use met_core::ids::{AuthProviderId, GroupId, OidcGroupMappingId, OrganizationId};
+use met_core::ids::{AuthProviderId, OidcGroupMappingId, OrganizationId};
 use met_core::models::{
-    AuthProvider, CreateAuthProvider, CreateOidcGroupMapping, GroupRole, OidcGroupMapping,
-    UpdateAuthProvider,
+    AuthProvider, CreateAuthProvider, CreateOidcGroupMapping, OidcGroupMapping, UpdateAuthProvider,
 };
 use sqlx::PgPool;
 

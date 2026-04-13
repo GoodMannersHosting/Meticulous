@@ -8,9 +8,7 @@ use rcgen::{
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
-use uuid::Uuid;
-use zeroize::Zeroizing;
+use tracing::{debug, info};
 
 use crate::error::SecretsError;
 

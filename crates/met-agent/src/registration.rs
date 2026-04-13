@@ -22,15 +22,7 @@ pub fn registration_needs_join_token(config: &AgentConfig, force_register: bool)
     let path = config.identity_path();
     match AgentIdentity::load(&path)? {
         None => Ok(true),
-        Some(id) => {
-            if !id.is_jwt_expired() {
-                Ok(false)
-            } else if id.renewable {
-                Ok(false)
-            } else {
-                Ok(true)
-            }
-        }
+        Some(id) => Ok(id.is_jwt_expired() && !id.renewable),
     }
 }
 
@@ -71,10 +63,10 @@ impl AgentRegistration {
             info!(
                 "force register: removing cached identity if present and registering with controller"
             );
-            if identity_path.exists() {
-                if let Err(e) = std::fs::remove_file(&identity_path) {
-                    warn!(error = %e, path = %identity_path.display(), "failed to remove cached identity");
-                }
+            if identity_path.exists()
+                && let Err(e) = std::fs::remove_file(&identity_path)
+            {
+                warn!(error = %e, path = %identity_path.display(), "failed to remove cached identity");
             }
             let identity = self.register().await?;
             return Ok((identity, RegistrationSource::RegisteredWithController));

@@ -71,13 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let met_config = MetConfig::load()?;
 
-    let mut ctrl = ControllerConfig::default();
-    ctrl.grpc_addr = args
+    let grpc_addr = args
         .grpc_addr
         .or_else(|| std::env::var("MET_CONTROLLER_GRPC_ADDR").ok())
         .unwrap_or_else(|| met_config.grpc.listen_addr.clone());
 
-    ctrl.nats_url = args
+    let nats_url = args
         .nats_url
         .or_else(|| std::env::var("MET_NATS_URL").ok())
         .filter(|s| !s.is_empty())
@@ -86,16 +85,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jwt_secret = args
         .jwt_secret
         .or_else(|| std::env::var("MET_CONTROLLER_JWT_SECRET").ok())
-        .ok_or_else(|| {
+        .ok_or(
             "MET_CONTROLLER_JWT_SECRET must be set (32+ characters). \
-             Generate a random secret; do not commit it to source control."
-        })?;
+             Generate a random secret; do not commit it to source control.",
+        )?;
     if jwt_secret.len() < 32 {
         return Err("MET_CONTROLLER_JWT_SECRET must be at least 32 characters".into());
     }
-    ctrl.jwt_secret = jwt_secret;
 
-    ctrl.require_ntp_sync = args
+    let require_ntp_sync = args
         .require_ntp_sync
         .or_else(|| {
             std::env::var("MET_CONTROLLER_REQUIRE_NTP_SYNC")
@@ -104,30 +102,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or(false);
 
-    ctrl.nats_creds_path = args
+    let nats_creds_path = args
         .nats_creds_path
         .or_else(|| std::env::var("MET_NATS_CREDS_PATH").ok().map(PathBuf::from))
         .filter(|p| !p.as_os_str().is_empty());
-    ctrl.nats_account_signing_seed = args
+    let nats_account_signing_seed = args
         .nats_account_signing_seed
         .or_else(|| std::env::var("MET_NATS_ACCOUNT_SIGNING_SEED").ok())
         .filter(|s| !s.trim().is_empty());
-    ctrl.nats_account_issuer_pubkey = args
+    let nats_account_issuer_pubkey = args
         .nats_account_issuer_pubkey
         .or_else(|| std::env::var("MET_NATS_ACCOUNT_ISSUER_PUBKEY").ok())
         .filter(|s| !s.trim().is_empty());
 
-    ctrl.oidc_issuer_url = std::env::var("MET_CONTROLLER_OIDC_ISSUER_URL")
+    let oidc_issuer_url = std::env::var("MET_CONTROLLER_OIDC_ISSUER_URL")
         .ok()
         .filter(|s| !s.trim().is_empty());
-    ctrl.http_public_base_url = met_config.http.public_base_url.clone();
-    ctrl.http_cors_first_origin = met_config.http.cors_origins.first().cloned();
-    ctrl.oidc_id_token_ttl = std::env::var("MET_CONTROLLER_OIDC_ID_TOKEN_TTL_SECS")
+    let oidc_id_token_ttl = std::env::var("MET_CONTROLLER_OIDC_ID_TOKEN_TTL_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .filter(|&s| s >= 60 && s <= 3600)
+        .filter(|&s| (60..=3600).contains(&s))
         .map(std::time::Duration::from_secs)
         .unwrap_or_else(|| std::time::Duration::from_secs(600));
+
+    let ctrl = ControllerConfig {
+        grpc_addr,
+        nats_url,
+        jwt_secret,
+        require_ntp_sync,
+        nats_creds_path,
+        nats_account_signing_seed,
+        nats_account_issuer_pubkey,
+        oidc_issuer_url,
+        http_public_base_url: met_config.http.public_base_url.clone(),
+        http_cors_first_origin: met_config.http.cors_origins.first().cloned(),
+        oidc_id_token_ttl,
+        ..Default::default()
+    };
 
     ctrl.validate()
         .map_err(|e| format!("invalid controller config: {e}"))?;

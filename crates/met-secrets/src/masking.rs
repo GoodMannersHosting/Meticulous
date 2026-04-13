@@ -7,7 +7,6 @@ use base64::Engine;
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::RwLock;
-use tracing::debug;
 
 const REPLACEMENT: &str = "***";
 
@@ -95,7 +94,7 @@ impl SecretMaskingFilter {
         // Mask raw secret values (longest first to handle overlapping substrings)
         let raw = self.raw_secrets.read().unwrap();
         let mut sorted: Vec<&String> = raw.iter().collect();
-        sorted.sort_by(|a, b| b.len().cmp(&a.len()));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.len()));
         for secret in sorted {
             if output.contains(secret.as_str()) {
                 output = output.replace(secret.as_str(), REPLACEMENT);
