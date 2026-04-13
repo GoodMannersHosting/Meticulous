@@ -16,7 +16,7 @@
 # Parallel jobs in this group require agent-affinity.allow-parallel-shared-workspace-jobs
 # (passive snapshots + per-job_run_id dirs). Fan-in consumers must set workspace.from to
 # the workflows[].id whose snapshot tree they need (see ADR-014 / design/pipeline-authoring.md):
-#   ci-seed → cargo-test; push-* → playwright (E2E path; zap runs in parallel).
+#   ci-seed → cargo-test; push-* → playwright (post-E2E tree; zap runs in parallel).
 # Secrets must be stored in Meticulous before running this pipeline.
 name: meticulous CI
 agent-affinity:
@@ -162,7 +162,7 @@ workflows:
     workflow: global/playwright-test
     version: "1.0.1"
     affinity-group: ci
-    depends-on: [api-smoke]
+    depends-on: [ci-seed]
     inputs:
       workspace_path: meticulous
       frontend_path: frontend
@@ -184,7 +184,7 @@ workflows:
     affinity-group: ci
     depends-on: &tests [api-smoke, playwright, zap]
     workspace:
-      from: setup-rust
+      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.agent
@@ -210,7 +210,7 @@ workflows:
     affinity-group: ci
     depends-on: *tests
     workspace:
-      from: setup-rust
+      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-api
@@ -236,7 +236,7 @@ workflows:
     affinity-group: ci
     depends-on: *tests
     workspace:
-      from: setup-rust
+      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-controller
@@ -262,7 +262,7 @@ workflows:
     affinity-group: ci
     depends-on: *tests
     workspace:
-      from: setup-rust
+      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile
@@ -288,7 +288,7 @@ workflows:
     affinity-group: ci
     depends-on: *tests
     workspace:
-      from: setup-rust
+      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.sqlx-migrate
