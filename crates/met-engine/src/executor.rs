@@ -13,9 +13,9 @@ use met_core::ids::{JobId, JobRunId, OrganizationId, RunId};
 use met_core::models::{JobStatus, RunStatus};
 use met_parser::{JobIR, PipelineIR, WorkflowScope as IrWorkflowScope};
 use met_secrets::BuiltinStoredCrypto;
-use met_store::repos::JobRunRepo;
 use met_store::repos::{
-    DefinitionSnapshotRepo, PipelineRepo, WorkflowRepo, WorkflowScope as DbWorkflowScope,
+    DefinitionSnapshotRepo, JobRunRepo, PipelineRepo, WorkflowRepo,
+    WorkflowScope as DbWorkflowScope,
 };
 use rand::RngCore;
 use secrecy::SecretString;
@@ -245,12 +245,36 @@ impl<C: CacheBackend> Executor<C> {
 
         run_state.set_status(final_status).await;
 
-        if let Err(e) = self
+        match self
             .persistence
             .complete_run(run_id, final_status, persist_err_msg.as_deref())
             .await
         {
-            warn!(error = %e, %run_id, "failed to persist run completion");
+            Ok(()) => {
+                // `complete_run` only updates `runs`. If the loop exited early (run timeout,
+                // internal error, etc.), `job_runs` can still be `pending`/`queued` even though
+                // upstream jobs already succeeded — API reconciliation then showed a confusing
+                // "Run failed before this job executed" without fixing rows until the next GET.
+                if final_status.is_terminal() {
+                    let job_run_repo = JobRunRepo::new(&self.pool);
+                    let finished_at = run_state.finished_at().await;
+                    if let Err(e) = job_run_repo
+                        .reconcile_stale_jobs_and_steps_for_terminal_run(
+                            run_id,
+                            final_status,
+                            finished_at,
+                        )
+                        .await
+                    {
+                        warn!(
+                            error = %e,
+                            %run_id,
+                            "failed to reconcile job/step rows after run completion"
+                        );
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, %run_id, "failed to persist run completion"),
         }
 
         let end_time = Utc::now();

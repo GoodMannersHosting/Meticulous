@@ -1010,7 +1010,11 @@ WHERE sr.job_run_id = jr.id
 UPDATE step_runs sr
 SET status = 'cancelled',
     finished_at = COALESCE(sr.finished_at, r.finished_at, $2),
-    error_message = COALESCE(sr.error_message, 'Run failed before this step executed')
+    error_message = COALESCE(
+        sr.error_message,
+        NULLIF(TRIM(COALESCE(r.error_message, '')), ''),
+        'Run failed before this step executed'
+    )
 FROM job_runs jr
 JOIN runs r ON r.id = jr.run_id
 WHERE sr.job_run_id = jr.id
@@ -1130,7 +1134,11 @@ WHERE jr.run_id = r.id
 UPDATE job_runs jr
 SET status = 'cancelled',
     finished_at = COALESCE(jr.finished_at, r.finished_at, $2),
-    error_message = COALESCE(jr.error_message, 'Run failed before this job executed')
+    error_message = COALESCE(
+        jr.error_message,
+        NULLIF(TRIM(COALESCE(r.error_message, '')), ''),
+        'Run failed before this job executed'
+    )
 FROM runs r
 WHERE jr.run_id = r.id
   AND jr.run_id = $1
