@@ -42,7 +42,7 @@ Human and machine access use JWT claims and **API tokens** validated in [crates/
 - **Assets:** Tokens, JWTs, org membership.
 - **Adversaries:** Stolen API token, IDOR via swapped `project_id`, privilege escalation via `*`.
 - **Mitigations:** Hash-at-rest, short JWT TTL, scope least privilege, revoke path, tests for IDOR (see [VERIFICATION.md](../prd/VERIFICATION.md)).
-- **Residual risk:** Mis-scoped `*` tokens; operational review during onboarding.
+- **Residual risk:** Incorrectly scoped `*` tokens; operational review during onboarding.
 
 ## References
 

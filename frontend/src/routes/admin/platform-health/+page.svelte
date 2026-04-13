@@ -172,7 +172,7 @@
 				</dl>
 				<p class="mt-2 text-xs text-[var(--text-tertiary)]">
 					Sum of <code class="rounded bg-[var(--bg-secondary)] px-1">size_bytes</code> in Postgres;
-					may differ from raw object storage (logs, uncatalogued keys).
+					may differ from raw object storage (logs, uncataloged keys).
 				</p>
 			</Card>
 

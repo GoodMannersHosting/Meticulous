@@ -1,0 +1,14 @@
+# https://github.com/crate-ci/typos
+# Allow product names, intentional test strings, and id prefixes that are not typos.
+
+[default.extend-identifiers]
+HashiCorp = "HashiCorp"
+# Hex id embedded in `.cursor/plans` filenames (see plan-index.md).
+"71ba9de0" = "71ba9de0"
+
+[default.extend-words]
+# Meticulous App public id prefix (`mapp_<uuid>`) and SQL examples.
+mapp = "mapp"
+# Intentional misspellings in fuzzy-matching tests and validation docs.
+PASWORD = "PASWORD"
+PASH = "PASH"

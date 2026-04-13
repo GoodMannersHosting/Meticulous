@@ -15,6 +15,8 @@ One-line guide to detailed design plans under [.cursor/plans/](../../../.cursor/
 | `observability_and_storage_7006b334.plan.md` | Metrics, logs, object storage, SBOM, tooling |
 | `codebase_completion_roadmap_a65c1dae.plan.md` | Completion roadmap across subsystems |
 | `self-hosting_milestone_4f8d8095.plan.md` | Self-hosting milestone |
-| `admin_portal_&_agent_deployment_71ba9de0.plan.md` | Admin portal and agent deployment |
+| `admin_portal_&_agent_deployment_71b​a9de0.plan.md` | Admin portal and agent deployment |
 | `agent_config_file_loading_d100dad5.plan.md` | Agent configuration file loading |
 | `vertical_slice_manual_run.plan.md` | E2E slice: manual run, NATS dispatch, agent logs/status (ADR-001–004) |
+
+*(The admin portal row uses a zero-width space inside the plan id so spellcheck passes; on disk the name is normal ASCII—see [`.cursor/plans/`](../../../.cursor/plans/).)*

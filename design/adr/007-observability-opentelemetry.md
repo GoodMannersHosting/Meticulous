@@ -36,7 +36,7 @@
 ## Threat model
 
 - **Assets:** Metrics/traces may include branch or pipeline names.
-- **Adversaries:** Information disclosure via mis-scoped exemplars or attributes.
+- **Adversaries:** Information disclosure via incorrectly scoped exemplars or attributes.
 - **Mitigations:** Allowlist attributes on public-facing aggregations; scrub in export pipeline if needed.
 
 ## References
