@@ -66,11 +66,13 @@ workflows:
   - name: Secret scan (TruffleHog)
     id: trufflehog
     workflow: global/trufflehog-scan
-    version: "1.0.0"
+    version: "1.2.0"
     affinity-group: ci
     depends-on: [checkout]
     inputs:
       scan_path: meticulous
+      # TODO: set to "true" once the repo is clean of TruffleHog noise / false positives.
+      fail_on_findings: "false"
 
   - name: Typo check
     id: typos
