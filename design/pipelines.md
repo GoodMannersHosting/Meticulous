@@ -64,7 +64,7 @@ workflows:
 
 ### What this feature does
 
-Pipeline-level **`agent-affinity`** with **`share-workspace: true`** lets a **chain** of workflow invocations (e.g. git checkout then docker build) share filesystem state. The parser enforces a **strict serial order** inside a shared-workspace group: every pair of jobs in the group must be ordered by **`depends-on`** (no parallel jobs in the same group).
+Pipeline-level **`agent-affinity`** with **`share-workspace: true`** lets a **chain** of workflow invocations (e.g. git checkout then docker build) share filesystem state. By default the parser enforces a **strict serial order** inside a shared-workspace group: every pair of jobs in the group must be ordered by **`depends-on`** (no parallel jobs in the same group). With **`allow-parallel-shared-workspace-jobs: true`**, that check is skipped so multiple jobs in the same group may run concurrently when each uses an isolated workspace directory and **passive S3 snapshots** carry state (see [ADR-014](adr/014-workspace-snapshots.md)).
 
 **`share_workspace` is only enabled** when each participating invocation sets an **explicit `affinity-group`** (using only `default-group` pins the agent but does **not** turn on shared workspace—see parser tests in `met-parser`).
 
@@ -75,7 +75,7 @@ Pipeline-level **`agent-affinity`** with **`share-workspace: true`** lets a **ch
 | **Shared directory (legacy)** | Object storage is **not** used for snapshots **or** `MET_WORKSPACE_SNAPSHOTS_DISABLED` is set | Engine sets a stable **`workspace_root_id`** per affinity group; jobs on the pinned agent reuse the **same directory** on disk. |
 | **Passive snapshots** | met-api has S3 (or compatible) configured **and** snapshots are **not** disabled | Each job run gets its **own** workspace directory; before steps the agent **restores** a `tar.zst` from object storage (if there is an in-group predecessor), and after success **uploads** a new snapshot. See [ADR-014](adr/014-workspace-snapshots.md). |
 
-Explicit per-invocation **`workspace:`** blocks (`from` / `outputs`) are **optional** and separate: they are intended for **subset** restores or special naming, not for the default affinity chain (ADR-014).
+Optional per-invocation **`workspace:`** (`from` / `outputs`) refines snapshot behavior: **`from`** names a prior **`workflows[].id`** whose **terminal job** snapshot to restore (fixes ambiguous passive predecessor when several branches fan in). **`outputs`** limits what gets packed on upload (smaller archives). See [ADR-014](adr/014-workspace-snapshots.md) and [Pipeline authoring](pipeline-authoring.md).
 
 ### Operator / platform settings (met-api)
 
@@ -90,7 +90,7 @@ Presigned URLs are short-lived (on the order of **one hour**); the engine issues
 
 1. Set **`agent-affinity.share-workspace: true`** on the pipeline when you need checkout → build style chaining.
 2. Give **every** job in the chain the **same** **`affinity-group`** string (not just `default-group`).
-3. Order jobs with **`depends-on`** so the DAG is a **total order** within that group.
+3. Order jobs with **`depends-on`** so the DAG is a **total order** within that group (unless you intentionally set **`allow-parallel-shared-workspace-jobs`** and rely on snapshots).
 4. Use paths relative to **`METICULOUS_WORKSPACE`** (or checkout to `.`) so restore sees the same layout.
 5. Keep secrets out of the workspace tree when possible; snapshots can contain **any file** that was written under the workspace (`.gitignore` helps but is not a security boundary—see ADR-014 threat model).
 

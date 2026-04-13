@@ -564,6 +564,7 @@ mod tests {
             jobs: Vec::new(),
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
         };
 
         let order = topological_order(&pipeline).unwrap();

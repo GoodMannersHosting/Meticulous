@@ -57,6 +57,11 @@ pub struct RawAgentAffinity {
     /// for the run (serial-only within that group). Jobs using only `default-group` are not shared.
     #[serde(default)]
     pub share_workspace: bool,
+    /// When true, jobs in the same shared-workspace affinity group may run concurrently (e.g. passive
+    /// S3 snapshots with per-`job_run_id` dirs). Without this, the parser requires a total `depends-on`
+    /// order within each group (unsafe on a shared disk without snapshot isolation).
+    #[serde(default)]
+    pub allow_parallel_shared_workspace_jobs: bool,
 }
 
 /// Trigger configurations.
@@ -317,9 +322,10 @@ pub struct RawWorkflowInvocation {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RawWorkspaceTransfer {
-    /// Invocation ID to restore workspace from.
-    pub from: String,
-    /// Paths to archive after this invocation completes.
+    /// Invocation ID to restore workspace from (pipeline `workflows[].id`).
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Paths to archive after this invocation completes (relative to workspace root).
     #[serde(default)]
     pub outputs: Vec<String>,
 }

@@ -32,7 +32,7 @@ ADRs capture **one decision** each: context, the choice, consequences, and (for 
 | [011-remote-cache-key-derivation.md](011-remote-cache-key-derivation.md) | Remote cache key derivation and tenant isolation | Proposed | 030, 050 |
 | [012-custom-execution-engine.md](012-custom-execution-engine.md) | Custom execution engine (Tekton rejection and criteria) | Accepted | 030, 040, 110 |
 | [013-project-webhook-multi-pipeline-routing.md](013-project-webhook-multi-pipeline-routing.md) | Project-level SCM webhooks → one or many pipelines | Proposed | 020, 010 |
-| [014-workspace-snapshots.md](014-workspace-snapshots.md) | Workspace snapshots and soft affinity | Proposed | 030, 040 |
+| [014-workspace-snapshots.md](014-workspace-snapshots.md) | Workspace snapshots and soft affinity | Accepted | 030, 040 |
 | [015-oci-environment-images.md](015-oci-environment-images.md) | OCI environment images, registry credentials, and integrity chain | Proposed | 030, 060 |
 | [016-pipeline-environments.md](016-pipeline-environments.md) | Pipeline environments and approval gates | Proposed | 060, 010 |
 | [017-oidc-workload-identity.md](017-oidc-workload-identity.md) | OIDC workload identity provider | Proposed | 060, 110 |

@@ -62,6 +62,7 @@ fn test_job(id: JobId, name: &str, depends_on: Vec<JobId>) -> JobIR {
         share_workspace: false,
         workflow_invocation_id: None,
         workflow_invocation_name: None,
+        workspace_transfer: None,
     }
 }
 
@@ -78,6 +79,7 @@ fn test_pipeline(name: &str, jobs: Vec<JobIR>) -> PipelineIR {
         jobs,
         default_pool_selector: None,
         expose_workflow_secret_outputs: false,
+        allow_parallel_shared_workspace_jobs: false,
     }
 }
 

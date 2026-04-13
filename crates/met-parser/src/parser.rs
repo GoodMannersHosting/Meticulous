@@ -13,7 +13,7 @@ use crate::error::{ErrorCode, ParseDiagnostics, ParseError, SourceLocation};
 use crate::ir::{
     CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, PipelineIR, PoolSelector,
     RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR, TagTrigger,
-    TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, defaults,
+    TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkspaceTransferIR, defaults,
 };
 use crate::schema::{
     RawCacheConfig, RawHealthCheck, RawPipeline, RawPoolSelector, RawRetryPolicy, RawSecretRef,
@@ -194,7 +194,11 @@ impl<'a> PipelineParser<'a> {
 
         // Stage 6: Emit IR
         debug!("stage 6: emitting IR");
-        let ir = self.emit_ir(&raw_pipeline, resolved_jobs, &var_ctx);
+        let ir = self.emit_ir(&raw_pipeline, resolved_jobs, &var_ctx, &mut diagnostics);
+
+        if diagnostics.has_errors() {
+            return Err(diagnostics.into_iter().collect());
+        }
 
         debug!("stage 6b: affinity / shared workspace validation");
         crate::affinity::validate_share_workspace_affinity(&ir, &mut diagnostics);
@@ -593,6 +597,7 @@ impl<'a> PipelineParser<'a> {
         pipeline: &RawPipeline,
         workflows: Vec<ResolvedWorkflow>,
         _ctx: &VariableContext,
+        diagnostics: &mut ParseDiagnostics,
     ) -> PipelineIR {
         let triggers = self.convert_triggers(&pipeline.triggers);
         let secret_refs = self.convert_secrets(&pipeline.secrets);
@@ -608,7 +613,12 @@ impl<'a> PipelineParser<'a> {
 
         expand_cross_invocation_depends_on(&mut jobs);
 
-        PipelineIR {
+        let allow_parallel_shared_workspace_jobs = pipeline
+            .agent_affinity
+            .as_ref()
+            .is_some_and(|a| a.allow_parallel_shared_workspace_jobs);
+
+        let mut ir = PipelineIR {
             id: PipelineId::new(),
             name: pipeline.name.clone(),
             source_file: self.config.source_file.clone(),
@@ -619,7 +629,11 @@ impl<'a> PipelineParser<'a> {
             jobs,
             default_pool_selector: default_pool,
             expose_workflow_secret_outputs: pipeline.expose_workflow_secret_outputs,
-        }
+            allow_parallel_shared_workspace_jobs,
+        };
+
+        crate::workspace_transfer::resolve_and_validate_workspace_transfers(&mut ir, diagnostics);
+        ir
     }
 
     /// Convert raw triggers to IR.
@@ -801,6 +815,22 @@ impl<'a> PipelineParser<'a> {
                         .is_some_and(|a| a.share_workspace)
                     && invocation_affinity_explicit.is_some();
 
+                let workspace_transfer =
+                    workflow.invocation.workspace.as_ref().map(|w| WorkspaceTransferIR {
+                        restore_from_invocation_id: w
+                            .from
+                            .as_ref()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                        snapshot_include_paths: w
+                            .outputs
+                            .iter()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                        restore_from_job_id: None,
+                    });
+
                 JobIR {
                     id: make_job_id(&job_id),
                     name: job.name.clone(),
@@ -831,6 +861,7 @@ impl<'a> PipelineParser<'a> {
                     share_workspace,
                     workflow_invocation_id: Some(workflow.invocation.id.clone()),
                     workflow_invocation_name: Some(workflow.invocation.name.clone()),
+                    workspace_transfer,
                 }
             })
             .collect()
@@ -1408,6 +1439,78 @@ workflows:
             !script.contains("${{"),
             "unsubstituted expressions must not reach the agent: {script}"
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_from_resolves_producer_terminal_job() {
+        let yaml = r#"
+name: Test Pipeline
+triggers:
+  manual: {}
+workflows:
+  - name: Build
+    id: build
+    workflow: global/test
+  - name: Deploy
+    id: deploy
+    workflow: global/test
+    depends-on: [build]
+    workspace:
+      from: build
+"#;
+
+        let mut provider = MockWorkflowProvider::new();
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "test", mock_workflow());
+
+        let mut parser = PipelineParser::new(&provider);
+        let result = parser.parse(yaml).await;
+        assert!(result.is_ok(), "parse error: {:?}", result.err());
+        let ir = result.unwrap();
+        let producer = ir
+            .jobs
+            .iter()
+            .find(|j| j.workflow_invocation_id.as_deref() == Some("build"))
+            .expect("build job");
+        let consumer = ir
+            .jobs
+            .iter()
+            .find(|j| j.workflow_invocation_id.as_deref() == Some("deploy"))
+            .expect("deploy job");
+        assert_eq!(
+            consumer
+                .workspace_transfer
+                .as_ref()
+                .and_then(|w| w.restore_from_job_id),
+            Some(producer.id)
+        );
+        assert!(consumer.depends_on.contains(&producer.id));
+    }
+
+    #[tokio::test]
+    async fn workspace_from_unknown_invocation_errors() {
+        let yaml = r#"
+name: Test Pipeline
+triggers:
+  manual: {}
+workflows:
+  - name: Build
+    id: build
+    workflow: global/test
+  - name: Deploy
+    id: deploy
+    workflow: global/test
+    depends-on: [build]
+    workspace:
+      from: missing-inv"#;
+
+        let mut provider = MockWorkflowProvider::new();
+        provider.add_workflow(crate::ir::WorkflowScope::Global, "test", mock_workflow());
+
+        let mut parser = PipelineParser::new(&provider);
+        let result = parser.parse(yaml).await;
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.code == ErrorCode::E5006));
     }
 
     #[test]

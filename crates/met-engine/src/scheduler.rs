@@ -428,7 +428,12 @@ impl Scheduler {
             String::new()
         };
 
-        let pred_job_id = workspace_snapshot_predecessor(ctx.pipeline(), job);
+        let passive_pred = workspace_snapshot_predecessor(ctx.pipeline(), job);
+        let pred_job_id = job
+            .workspace_transfer
+            .as_ref()
+            .and_then(|w| w.restore_from_job_id)
+            .or(passive_pred);
 
         let mut workspace_restore: Option<WorkspaceSnapshot> = None;
         let mut workspace_snapshot_upload: Option<WorkspaceSnapshotUploadSpec> = None;
@@ -488,10 +493,16 @@ impl Scheduler {
                     self.workspace_snapshots.presign_put_ttl,
                 )
                 .await?;
+            let include_paths = job
+                .workspace_transfer
+                .as_ref()
+                .map(|w| w.snapshot_include_paths.clone())
+                .unwrap_or_default();
             workspace_snapshot_upload = Some(WorkspaceSnapshotUploadSpec {
                 snapshot_upload_url: put_url,
                 object_key,
                 max_bytes: self.workspace_snapshots.max_archive_bytes,
+                include_paths,
             });
         }
 

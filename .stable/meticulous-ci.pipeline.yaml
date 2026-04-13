@@ -3,24 +3,25 @@
 # Triggered by GitHub webhook on push and pull_request events.
 # Runs entirely on Meticulous agents — Meticulous builds itself.
 #
-# Stage flow (serial affinity group `ci`, one shared workspace):
-#   checkout → trufflehog → typos → opengrep → setup-rust → cargo-lint →
-#   cargo-audit → cargo-test → ci-seed → api-smoke → playwright → zap →
-#   push-agent → scan-agent → push-api → scan-api → push-controller →
-#   scan-controller → push-frontend → scan-frontend → push-sqlx-migrate →
-#   scan-sqlx-migrate
+# Stage flow (affinity group `ci`, shared workspace via S3 snapshots when enabled):
+#   checkout → trufflehog / typos / opengrep / setup-rust (parallel where listed) →
+#   cargo-lint / cargo-audit / cargo-test (parallel) → ci-seed → api-smoke → playwright;
+#   zap (parallel to api-smoke); then docker push + Trivy scans (images) → …
 #
 #   Finally (main branch only, when wired): kubectl-deploy
 #
 # share-workspace applies only to invocations with an explicit `affinity-group` (see
-# met-parser: default-group alone does not enable shared workspace). Jobs in the same
-# group must be totally ordered — no concurrent jobs — so this pipeline uses one serial
-# `ci` chain from checkout through image scans. Functional tests that need the clone
-# (Playwright) run after API smoke in that chain instead of in parallel.
+# met-parser: default-group alone does not enable shared workspace).
+#
+# Parallel jobs in this group require agent-affinity.allow-parallel-shared-workspace-jobs
+# (passive snapshots + per-job_run_id dirs). Fan-in consumers must set workspace.from to
+# the workflows[].id whose snapshot tree they need (see ADR-014 / design/pipeline-authoring.md):
+#   ci-seed → cargo-test; push-* → playwright (E2E path; zap runs in parallel).
 # Secrets must be stored in Meticulous before running this pipeline.
 name: meticulous CI
 agent-affinity:
   share-workspace: true
+  allow-parallel-shared-workspace-jobs: true
 
 triggers:
   webhook:
@@ -79,7 +80,7 @@ workflows:
     workflow: global/typos
     version: "1.1.0"
     affinity-group: ci
-    depends-on: [trufflehog]
+    depends-on: [checkout]
     inputs:
       path: meticulous
 
@@ -88,7 +89,7 @@ workflows:
     workflow: global/opengrep
     version: "1.1.1"
     affinity-group: ci
-    depends-on: [typos]
+    depends-on: [checkout]
     inputs:
       scan_path: meticulous
       config: "p/rust"
@@ -100,11 +101,11 @@ workflows:
     workflow: global/setup-rust
     version: "1.0.0"
     affinity-group: ci
-    depends-on: [opengrep]
+    depends-on: [checkout]
     inputs:
       rust_toolchain: "${RUST_TOOLCHAIN}"
 
-  # ── Lint + audit (serial on shared workspace) ─────────────────────────────
+  # ── Lint + audit + test (parallel after setup-rust; see ci-seed workspace.from) ────────────
   - name: Cargo lint
     id: cargo-lint
     workflow: global/cargo-lint
@@ -120,7 +121,7 @@ workflows:
     workflow: global/cargo-audit
     version: "1.0.0"
     affinity-group: ci
-    depends-on: [cargo-lint]
+    depends-on: [setup-rust]
     inputs:
       workspace_path: meticulous
 
@@ -130,7 +131,7 @@ workflows:
     workflow: global/cargo-test
     version: "1.0.0"
     affinity-group: ci
-    depends-on: [cargo-audit]
+    depends-on: [setup-rust]
     inputs:
       rust_toolchain: "${RUST_TOOLCHAIN}"
       workspace_path: meticulous
@@ -142,7 +143,9 @@ workflows:
     workflow: global/meticulous-ci-seed
     version: "1.0.0"
     affinity-group: ci
-    depends-on: [cargo-test]
+    depends-on: [cargo-lint, cargo-audit, cargo-test]
+    workspace:
+      from: cargo-test
     inputs:
       workspace_path: meticulous
       api_listen: "127.0.0.1:8081"
@@ -169,7 +172,7 @@ workflows:
     workflow: global/zap-scan
     version: "1.0.1"
     affinity-group: ci
-    depends-on: [playwright]
+    depends-on: [ci-seed]
     inputs:
       fail_on_warn: "false"
 
@@ -179,7 +182,9 @@ workflows:
     workflow: global/docker-buildx-push
     version: &dbxpushversion "1.0.2"
     affinity-group: ci
-    depends-on: [zap]
+    depends-on: &tests [api-smoke, playwright, zap]
+    workspace:
+      from: setup-rust
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.agent
@@ -203,7 +208,9 @@ workflows:
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     affinity-group: ci
-    depends-on: [scan-agent]
+    depends-on: *tests
+    workspace:
+      from: setup-rust
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-api
@@ -227,7 +234,9 @@ workflows:
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     affinity-group: ci
-    depends-on: [scan-api]
+    depends-on: *tests
+    workspace:
+      from: setup-rust
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-controller
@@ -251,7 +260,9 @@ workflows:
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     affinity-group: ci
-    depends-on: [scan-controller]
+    depends-on: *tests
+    workspace:
+      from: setup-rust
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile
@@ -275,7 +286,9 @@ workflows:
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     affinity-group: ci
-    depends-on: [scan-frontend]
+    depends-on: *tests
+    workspace:
+      from: setup-rust
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.sqlx-migrate

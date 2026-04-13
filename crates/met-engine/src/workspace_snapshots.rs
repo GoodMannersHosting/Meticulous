@@ -186,6 +186,7 @@ mod tests {
             share_workspace: share,
             workflow_invocation_id: None,
             workflow_invocation_name: None,
+            workspace_transfer: None,
         }
     }
 
@@ -209,6 +210,7 @@ mod tests {
             ],
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
         };
         let job_c = ir.jobs.iter().find(|j| j.id == c).unwrap();
         assert_eq!(workspace_snapshot_predecessor(&ir, job_c), Some(b));

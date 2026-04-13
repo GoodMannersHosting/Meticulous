@@ -110,6 +110,8 @@ message WorkspaceSnapshotUploadSpec {
     string snapshot_upload_url = 1;
     string object_key = 2;
     int64 max_bytes = 3;
+    // When non-empty, only these paths relative to the workspace root are packed (ADR-014 explicit `workspace.outputs`).
+    repeated string include_paths = 4;
 }
 
 // Result of uploading a workspace snapshot (reported on job completion).

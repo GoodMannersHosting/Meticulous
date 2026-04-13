@@ -93,6 +93,7 @@ mod tests {
             share_workspace: share,
             workflow_invocation_id: None,
             workflow_invocation_name: None,
+            workspace_transfer: None,
         }
     }
 
@@ -108,6 +109,7 @@ mod tests {
             jobs,
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
         }
     }
 

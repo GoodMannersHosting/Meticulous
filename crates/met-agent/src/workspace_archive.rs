@@ -58,6 +58,27 @@ pub async fn restore_workspace(workspace: &Path, snap: &WorkspaceSnapshot) -> Re
         .map_err(|e| AgentError::Workspace(format!("unpack join: {e}")))?
 }
 
+fn normalized_include_prefixes(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|p| {
+            p.trim()
+                .trim_start_matches("./")
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn rel_matches_any_prefix(rel: &str, prefixes: &[String]) -> bool {
+    let rel = rel.replace('\\', "/");
+    prefixes
+        .iter()
+        .any(|p| rel == *p || rel.starts_with(&format!("{p}/")))
+}
+
 fn unpack_tar_zst(workspace: &Path, compressed: &[u8]) -> Result<()> {
     let dec = zstd::decode_all(compressed)
         .map_err(|e| AgentError::Workspace(format!("zstd decompress: {e}")))?;
@@ -84,7 +105,14 @@ fn unpack_tar_zst(workspace: &Path, compressed: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn pack_blocking(workspace: &Path, max_uncompressed: u64) -> Result<Vec<u8>> {
+fn pack_blocking(
+    workspace: &Path,
+    max_uncompressed: u64,
+    include_paths: &[String],
+) -> Result<Vec<u8>> {
+    let prefixes = normalized_include_prefixes(include_paths);
+    let filter_by_prefix = !prefixes.is_empty();
+
     let mut builder = ignore::WalkBuilder::new(workspace);
     builder.standard_filters(true);
     builder.hidden(false);
@@ -110,6 +138,9 @@ fn pack_blocking(workspace: &Path, max_uncompressed: u64) -> Result<Vec<u8>> {
         }
 
         let rel_str = rel.to_string_lossy();
+        if filter_by_prefix && !rel_matches_any_prefix(&rel_str, &prefixes) {
+            continue;
+        }
         if rel_str == ".git" || rel_str.starts_with(".git/") {
             continue;
         }
@@ -177,12 +208,14 @@ pub async fn snapshot_and_upload(
         });
     }
 
+    let include_paths: Vec<String> = spec.include_paths.iter().cloned().collect();
+
     let (compressed, sha256) = tokio::task::spawn_blocking({
         let root = workspace.to_path_buf();
         let max = spec.max_bytes;
         move || {
             let max_u = if max <= 0 { u64::MAX } else { max as u64 };
-            let raw = pack_blocking(&root, max_u)?;
+            let raw = pack_blocking(&root, max_u, &include_paths)?;
             let mut hasher = Sha256::new();
             hasher.update(&raw);
             let digest = hex::encode(hasher.finalize());

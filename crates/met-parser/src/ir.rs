@@ -31,6 +31,8 @@ pub struct PipelineIR {
     pub default_pool_selector: Option<PoolSelector>,
     /// When true, `${{ workflows.*.outputs.*}}` may resolve **secret** outputs into plaintext env for dependent jobs.
     pub expose_workflow_secret_outputs: bool,
+    /// When true, shared-workspace affinity groups may contain concurrent jobs (S3 snapshot isolation).
+    pub allow_parallel_shared_workspace_jobs: bool,
 }
 
 impl PipelineIR {
@@ -141,6 +143,17 @@ pub enum TagValue {
     Present,
 }
 
+/// Explicit workspace snapshot transfer (ADR-014 `workspace:` on a workflow invocation).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceTransferIR {
+    /// Pipeline `workflows[].id` of the invocation whose workspace snapshot to restore.
+    pub restore_from_invocation_id: Option<String>,
+    /// Non-empty: pack only these paths (relative to workspace root) when uploading a snapshot.
+    pub snapshot_include_paths: Vec<String>,
+    /// Resolved producer [`JobId`] when `restore_from_invocation_id` is set (filled by the parser).
+    pub restore_from_job_id: Option<JobId>,
+}
+
 /// Resolved job ready for scheduling.
 #[derive(Debug, Clone)]
 pub struct JobIR {
@@ -176,6 +189,8 @@ pub struct JobIR {
     pub workflow_invocation_id: Option<String>,
     /// Pipeline `workflows[].name` when this job was expanded from a reusable workflow.
     pub workflow_invocation_name: Option<String>,
+    /// Optional explicit workspace restore / subset snapshot (ADR-014).
+    pub workspace_transfer: Option<WorkspaceTransferIR>,
 }
 
 impl JobIR {

@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 /// Reject pipelines where `share-workspace` is true but two jobs in the same affinity group can run concurrently.
 pub fn validate_share_workspace_affinity(ir: &PipelineIR, diagnostics: &mut ParseDiagnostics) {
+    if ir.allow_parallel_shared_workspace_jobs {
+        return;
+    }
     if !ir
         .jobs
         .iter()
@@ -116,6 +119,7 @@ mod tests {
             share_workspace: share_ws,
             workflow_invocation_id: None,
             workflow_invocation_name: None,
+            workspace_transfer: None,
         }
     }
 
@@ -137,6 +141,7 @@ mod tests {
             ],
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
         };
         let mut diag = ParseDiagnostics::new();
         validate_share_workspace_affinity(&ir, &mut diag);
@@ -161,9 +166,35 @@ mod tests {
             ],
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
         };
         let mut diag = ParseDiagnostics::new();
         validate_share_workspace_affinity(&ir, &mut diag);
         assert!(diag.has_errors());
+    }
+
+    #[test]
+    fn share_workspace_parallel_allowed_when_opt_in() {
+        let a = jid("00000000-0000-0000-0000-000000000001");
+        let b = jid("00000000-0000-0000-0000-000000000002");
+        let ir = PipelineIR {
+            id: PipelineId::new(),
+            name: "p".to_string(),
+            source_file: None,
+            project_id: None,
+            triggers: vec![],
+            variables: Default::default(),
+            secret_refs: Default::default(),
+            jobs: vec![
+                minimal_job(a, "j1", vec![], Some("g"), true),
+                minimal_job(b, "j2", vec![], Some("g"), true),
+            ],
+            default_pool_selector: None,
+            expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: true,
+        };
+        let mut diag = ParseDiagnostics::new();
+        validate_share_workspace_affinity(&ir, &mut diag);
+        assert!(!diag.has_errors());
     }
 }

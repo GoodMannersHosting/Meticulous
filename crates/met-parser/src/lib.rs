@@ -47,6 +47,7 @@ pub mod semver;
 pub mod span;
 pub mod variable;
 pub mod workflow;
+pub mod workspace_transfer;
 
 pub use affinity::validate_share_workspace_affinity;
 pub use dag::{DagNode, ValidatedDag, build_dag};
@@ -56,6 +57,7 @@ pub use ir::{
     CacheConfig, EnvValue, HealthCheck, HealthCheckMethod, JobIR, ParseShellError, PipelineIR,
     PoolSelector, RetryPolicy, ScheduleTrigger, SecretRef, ServiceDef, Shell, StepCommand, StepIR,
     TagTrigger, TagValue, Trigger, WebhookEvent, WebhookTrigger, WorkflowRef, WorkflowScope,
+    WorkspaceTransferIR,
 };
 pub use parser::{ParserConfig, PipelineParser, secret_refs_from_raw_secrets};
 pub use providers::GitWorkflowProvider;

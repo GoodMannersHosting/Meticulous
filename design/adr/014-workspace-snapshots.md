@@ -1,8 +1,9 @@
 # ADR-014: Workspace snapshots and soft affinity
 
-**Status:** Proposed (passive affinity snapshots implemented 2026-04-12)  
+**Status:** Accepted — passive affinity snapshots + explicit per-invocation `workspace:` (`from` / `outputs`) implemented in parser, engine dispatch, and agent packing (2026-04-13).  
 **Date:** 2026-04-11  
-**PRDs:** [030](../prd/030-pipeline-authoring-dag-workflows.md), [040](../prd/040-scheduling-and-nats-dispatch.md)
+**PRDs:** [030](../prd/030-pipeline-authoring-dag-workflows.md), [040](../prd/040-scheduling-and-nats-dispatch.md)  
+**Authoring guide:** [Pipeline authoring](../pipeline-authoring.md) (workflows, workspaces, global vs project scope).
 
 ## Context
 
@@ -17,31 +18,38 @@ The plan calls for **workspace snapshots**: upload workspace state to S3 after a
 Add an optional `workspace:` block to workflow invocations:
 
 ```yaml
-workflow_invocations:
+workflows:
   - id: build
     workflow: project/build
   - id: test
     workflow: project/test
+    depends-on: [build]
     workspace:
-      from: build              # restore snapshot from this invocation
-      outputs:                 # paths to snapshot after this invocation completes
+      from: build              # restore snapshot from this invocation's terminal job
+      outputs:                 # optional: only these paths are packed when this invocation uploads
         - target/
         - .cache/
 ```
 
-`from` references a prior invocation id within the same pipeline run. `outputs` declares paths to archive relative to the workspace root.
+`from` references a prior **`workflows[].id`** within the same pipeline. The parser resolves it to that invocation’s **unique terminal job** (the job in that invocation that no other job in the same invocation depends on). If that invocation has **multiple** terminal jobs (ambiguous DAG), validation fails with **`E5006`**. The consumer invocation must **`depends-on`** the producer workflow so the terminal job appears in `depends-on` after expansion (otherwise **`E5006`**).
+
+`outputs` lists paths **relative to the workspace root** to include in the tarball when this job run uploads a snapshot. When **empty**, packing uses the full tree (same rules as passive mode: gitignore-aware walk, `.git/` excluded). Non-empty `outputs` restricts packing to files under those prefixes (agent-side).
 
 ### Passive mode vs explicit `workspace:` (summary)
 
-| | **Passive (affinity + S3)** | **Explicit `workspace:` (future / opt-in)** |
-|--|-----------------------------|---------------------------------------------|
-| **Trigger** | `share_workspace: true` + explicit `affinity-group` + engine snapshot config + S3 | Invocation declares `workspace.from` / `workspace.outputs` |
-| **What is archived** | Entire workspace tree under `METICULOUS_WORKSPACE` (see exclusions below) | Only paths listed under `outputs` |
-| **Consumer** | Engine picks **maximal in-group predecessor** from `depends_on` (same affinity group) | Consumer named by `from` (invocation id) |
-| **Object key** | `…/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst` | `…/workspace-snapshots/…` keyed by invocation (see `ObjectKeyBuilder`) |
-| **Per-job workspace dir** | Yes (`workspace_root_id` cleared; each job run gets its own directory, restored from blob) | As implemented for that mode |
+| | **Passive (affinity + S3)** | **Explicit `workspace:`** |
+|--|-----------------------------|---------------------------|
+| **Trigger** | `share_workspace: true` + explicit `affinity-group` + engine snapshot config + S3 | Optional `workspace:` on an invocation; works together with passive mode |
+| **What is archived** | Entire workspace tree (see exclusions below) unless `outputs` lists a non-empty subset | Same: empty `outputs` → full tree; non-empty → subset only |
+| **Consumer restore source** | Engine picks **maximal in-group predecessor** from `depends_on` (same affinity group), if unique | If `workspace.from` is set, restore uses that invocation’s **terminal job**’s snapshot; otherwise passive rule applies |
+| **Object key** | `…/workspace-snapshots/{run_id}/{producer_job_run_id}.tar.zst` | Same object layout; explicit `from` only changes **which** producer job id is used for restore |
+| **Per-job workspace dir** | Yes (`workspace_root_id` cleared; each job run gets its own directory, restored from blob) | Same |
 
-Passive mode does **not** add workflow YAML beyond what affinity already requires.
+**Fan-in:** If a job depends on several in-group predecessors and passive selection would be ambiguous, there is **no** passive restore. Set **`workspace.from`** to the invocation whose tree you need (you still depend on that workflow in `depends-on`). Parallel branches that both mutate the workspace are not merged; you choose **one** snapshot source.
+
+**Parallel jobs in one affinity group** are rejected by the parser unless **`agent-affinity.allow-parallel-shared-workspace-jobs: true`** (opt-in for S3-isolated per-`job_run_id` workspaces). See [Pipeline authoring](../pipeline-authoring.md).
+
+Passive mode does **not** require `workspace:` on the YAML; explicit fields refine restore source and upload size.
 
 ### Passive mode (no extra YAML): `share_workspace` + object storage
 
@@ -80,7 +88,7 @@ Presign TTLs default to **1 hour** each for GET and PUT (`WorkspaceSnapshotConfi
 ### Proto surface (`controller.proto` / agent types)
 
 - **`WorkspaceSnapshot`** on dispatch: download URL, expected SHA-256, optional restore path list, provenance fields (`producing_job_run_id`, `producing_workflow_invocation_id`, `archive_sha256`, `snapshot_generation`).
-- **`WorkspaceSnapshotUploadSpec`** on `JobDispatch`: presigned PUT URL, `object_key`, `max_bytes`.
+- **`WorkspaceSnapshotUploadSpec`** on `JobDispatch`: presigned PUT URL, `object_key`, `max_bytes`, optional **`include_paths`** (subset pack; mirrors YAML `workspace.outputs`).
 - **`WorkspaceSnapshotUploadResult`** on **`JobCompletion`** and **`JobStatusUpdate`**: `uploaded`, `sha256`, `size_bytes`, `object_key`, `skipped`, `error_message`.
 
 ### Digest verification
@@ -91,7 +99,7 @@ The producing agent computes a SHA-256 digest of the archive before upload and r
 
 1. **Affinity pin:** For jobs with `affinity-group`, the first dispatched job picks an available agent; the run state **pins** that group to that agent. Later jobs in the group must use the pinned agent or dispatch fails (see `scheduler.rs`).
 2. **Passive snapshots** complement that model by **restoring** the previous job’s workspace into each new **`job_run_id`** directory so serial jobs see the same tree without relying on a shared path on disk.
-3. **Explicit `workspace:`** (when implemented end-to-end) remains **opt-in** for subset restores or different naming; it does not replace passive mode for affinity chains.
+3. **Explicit `workspace:`** is **opt-in** for subset uploads (`outputs`), unambiguous restore (`from`) when passive predecessor selection is insufficient, or both; it does not replace passive mode for simple linear affinity chains.
 
 ### Agent behavior
 
@@ -105,13 +113,13 @@ The producing agent computes a SHA-256 digest of the archive before upload and r
 
 1. `GET` blob, verify **`expected_sha256`**, extract with traversal guards, then run steps.
 
-**Explicit YAML producer** (future / separate path; job declares `workspace.outputs`):
+**Explicit YAML producer** (invocation declares `workspace.outputs` non-empty):
 
-1. After steps, archive **only** declared paths into `tar.zst`, then upload and report digest (as specified for that feature).
+1. After steps, archive **only** declared path prefixes into `tar.zst`, then upload and report digest (same as passive otherwise).
 
-**Explicit YAML consumer** (job declares `workspace.from`):
+**Explicit YAML consumer** (invocation declares `workspace.from`):
 
-1. Download, verify digest, extract, run steps.
+1. Engine selects the registered snapshot for the **resolved terminal job** of that invocation; agent downloads, verifies digest, extracts, runs steps.
 
 ### Engine orchestration
 
@@ -122,7 +130,7 @@ The producing agent computes a SHA-256 digest of the archive before upload and r
 - Always attach presign **PUT** for passive snapshot producers (same chain).
 - On completion: parse `workspace_snapshot_result`; if upload succeeded, **register** `WorkspaceSnapshotRecord` under the **producer job id** for this run.
 
-**Explicit `workspace:` mode** (when wired): registry keyed by **invocation id** (or as in ADR), populate restore only for consumers that declare `from`.
+**Explicit `workspace:` mode:** snapshot registry remains keyed by **producer job id** (per run). The parser fills `restore_from_job_id` from `workspace.from`. Dispatch uses **`restore_from_job_id` when set**, otherwise **`workspace_snapshot_predecessor`** (passive).
 
 **Retries:** A new **`job_run_id`** implies a new object key (`workspace_snapshot_job_run`); consumers must not read an object keyed for a **previous** attempt once the engine registers the new blob. Partial uploads should not be registered; lifecycle rules eventually expire abandoned objects.
 
