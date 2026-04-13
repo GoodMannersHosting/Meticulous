@@ -816,20 +816,24 @@ impl<'a> PipelineParser<'a> {
                     && invocation_affinity_explicit.is_some();
 
                 let workspace_transfer =
-                    workflow.invocation.workspace.as_ref().map(|w| WorkspaceTransferIR {
-                        restore_from_invocation_id: w
-                            .from
-                            .as_ref()
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                        snapshot_include_paths: w
-                            .outputs
-                            .iter()
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect(),
-                        restore_from_job_id: None,
-                    });
+                    workflow
+                        .invocation
+                        .workspace
+                        .as_ref()
+                        .map(|w| WorkspaceTransferIR {
+                            restore_from_invocation_id: w
+                                .from
+                                .as_ref()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty()),
+                            snapshot_include_paths: w
+                                .outputs
+                                .iter()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect(),
+                            restore_from_job_id: None,
+                        });
 
                 JobIR {
                     id: make_job_id(&job_id),

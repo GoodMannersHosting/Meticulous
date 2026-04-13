@@ -208,7 +208,7 @@ pub async fn snapshot_and_upload(
         });
     }
 
-    let include_paths: Vec<String> = spec.include_paths.iter().cloned().collect();
+    let include_paths: Vec<String> = spec.include_paths.to_vec();
 
     let (compressed, sha256) = tokio::task::spawn_blocking({
         let root = workspace.to_path_buf();

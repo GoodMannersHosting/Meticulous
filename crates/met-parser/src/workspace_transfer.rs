@@ -8,7 +8,10 @@ use crate::error::{ErrorCode, ParseDiagnostics, ParseError};
 use crate::ir::{JobIR, PipelineIR};
 
 /// Resolve `restore_from_job_id` for each job with `workspace_transfer`, and validate edges.
-pub fn resolve_and_validate_workspace_transfers(ir: &mut PipelineIR, diagnostics: &mut ParseDiagnostics) {
+pub fn resolve_and_validate_workspace_transfers(
+    ir: &mut PipelineIR,
+    diagnostics: &mut ParseDiagnostics,
+) {
     let invocation_ids: HashSet<String> = ir
         .jobs
         .iter()
