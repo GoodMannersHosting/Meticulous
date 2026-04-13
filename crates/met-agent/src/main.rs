@@ -3,6 +3,8 @@
 //! The agent connects to the controller, receives job assignments,
 //! and executes steps in isolated environments.
 
+mod nats_connect;
+
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +21,6 @@ use met_agent::registration::{
     AgentRegistration, RegistrationSource, registration_needs_join_token,
 };
 use met_proto::agent::v1::HeartbeatAction;
-use nkeys::KeyPair;
 use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal as unix_signal};
@@ -30,7 +31,7 @@ use tracing::{error, info, warn};
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
 #[command(
-    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones).\n\nEphemeral runners: set `MET_AGENT_EXIT_AFTER_JOBS` to a positive integer to shut down gracefully after that many **successful** jobs (exit 0)."
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNATS: `http://` and `https://` URLs are rewritten to `ws://` and `wss://` for WebSocket transports. For TLS to private CAs, set `MET_AGENT_NATS_CA_FILE` to a PEM bundle; for development only, `MET_AGENT_NATS_TLS_INSECURE=1` disables server certificate verification (MITM risk). Optional `MET_AGENT_NATS_REQUIRE_TLS=1` forces TLS.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones).\n\nEphemeral runners: set `MET_AGENT_EXIT_AFTER_JOBS` to a positive integer to shut down gracefully after that many **successful** jobs (exit 0)."
 )]
 #[command(version)]
 struct Args {
@@ -266,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let nats_url = nats_connect_identity.nats_url.clone();
-    let nats_client = match connect_nats(&nats_connect_identity).await {
+    let nats_client = match nats_connect::connect_nats(&nats_connect_identity).await {
         Ok(c) => c,
         Err(e) if require_nats_jwt => {
             error!(
@@ -384,29 +385,5 @@ fn registration_failure_should_exit(err: &AgentError) -> bool {
         AgentError::Registration(_) => true,
         AgentError::Config(msg) if msg.contains("join_token") => true,
         _ => false,
-    }
-}
-
-async fn connect_nats(
-    identity: &met_agent::config::AgentIdentity,
-) -> Result<async_nats::Client, AgentError> {
-    let url = identity.nats_url.as_str();
-    match (&identity.nats_user_jwt, &identity.nats_user_seed) {
-        (Some(jwt), Some(seed)) if !jwt.trim().is_empty() && !seed.trim().is_empty() => {
-            let kp = std::sync::Arc::new(KeyPair::from_seed(seed.trim()).map_err(|e| {
-                AgentError::Config(format!("invalid NATS user seed in identity: {e}"))
-            })?);
-            let jwt = jwt.clone();
-            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
-                let kp = kp.clone();
-                async move { kp.sign(&nonce).map_err(async_nats::AuthError::new) }
-            })
-            .connect(url)
-            .await
-            .map_err(|e| AgentError::Internal(format!("NATS connect: {e}")))
-        }
-        _ => async_nats::connect(url)
-            .await
-            .map_err(|e| AgentError::Internal(format!("NATS connect: {e}"))),
     }
 }
