@@ -174,7 +174,7 @@ workflows:
   - name: Playwright E2E tests
     id: playwright
     workspace:
-      from: cargo-test
+      from: ci-seed
     workflow: global/playwright-test
     version: "1.0.1"
     # affinity-group: ci
@@ -186,7 +186,7 @@ workflows:
   - name: DAST scan (ZAP)
     id: zap
     workspace:
-      from: cargo-test
+      from: ci-seed
     workflow: global/zap-scan
     version: "1.0.1"
     # affinity-group: ci
