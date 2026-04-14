@@ -34,26 +34,121 @@ COPY --chown=builder:builder proto ./proto
 RUN cargo build --release --bin met-agent \
     && strip /app/target/release/met-agent
 
+RUN cargo build --release --bin met-output \
+    && strip /app/target/release/met-output
+
 # ==============================================================================
 # Stage 2: Runtime
 # ==============================================================================
-FROM docker.io/debian:bookworm-slim
+FROM docker.io/debian:trixie-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG POWERSHELL_TAG=v7.6.0
+ARG POWERSHELL_DEB_VER=7.6.0-1
+ARG METICULOUS_USER_UID=1000
+ARG DOCKER_GROUP_GID=2375
+ARG CHANNEL=stable
+ARG DOCKER_VERSION=29.4.0
+ARG DOCKER_COMPOSE_VERSION=v5.1.2
+ARG DOCKER_BUILDX_VERSION=v0.33.0
+
+# Install runtime dependencies (PowerShell via upstream .deb — avoids Microsoft apt repo conflicts).
+RUN set -euxo pipefail \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    bash \
+    build-essential \
     ca-certificates \
+    clang \
     curl \
+    dash \
+    fish \
+    g++ \
+    gcc \
     git \
+    gnupg \
+    libicu76 \
+    iptables \
+    iputils-ping \
+    net-tools \
+    netcat-openbsd \
+    openssh-client \
+    openssl \
+    patch \
+    pkg-config \
+    rpm \
+    rsync \
+    ssh \
+    sshpass \
+    sudo \
+    tar \
+    texinfo \
+    time \
+    tree \
+    tzdata \
+    unzip \
+    upx \
+    wget \
+    xz-utils \
+    zip \
+    zsh \
+    zsync \
+    && DEB_ARCH="$(dpkg --print-architecture)" \
+    && POWERSHELL_DEB="powershell_${POWERSHELL_DEB_VER}.deb_${DEB_ARCH}.deb" \
+    && wget -q "https://github.com/PowerShell/PowerShell/releases/download/${POWERSHELL_TAG}/${POWERSHELL_DEB}" \
+    && dpkg -i "${POWERSHELL_DEB}" \
+    && apt-get install -f -y --no-install-recommends \
+    && rm -f "${POWERSHELL_DEB}" \
     && rm -rf /var/lib/apt/lists/*
 
+# Download latest git-lfs version
+RUN curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
+    apt-get install -y --no-install-recommends git-lfs
+
+RUN set -euxo pipefail; \
+    DEB_ARCH="$(dpkg --print-architecture)" \
+    && case "${DEB_ARCH}" in \
+    amd64|i386) DOCKER_STATIC_ARCH=x86_64 ;; \
+    arm64) DOCKER_STATIC_ARCH=aarch64 ;; \
+    *) echo "unsupported Debian arch for Docker static bundle: ${DEB_ARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fLo docker.tgz "https://download.docker.com/linux/static/${CHANNEL}/${DOCKER_STATIC_ARCH}/docker-${DOCKER_VERSION}.tgz" \
+    && tar zxvf docker.tgz \
+    && install -o root -g root -m 755 docker/* /usr/bin/ \
+    && rm -rf docker docker.tgz
+
+RUN set -euxo pipefail; \
+    DEB_ARCH="$(dpkg --print-architecture)" \
+    && case "${DEB_ARCH}" in \
+    amd64|i386) COMPOSE_ARCH=x86_64 ;; \
+    arm64) COMPOSE_ARCH=aarch64 ;; \
+    *) echo "unsupported Debian arch for Compose binary: ${DEB_ARCH}" >&2; exit 1 ;; \
+    esac \
+    && case "${DEB_ARCH}" in \
+    amd64) BUILDX_ARCH=amd64 ;; \
+    arm64) BUILDX_ARCH=arm64 ;; \
+    i386) BUILDX_ARCH=386 ;; \
+    *) echo "unsupported Debian arch for Buildx binary: ${DEB_ARCH}" >&2; exit 1 ;; \
+    esac \
+    && mkdir -p /usr/libexec/docker/cli-plugins \
+    && curl -fLo /usr/libexec/docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}" \
+    && chmod +x /usr/libexec/docker/cli-plugins/docker-compose \
+    && ln -s /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose \
+    && which docker-compose \
+    && docker compose version \
+    && curl -fLo /usr/libexec/docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${DOCKER_BUILDX_VERSION}/buildx-${DOCKER_BUILDX_VERSION}.linux-${BUILDX_ARCH}" \
+    && chmod +x /usr/libexec/docker/cli-plugins/docker-buildx \
+    && docker buildx version
+
+
+
 # Create a non-root user for running the agent
-RUN groupadd -r meticulous && useradd -r -g meticulous -d /home/meticulous -m meticulous
-
-# Copy the built binary
-COPY --from=builder /app/target/release/met-agent /usr/local/bin/met-agent
-
-# Create workspace directory for builds
-RUN mkdir -p /workspace && chown meticulous:meticulous /workspace
+RUN groupadd -r meticulous && useradd -r -g meticulous -d /home/meticulous -m meticulous \
+    && mkdir -p /home/meticulous/workspace && chown meticulous:meticulous /home/meticulous/workspace \
+    && echo "%sudo   ALL=(ALL:ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && echo "Defaults env_keep += \"DEBIAN_FRONTEND\"" >> /etc/sudoers \
+    && usermod -aG sudo meticulous \
+    && groupadd -g $DOCKER_GROUP_GID docker \
+    && usermod -aG docker meticulous
 
 # Switch to non-root user
 USER meticulous
@@ -63,12 +158,15 @@ WORKDIR /workspace
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1
 
+COPY --from=builder /app/target/release/met-agent /usr/local/bin/met-agent
+COPY --from=builder /app/target/release/met-output /usr/local/bin/met-output
+
 # Environment variables with defaults
 ENV MET_CONTROLLER_URL="" \
     MET_JOIN_TOKEN="" \
     MET_AGENT_NAME="" \
     MET_LABELS="" \
-    MET_WORK_DIR="/workspace" \
+    MET_WORK_DIR="/home/meticulous/workspace" \
     RUST_LOG="info,met_agent=debug"
 
 ENTRYPOINT ["met-agent"]
