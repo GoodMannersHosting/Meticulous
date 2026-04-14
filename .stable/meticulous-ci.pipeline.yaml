@@ -66,6 +66,8 @@ workflows:
   # ── Static checks (serial on shared workspace `ci`) ─────────────────────────
   - name: Secret scan (TruffleHog)
     id: trufflehog
+    workspace:
+      from: checkout
     workflow: global/trufflehog-scan
     version: "1.2.0"
     # affinity-group: ci
@@ -77,6 +79,8 @@ workflows:
 
   - name: Typo check
     id: typos
+    workspace:
+      from: checkout
     workflow: global/typos
     version: "1.1.0"
     # affinity-group: ci
@@ -86,6 +90,8 @@ workflows:
 
   - name: SAST (Opengrep)
     id: opengrep
+    workspace:
+      from: checkout
     workflow: global/opengrep
     version: "1.1.2"
     # affinity-group: ci
@@ -98,6 +104,8 @@ workflows:
   # ── Rust toolchain setup ───────────────────────────────────────────────────
   - name: Setup Rust toolchain
     id: setup-rust
+    workspace:
+      from: checkout
     workflow: global/setup-rust
     version: "1.0.0"
     # affinity-group: ci
@@ -108,6 +116,8 @@ workflows:
   # ── Lint + audit + test (parallel after setup-rust; see ci-seed workspace.from) ────────────
   - name: Cargo lint
     id: cargo-lint
+    workspace:
+      from: setup-rust
     workflow: global/cargo-lint
     version: "1.0.0"
     # affinity-group: ci
@@ -118,6 +128,8 @@ workflows:
 
   - name: Cargo audit (SCA)
     id: cargo-audit
+    workspace:
+      from: setup-rust
     workflow: global/cargo-audit
     version: "1.0.0"
     # affinity-group: ci
@@ -128,6 +140,8 @@ workflows:
   # ── Unit + integration tests ───────────────────────────────────────────────
   - name: Cargo test
     id: cargo-test
+    workspace:
+      from: setup-rust
     workflow: global/cargo-test
     version: "1.0.0"
     # affinity-group: ci
@@ -140,12 +154,12 @@ workflows:
   # ── Functional / UI tests (serial on shared workspace; Playwright needs tree) ─
   - name: CI seed (start API + seed data)
     id: ci-seed
+    workspace:
+      from: cargo-test
     workflow: global/meticulous-ci-seed
     version: "1.0.0"
     # affinity-group: ci
     depends-on: [cargo-lint, cargo-audit, cargo-test]
-    workspace:
-      from: cargo-test
     inputs:
       workspace_path: meticulous
       api_listen: "127.0.0.1:8081"
@@ -159,6 +173,8 @@ workflows:
 
   - name: Playwright E2E tests
     id: playwright
+    workspace:
+      from: cargo-test
     workflow: global/playwright-test
     version: "1.0.1"
     # affinity-group: ci
@@ -169,6 +185,8 @@ workflows:
 
   - name: DAST scan (ZAP)
     id: zap
+    workspace:
+      from: cargo-test
     workflow: global/zap-scan
     version: "1.0.1"
     # affinity-group: ci
@@ -179,12 +197,12 @@ workflows:
   # ── Docker build + push + Trivy scan (continues shared `ci` workspace) ─────
   - name: Build and push met-agent
     id: push-agent
+    workspace:
+      from: playwright
     workflow: global/docker-buildx-push
     version: &dbxpushversion "1.0.2"
     # affinity-group: ci
     depends-on: &tests [api-smoke, playwright, zap]
-    workspace:
-      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.agent
@@ -193,6 +211,8 @@ workflows:
 
   - name: Trivy scan met-agent
     id: scan-agent
+    workspace:
+      from: push-agent
     workflow: global/trivy-scan
     version: &trivyscanversion "1.2.0"
     # affinity-group: ci
@@ -205,12 +225,12 @@ workflows:
 
   - name: Build and push met-api
     id: push-api
+    workspace:
+      from: playwright
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     # affinity-group: ci
     depends-on: *tests
-    workspace:
-      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-api
@@ -219,6 +239,8 @@ workflows:
 
   - name: Trivy scan met-api
     id: scan-api
+    workspace:
+      from: push-api
     workflow: global/trivy-scan
     version: *trivyscanversion
     # affinity-group: ci
@@ -231,12 +253,12 @@ workflows:
 
   - name: Build and push met-controller
     id: push-controller
+    workspace:
+      from: playwright
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     # affinity-group: ci
     depends-on: *tests
-    workspace:
-      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.met-controller
@@ -245,6 +267,8 @@ workflows:
 
   - name: Trivy scan met-controller
     id: scan-controller
+    workspace:
+      from: push-controller
     workflow: global/trivy-scan
     version: *trivyscanversion
     # affinity-group: ci
@@ -257,12 +281,12 @@ workflows:
 
   - name: Build and push met-frontend
     id: push-frontend
+    workspace:
+      from: playwright
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     # affinity-group: ci
     depends-on: *tests
-    workspace:
-      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile
@@ -271,6 +295,8 @@ workflows:
 
   - name: Trivy scan met-frontend
     id: scan-frontend
+    workspace:
+      from: push-frontend
     workflow: global/trivy-scan
     version: *trivyscanversion
     # affinity-group: ci
@@ -283,12 +309,12 @@ workflows:
 
   - name: Build and push sqlx-migrate
     id: push-sqlx-migrate
+    workspace:
+      from: playwright
     workflow: global/docker-buildx-push
     version: *dbxpushversion
     # affinity-group: ci
     depends-on: *tests
-    workspace:
-      from: playwright
     inputs:
       context_path: meticulous
       dockerfile: Dockerfile.sqlx-migrate
@@ -297,6 +323,8 @@ workflows:
 
   - name: Trivy scan sqlx-migrate
     id: scan-sqlx-migrate
+    workspace:
+      from: push-sqlx-migrate
     workflow: global/trivy-scan
     version: *trivyscanversion
     # affinity-group: ci
