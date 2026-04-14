@@ -3,7 +3,7 @@
 //! The executor walks the job DAG in topological order, respecting dependencies,
 //! evaluating conditions, and dispatching jobs to agents via the scheduler.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -598,6 +598,10 @@ impl<C: CacheBackend> Executor<C> {
                     run_state
                         .mark_job_completed(&job.id, true, Some(0), None)
                         .await;
+                    self.persistence.set_job_cache_hit(job_run_id, &key).await?;
+                    self.persistence
+                        .complete_job(job_run_id, true, Some(0), None)
+                        .await?;
                     return Ok(());
                 }
                 CacheLookupResult::PartialHit { matched_key, .. } => {
@@ -626,8 +630,11 @@ impl<C: CacheBackend> Executor<C> {
             Err(EngineError::AffinityScheduling { job: j, reason }) => {
                 error!(job = %j, %reason, "affinity scheduling failed; failing job");
                 run_state
-                    .mark_job_completed(&job.id, false, None, Some(reason))
+                    .mark_job_completed(&job.id, false, None, Some(reason.clone()))
                     .await;
+                self.persistence
+                    .complete_job(job_run_id, false, None, Some(reason.as_str()))
+                    .await?;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -703,12 +710,18 @@ impl<C: CacheBackend> Executor<C> {
         _ctx: &ExecutionContext,
         run_state: &RunState,
     ) -> Result<()> {
-        let pending = run_state.pending_jobs().await;
+        // Queued and Running jobs live in `running_jobs`, not `pending_jobs`. Fail-fast must cancel
+        // both so DB rows are not left pending/queued (API reconcile would show "Run failed before
+        // this job executed").
+        let mut to_cancel: HashSet<JobId> = run_state.pending_jobs().await;
+        to_cancel.extend(run_state.running_jobs().await);
+
         let msg = "Cancelled: pipeline stopped after a job failed";
-        for job_id in pending {
+        for job_id in to_cancel {
             let Some(js) = run_state.get_job(&job_id).await else {
                 continue;
             };
+            self.scheduler.forget_active_job(js.job_run_id).await;
             run_state
                 .mark_job_cancelled(&job_id, Some(msg.to_string()))
                 .await;

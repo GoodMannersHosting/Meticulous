@@ -248,8 +248,14 @@ impl RunState {
     }
 
     async fn update_job_sets(&self, job_id: &JobId, _old: JobStatus, new: JobStatus) {
+        // Remove from every partition set first so transitions (e.g. Cancelled → Succeeded after a
+        // late completion) do not leave stale ids in `failed_jobs`, which would force
+        // `compute_final_status` to Failed while job rows and logs show success.
         self.inner.pending_jobs.write().await.remove(job_id);
         self.inner.running_jobs.write().await.remove(job_id);
+        self.inner.completed_jobs.write().await.remove(job_id);
+        self.inner.failed_jobs.write().await.remove(job_id);
+        self.inner.skipped_jobs.write().await.remove(job_id);
 
         match new {
             JobStatus::Pending => {
@@ -399,23 +405,24 @@ impl RunState {
         *self.inner.cancellation_requested.read().await
     }
 
-    /// Compute the final run status based on job states.
+    /// Compute the final run status from each job's `status` (not the derived `failed_jobs` set).
+    ///
+    /// The `failed_jobs` set includes **Cancelled** jobs; using it alone can disagree with the
+    /// authoritative per-job statuses after transitions (e.g. late success after cancel).
     pub async fn compute_final_status(&self) -> RunStatus {
         if *self.inner.cancellation_requested.read().await {
             return RunStatus::Cancelled;
         }
 
-        let failed = self.inner.failed_jobs.read().await;
-        if !failed.is_empty() {
-            let jobs = self.inner.jobs.read().await;
-            for job_id in failed.iter() {
-                if let Some(job) = jobs.get(job_id) {
-                    if job.status == JobStatus::TimedOut {
-                        return RunStatus::TimedOut;
-                    }
-                }
-            }
+        let jobs = self.inner.jobs.read().await;
+        if jobs.values().any(|j| j.status == JobStatus::TimedOut) {
+            return RunStatus::TimedOut;
+        }
+        if jobs.values().any(|j| j.status == JobStatus::Failed) {
             return RunStatus::Failed;
+        }
+        if jobs.values().any(|j| j.status == JobStatus::Cancelled) {
+            return RunStatus::Cancelled;
         }
 
         RunStatus::Succeeded

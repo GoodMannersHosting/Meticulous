@@ -215,12 +215,16 @@ impl Scheduler {
         let chosen_agent: Agent = if let Some(ref group) = job.affinity_group {
             if let Some(pinned_id) = run_state.get_affinity_pin(group).await {
                 let agent = repo.get(pinned_id).await?;
-                if !Self::agent_eligible_for_dispatch(
+
+                let at_capacity = agent.running_jobs >= agent.max_jobs;
+                let structurally_eligible = Self::agent_eligible_ignoring_capacity(
                     &agent,
                     ctx.org_id(),
                     &pool_tag,
                     &required_tags,
-                ) {
+                );
+
+                if !structurally_eligible {
                     return Err(EngineError::AffinityScheduling {
                         job: job.name.clone(),
                         reason: format!(
@@ -228,6 +232,21 @@ impl Scheduler {
                         ),
                     });
                 }
+
+                if at_capacity {
+                    debug!(
+                        job = %job.name,
+                        agent_id = %pinned_id,
+                        running_jobs = agent.running_jobs,
+                        max_jobs = agent.max_jobs,
+                        "affinity-pinned agent at capacity; retrying next poll"
+                    );
+                    return Err(EngineError::NoAvailableAgents {
+                        job: job.name.clone(),
+                        tags: required_tags,
+                    });
+                }
+
                 agent
             } else {
                 let Some(first) = candidates.first() else {
@@ -313,13 +332,24 @@ impl Scheduler {
         pool_tag: &str,
         required_tags: &[String],
     ) -> bool {
+        Self::agent_eligible_ignoring_capacity(agent, org_id, pool_tag, required_tags)
+            && agent.running_jobs < agent.max_jobs
+    }
+
+    /// Same as `agent_eligible_for_dispatch` but without the capacity (`running_jobs < max_jobs`)
+    /// check. Used by affinity dispatch so that a stale heartbeat counter doesn't permanently
+    /// fail the job — the caller converts the capacity case into a retriable
+    /// `NoAvailableAgents` instead.
+    fn agent_eligible_ignoring_capacity(
+        agent: &Agent,
+        org_id: OrganizationId,
+        pool_tag: &str,
+        required_tags: &[String],
+    ) -> bool {
         if agent.org_id != org_id {
             return false;
         }
         if !matches!(agent.status, AgentStatus::Online | AgentStatus::Busy) {
-            return false;
-        }
-        if agent.running_jobs >= agent.max_jobs {
             return false;
         }
         if !agent.pool_tags.iter().any(|p| p == pool_tag) {

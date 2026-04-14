@@ -87,7 +87,7 @@ workflows:
   - name: SAST (Opengrep)
     id: opengrep
     workflow: global/opengrep
-    version: "1.1.1"
+    version: "1.1.2"
     affinity-group: ci
     depends-on: [checkout]
     inputs:

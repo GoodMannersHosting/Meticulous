@@ -1240,6 +1240,13 @@ WHERE jr.run_id = r.id
     }
 
     /// Mark job as completed.
+    ///
+    /// Only transitions from `pending`, `queued`, or `running` are applied. This prevents a late
+    /// agent status update from clobbering engine-initiated `cancelled` / `skipped` (fail-fast,
+    /// conditions, etc.) and matches the rule that agents complete work that is still active.
+    ///
+    /// If the job is already in a terminal state (including successful idempotent retries), returns
+    /// the current row unchanged.
     pub async fn mark_completed(
         &self,
         id: JobRunId,
@@ -1260,6 +1267,7 @@ WHERE jr.run_id = r.id
             UPDATE job_runs
             SET status = $2, exit_code = $3, error_message = $4, outputs = COALESCE($5, outputs), finished_at = $6
             WHERE id = $1
+              AND status IN ('pending', 'queued', 'running')
             RETURNING id, run_id, job_id, job_name, agent_id, status, attempt, exit_code, 
                       error_message, cache_hit, log_path, cache_key, outputs, started_at, finished_at, created_at,
                       pipeline_definition_sha256, workflow_definition_sha256, source_workflow,
@@ -1272,10 +1280,32 @@ WHERE jr.run_id = r.id
         .bind(error_message)
         .bind(outputs)
         .bind(now)
-        .fetch_one(self.pool)
+        .fetch_optional(self.pool)
         .await?;
 
-        Ok(job_run)
+        if let Some(row) = job_run {
+            return Ok(row);
+        }
+
+        let existing = self.get(id).await?;
+
+        // Idempotent duplicate completion reports from the agent.
+        if (success && existing.status == JobStatus::Succeeded)
+            || (!success && existing.status == JobStatus::Failed)
+        {
+            return Ok(existing);
+        }
+
+        if matches!(existing.status, JobStatus::Cancelled | JobStatus::Skipped) {
+            tracing::warn!(
+                job_run_id = %id,
+                incoming_success = success,
+                existing_status = ?existing.status,
+                "ignored agent job completion: job already cancelled or skipped"
+            );
+        }
+
+        Ok(existing)
     }
 
     /// Mark job as skipped.
