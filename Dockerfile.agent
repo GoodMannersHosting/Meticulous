@@ -67,6 +67,7 @@ RUN set -euxo pipefail \
     git \
     gnupg \
     libicu76 \
+    libssl-dev \
     iptables \
     iputils-ping \
     net-tools \

@@ -58,7 +58,7 @@ workflows:
     id: checkout
     workflow: global/git-checkout
     version: "1.0.1"
-    affinity-group: ci
+    # affinity-group: ci
     inputs:
       repo: "${METICULOUS_REPO}"
       clone_path: meticulous
@@ -68,7 +68,7 @@ workflows:
     id: trufflehog
     workflow: global/trufflehog-scan
     version: "1.2.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [checkout]
     inputs:
       scan_path: meticulous
@@ -79,7 +79,7 @@ workflows:
     id: typos
     workflow: global/typos
     version: "1.1.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [checkout]
     inputs:
       path: meticulous
@@ -88,7 +88,7 @@ workflows:
     id: opengrep
     workflow: global/opengrep
     version: "1.1.2"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [checkout]
     inputs:
       scan_path: meticulous
@@ -100,7 +100,7 @@ workflows:
     id: setup-rust
     workflow: global/setup-rust
     version: "1.0.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [checkout]
     inputs:
       rust_toolchain: "${RUST_TOOLCHAIN}"
@@ -110,7 +110,7 @@ workflows:
     id: cargo-lint
     workflow: global/cargo-lint
     version: "1.0.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [setup-rust]
     inputs:
       rust_toolchain: "${RUST_TOOLCHAIN}"
@@ -120,7 +120,7 @@ workflows:
     id: cargo-audit
     workflow: global/cargo-audit
     version: "1.0.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [setup-rust]
     inputs:
       workspace_path: meticulous
@@ -130,7 +130,7 @@ workflows:
     id: cargo-test
     workflow: global/cargo-test
     version: "1.0.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [setup-rust]
     inputs:
       rust_toolchain: "${RUST_TOOLCHAIN}"
@@ -142,7 +142,7 @@ workflows:
     id: ci-seed
     workflow: global/meticulous-ci-seed
     version: "1.0.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [cargo-lint, cargo-audit, cargo-test]
     workspace:
       from: cargo-test
@@ -154,14 +154,14 @@ workflows:
     id: api-smoke
     workflow: global/api-smoke-test
     version: "1.0.1"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [ci-seed]
 
   - name: Playwright E2E tests
     id: playwright
     workflow: global/playwright-test
     version: "1.0.1"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [ci-seed]
     inputs:
       workspace_path: meticulous
@@ -171,7 +171,7 @@ workflows:
     id: zap
     workflow: global/zap-scan
     version: "1.0.1"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [ci-seed]
     inputs:
       fail_on_warn: "false"
@@ -181,7 +181,7 @@ workflows:
     id: push-agent
     workflow: global/docker-buildx-push
     version: &dbxpushversion "1.0.2"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: &tests [api-smoke, playwright, zap]
     workspace:
       from: playwright
@@ -195,7 +195,7 @@ workflows:
     id: scan-agent
     workflow: global/trivy-scan
     version: &trivyscanversion "1.2.0"
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [push-agent]
     inputs:
       mode: image
@@ -207,7 +207,7 @@ workflows:
     id: push-api
     workflow: global/docker-buildx-push
     version: *dbxpushversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: *tests
     workspace:
       from: playwright
@@ -221,7 +221,7 @@ workflows:
     id: scan-api
     workflow: global/trivy-scan
     version: *trivyscanversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [push-api]
     inputs:
       mode: image
@@ -233,7 +233,7 @@ workflows:
     id: push-controller
     workflow: global/docker-buildx-push
     version: *dbxpushversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: *tests
     workspace:
       from: playwright
@@ -247,7 +247,7 @@ workflows:
     id: scan-controller
     workflow: global/trivy-scan
     version: *trivyscanversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [push-controller]
     inputs:
       mode: image
@@ -259,7 +259,7 @@ workflows:
     id: push-frontend
     workflow: global/docker-buildx-push
     version: *dbxpushversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: *tests
     workspace:
       from: playwright
@@ -273,7 +273,7 @@ workflows:
     id: scan-frontend
     workflow: global/trivy-scan
     version: *trivyscanversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [push-frontend]
     inputs:
       mode: image
@@ -285,7 +285,7 @@ workflows:
     id: push-sqlx-migrate
     workflow: global/docker-buildx-push
     version: *dbxpushversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: *tests
     workspace:
       from: playwright
@@ -299,7 +299,7 @@ workflows:
     id: scan-sqlx-migrate
     workflow: global/trivy-scan
     version: *trivyscanversion
-    affinity-group: ci
+    # affinity-group: ci
     depends-on: [push-sqlx-migrate]
     inputs:
       mode: image
