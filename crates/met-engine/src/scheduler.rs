@@ -176,6 +176,14 @@ impl Scheduler {
         }
     }
 
+    /// S3-backed restore/upload for this job (see ADR-014).
+    #[inline]
+    fn passive_workspace_snapshots_enabled(&self, job: &JobIR) -> bool {
+        self.workspace_snapshots.enabled
+            && self.workspace_presigner.is_some()
+            && job.share_workspace
+    }
+
     /// Dispatch a job to an available agent.
     #[instrument(skip(self, ctx, run_state, job), fields(job_name = %job.name))]
     pub async fn dispatch_job(
@@ -212,7 +220,22 @@ impl Scheduler {
             .list_available_for_dispatch(ctx.org_id(), &pool_tag, &required_tags)
             .await?;
 
-        let chosen_agent: Agent = if let Some(ref group) = job.affinity_group {
+        let passive_snapshots = self.passive_workspace_snapshots_enabled(job);
+        // Hard pin to one agent only when we rely on a shared on-disk directory (legacy mode).
+        // With passive snapshots, any agent can restore from S3; affinity-group is optional.
+        let pin_key: Option<String> = if passive_snapshots {
+            None
+        } else if job.share_workspace {
+            Some(
+                job.affinity_group
+                    .clone()
+                    .unwrap_or_else(|| crate::affinity::DEFAULT_SHARED_WORKSPACE_GROUP.to_string()),
+            )
+        } else {
+            job.affinity_group.clone()
+        };
+
+        let chosen_agent: Agent = if let Some(ref group) = pin_key {
             if let Some(pinned_id) = run_state.get_affinity_pin(group).await {
                 let agent = repo.get(pinned_id).await?;
 
@@ -303,7 +326,7 @@ impl Scheduler {
             .await
             .map_err(|e| EngineError::Nats(format!("Failed to ack job dispatch: {e}")))?;
 
-        if let Some(ref group) = job.affinity_group {
+        if let Some(ref group) = pin_key {
             run_state
                 .ensure_affinity_pin(group.clone(), chosen_agent.id)
                 .await?;
@@ -445,15 +468,14 @@ impl Scheduler {
         let (requires_secret_exchange, secret_resolution_hints_json) =
             met_secret_resolve::hints_json_from_secret_refs(&ctx.pipeline().secret_refs);
 
-        let passive_snapshots = self.workspace_snapshots.enabled
-            && self.workspace_presigner.is_some()
-            && job.share_workspace;
+        let passive_snapshots = self.passive_workspace_snapshots_enabled(job);
 
         let workspace_root_id = if job.share_workspace && !passive_snapshots {
-            job.affinity_group
-                .as_ref()
-                .map(|g| crate::affinity::workspace_root_dir_name(ctx.run_id(), g))
-                .unwrap_or_default()
+            let g = job
+                .affinity_group
+                .as_deref()
+                .unwrap_or(crate::affinity::DEFAULT_SHARED_WORKSPACE_GROUP);
+            crate::affinity::workspace_root_dir_name(ctx.run_id(), g)
         } else {
             String::new()
         };

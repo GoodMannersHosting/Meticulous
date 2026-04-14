@@ -783,10 +783,9 @@ impl<'a> PipelineParser<'a> {
                     )
                     .collect();
 
-                // `default-group` pins jobs to one agent but does not opt them into shared
-                // workspace; only an explicit `affinity-group` on the invocation does (together
-                // with `agent-affinity.share-workspace`). Otherwise parallel jobs would have to be
-                // totally ordered for a group that only meant "prefer same agent".
+                // `affinity-group` / `default-group` are scheduling hints (and legacy shared-disk
+                // partition keys when snapshots are off). Workspace snapshot participation is gated
+                // only by pipeline `agent-affinity.share-workspace: true`.
                 let invocation_affinity_explicit =
                     workflow.invocation.affinity_group.as_ref().and_then(|s| {
                         let t = s.trim();
@@ -808,12 +807,10 @@ impl<'a> PipelineParser<'a> {
                         })
                     })
                 });
-                let share_workspace = affinity_group.is_some()
-                    && pipeline
-                        .agent_affinity
-                        .as_ref()
-                        .is_some_and(|a| a.share_workspace)
-                    && invocation_affinity_explicit.is_some();
+                let share_workspace = pipeline
+                    .agent_affinity
+                    .as_ref()
+                    .is_some_and(|a| a.share_workspace);
 
                 let workspace_transfer =
                     workflow

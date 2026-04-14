@@ -183,7 +183,9 @@ pub struct JobIR {
     pub env: IndexMap<String, EnvValue>,
     /// Effective same-agent affinity group (pipeline default or invocation override).
     pub affinity_group: Option<String>,
-    /// When true with [`Self::affinity_group`], jobs in this group share a workspace directory for the run.
+    /// When true, this job participates in workspace snapshot restore/upload for the run (pipeline
+    /// `agent-affinity.share-workspace`). Legacy shared-disk mode also uses [`Self::affinity_group`]
+    /// (or an internal default partition when it is unset).
     pub share_workspace: bool,
     /// Pipeline `workflows[].id` when this job was expanded from a reusable workflow.
     pub workflow_invocation_id: Option<String>,

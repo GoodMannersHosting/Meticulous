@@ -167,6 +167,8 @@ workflows:
   - name: API smoke tests
     id: api-smoke
     workflow: global/api-smoke-test
+    workspace:
+      from: ci-seed
     version: "1.0.1"
     # affinity-group: ci
     depends-on: [ci-seed]

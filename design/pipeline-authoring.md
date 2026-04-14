@@ -25,21 +25,21 @@ The parser expands each invocation into one or more **jobs** (from the workflow 
 
 ## Agent affinity and shared workspace
 
-**`agent-affinity.default-group`** (optional) pins jobs to the same agent **without** sharing a workspace directory.
+**`agent-affinity.default-group`** (optional) supplies an affinity label when an invocation omits **`affinity-group`**.
 
-**`agent-affinity.share-workspace: true`** plus an explicit **`affinity-group`** on each participating invocation enables **shared workspace** semantics: later jobs see the tree produced by earlier jobs in the same group.
+**`agent-affinity.share-workspace: true`** opts **all** expanded jobs in the pipeline into workspace snapshot participation: later jobs restore the tree produced by earlier jobs (S3 passive snapshots when met-api is configured). **`affinity-group`** is optional; it partitions jobs for **legacy** on-disk sharing when snapshots are off, and for parser **serial-order** checks within each partition. With passive snapshots enabled, the scheduler does **not** hard-pin the whole run to one agent solely because of affinity.
 
-**`agent-affinity.allow-parallel-shared-workspace-jobs: true`** disables the parser check that forbids concurrent jobs in the same shared-workspace group. Use only when you rely on **S3-backed passive snapshots** and per-job workspace dirs so parallel branches do not corrupt a single disk directory. Default remains **serial-only** within the group.
+**`agent-affinity.allow-parallel-shared-workspace-jobs: true`** disables the parser check that forbids concurrent jobs in the same workspace partition. Use when you rely on **S3-backed passive snapshots** and per-`job_run_id` dirs so parallel branches do not corrupt a single disk directory. Default remains **serial-only** within each partition.
 
 For checkout → build examples and operator env vars, see [pipelines.md](pipelines.md#agent-affinity-and-shared-workspace-checkout--build).
 
 ## Workspace snapshots (passive and explicit)
 
-When object storage is enabled and snapshots are not disabled, jobs with **`share_workspace`** and an explicit **`affinity-group`** use **passive snapshots**: restore before steps, upload after success. See [ADR-014](adr/014-workspace-snapshots.md).
+When object storage is enabled and snapshots are not disabled, jobs with **`share_workspace`** use **passive snapshots**: restore before steps, upload after success. See [ADR-014](adr/014-workspace-snapshots.md).
 
 ### Passive predecessor selection
 
-Among dependencies that share the same **`affinity-group`** and **`share_workspace`**, the engine picks the **maximal** predecessor (the one that runs “after” every other in-group dependency in the DAG). If that candidate is **not unique** (e.g. fan-in from parallel branches), there is **no** passive restore; the job starts from an empty workspace unless you set **`workspace.from`**.
+Among **`depends-on`** jobs that have **`share_workspace`**, the engine picks the **maximal** predecessor (the one that runs “after” every other such dependency in the DAG). If that candidate is **not unique** (e.g. fan-in from parallel branches), there is **no** passive restore; the job starts from an empty workspace unless you set **`workspace.from`**.
 
 ### Explicit `workspace:` on an invocation
 

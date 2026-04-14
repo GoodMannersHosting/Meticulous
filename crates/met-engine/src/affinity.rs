@@ -6,6 +6,34 @@ use sha2::{Digest, Sha256};
 
 use crate::state::RunState;
 
+/// Partition for snapshot + legacy shared-disk jobs that omit `affinity-group` (must match parser).
+pub const DEFAULT_SHARED_WORKSPACE_GROUP: &str = "_default_shared_workspace";
+
+/// Whether two jobs are coupled for shared workspace retention / exit-after-jobs suppression.
+#[must_use]
+pub fn jobs_share_agent_coupling(job: &JobIR, other: &JobIR) -> bool {
+    if job.id == other.id {
+        return false;
+    }
+    if job.share_workspace && other.share_workspace {
+        let pj = job
+            .affinity_group
+            .as_deref()
+            .unwrap_or(DEFAULT_SHARED_WORKSPACE_GROUP);
+        let po = other
+            .affinity_group
+            .as_deref()
+            .unwrap_or(DEFAULT_SHARED_WORKSPACE_GROUP);
+        if pj == po {
+            return true;
+        }
+    }
+    matches!(
+        (&job.affinity_group, &other.affinity_group),
+        (Some(a), Some(b)) if a == b
+    )
+}
+
 /// Stable subdirectory name under the agent workspace root for a shared affinity workspace.
 #[must_use]
 pub fn workspace_root_dir_name(run_id: RunId, affinity_group: &str) -> String {
@@ -23,6 +51,15 @@ pub async fn suppress_exit_after_jobs_increment(
     job: &JobIR,
     run_state: &RunState,
 ) -> bool {
+    if job.share_workspace {
+        for other in &pipeline.jobs {
+            if jobs_share_agent_coupling(job, other) && !run_state.is_job_complete(&other.id).await
+            {
+                return true;
+            }
+        }
+        return false;
+    }
     let Some(ref g) = job.affinity_group else {
         return false;
     };
@@ -46,17 +83,9 @@ pub async fn workspace_delete_after_job(
     if !job.share_workspace {
         return true;
     }
-    let Some(ref g) = job.affinity_group else {
-        return true;
-    };
     for other in &pipeline.jobs {
-        if other.id == job.id {
-            continue;
-        }
-        if other.share_workspace && other.affinity_group.as_ref() == Some(g) {
-            if !run_state.is_job_complete(&other.id).await {
-                return false;
-            }
+        if jobs_share_agent_coupling(job, other) && !run_state.is_job_complete(&other.id).await {
+            return false;
         }
     }
     true
@@ -152,6 +181,26 @@ mod tests {
         let p = pipeline(vec![
             job(a, "ja", vec![], Some("g"), true),
             job(b, "jb", vec![a], Some("g"), true),
+        ]);
+
+        assert!(!workspace_delete_after_job(&p, &p.jobs[0], &run).await);
+        run.mark_job_completed(&a, true, None, None).await;
+        assert!(workspace_delete_after_job(&p, &p.jobs[1], &run).await);
+    }
+
+    #[tokio::test]
+    async fn delete_share_workspace_with_default_partition_when_no_affinity_group() {
+        let run = RunState::new(RunId::new());
+        let a = JobId::new();
+        let b = JobId::new();
+        run.register_job(JobState::new(a, JobRunId::new(), "ja"))
+            .await;
+        run.register_job(JobState::new(b, JobRunId::new(), "jb"))
+            .await;
+
+        let p = pipeline(vec![
+            job(a, "ja", vec![], None, true),
+            job(b, "jb", vec![a], None, true),
         ]);
 
         assert!(!workspace_delete_after_job(&p, &p.jobs[0], &run).await);

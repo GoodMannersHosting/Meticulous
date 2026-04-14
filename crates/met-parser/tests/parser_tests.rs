@@ -661,7 +661,7 @@ workflows:
 }
 
 #[tokio::test]
-async fn test_default_affinity_group_does_not_enable_share_workspace() {
+async fn test_default_affinity_group_with_pipeline_share_workspace() {
     let yaml = r#"
 name: Parallel default affinity
 triggers:
@@ -669,6 +669,7 @@ triggers:
 agent-affinity:
   default-group: ci
   share-workspace: true
+  allow-parallel-shared-workspace-jobs: true
 workflows:
   - name: Test A
     id: a
@@ -686,9 +687,39 @@ workflows:
     for j in &ir.jobs {
         assert_eq!(j.affinity_group.as_deref(), Some("ci"));
         assert!(
-            !j.share_workspace,
-            "default-group must not opt jobs into share_workspace"
+            j.share_workspace,
+            "pipeline share-workspace enables snapshot participation for all jobs"
         );
+    }
+}
+
+#[tokio::test]
+async fn test_share_workspace_without_invocation_affinity_group() {
+    let yaml = r#"
+name: No per-job affinity
+triggers:
+  manual: {}
+agent-affinity:
+  share-workspace: true
+  allow-parallel-shared-workspace-jobs: true
+workflows:
+  - name: A
+    id: a
+    workflow: global/test
+  - name: B
+    id: b
+    workflow: global/test
+    depends-on: [a]
+"#;
+
+    let provider = create_provider();
+    let mut parser = PipelineParser::new(&provider);
+    let result = parser.parse(yaml).await;
+    assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    let ir = result.unwrap();
+    for j in &ir.jobs {
+        assert!(j.affinity_group.is_none());
+        assert!(j.share_workspace);
     }
 }
 

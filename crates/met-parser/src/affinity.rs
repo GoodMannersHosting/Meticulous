@@ -5,16 +5,15 @@ use crate::ir::PipelineIR;
 use met_core::ids::JobId;
 use std::collections::{HashMap, HashSet};
 
+/// Default partition for `share_workspace` jobs without `affinity-group` (must match engine).
+const DEFAULT_SHARED_WORKSPACE_GROUP: &str = "_default_shared_workspace";
+
 /// Reject pipelines where `share-workspace` is true but two jobs in the same affinity group can run concurrently.
 pub fn validate_share_workspace_affinity(ir: &PipelineIR, diagnostics: &mut ParseDiagnostics) {
     if ir.allow_parallel_shared_workspace_jobs {
         return;
     }
-    if !ir
-        .jobs
-        .iter()
-        .any(|j| j.share_workspace && j.affinity_group.is_some())
-    {
+    if !ir.jobs.iter().any(|j| j.share_workspace) {
         return;
     }
 
@@ -46,11 +45,14 @@ pub fn validate_share_workspace_affinity(ir: &PipelineIR, diagnostics: &mut Pars
 
     let mut groups: HashMap<String, Vec<JobId>> = HashMap::new();
     for j in &ir.jobs {
-        if j.share_workspace
-            && let Some(ref g) = j.affinity_group
-        {
-            groups.entry(g.clone()).or_default().push(j.id);
+        if !j.share_workspace {
+            continue;
         }
+        let pk = j
+            .affinity_group
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SHARED_WORKSPACE_GROUP.to_string());
+        groups.entry(pk).or_default().push(j.id);
     }
 
     let id_to_name: HashMap<JobId, &str> =

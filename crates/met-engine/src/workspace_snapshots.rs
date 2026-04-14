@@ -1,4 +1,4 @@
-//! Passive workspace snapshots for `share_workspace` affinity groups (ADR-014 extension).
+//! Passive workspace snapshots for `share_workspace` jobs (ADR-014 extension).
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -81,24 +81,20 @@ fn dependency_reachable(pipeline: &PipelineIR, from: JobId, to: JobId) -> bool {
     false
 }
 
-/// Maximal in-group predecessor for passive snapshot restore (deepest dependency in the same affinity group).
+/// Maximal predecessor among `depends-on` jobs that participate in workspace snapshots
+/// (`share_workspace`), for passive restore when `workspace.from` is not set.
 #[must_use]
 pub fn workspace_snapshot_predecessor(pipeline: &PipelineIR, job: &JobIR) -> Option<JobId> {
     if !job.share_workspace {
         return None;
     }
-    let group = job.affinity_group.as_deref()?;
     let jobs_by_id: HashMap<JobId, &JobIR> = pipeline.jobs.iter().map(|j| (j.id, j)).collect();
 
     let candidates: Vec<JobId> = job
         .depends_on
         .iter()
         .copied()
-        .filter(|d| {
-            jobs_by_id
-                .get(d)
-                .is_some_and(|j| j.share_workspace && j.affinity_group.as_deref() == Some(group))
-        })
+        .filter(|d| jobs_by_id.get(d).is_some_and(|j| j.share_workspace))
         .collect();
 
     if candidates.is_empty() {
@@ -207,6 +203,32 @@ mod tests {
                 minimal_job(a, "checkout", vec![], true, Some("ci")),
                 minimal_job(b, "lint", vec![a], true, Some("ci")),
                 minimal_job(c, "test", vec![a, b], true, Some("ci")),
+            ],
+            default_pool_selector: None,
+            expose_workflow_secret_outputs: false,
+            allow_parallel_shared_workspace_jobs: false,
+        };
+        let job_c = ir.jobs.iter().find(|j| j.id == c).unwrap();
+        assert_eq!(workspace_snapshot_predecessor(&ir, job_c), Some(b));
+    }
+
+    #[test]
+    fn predecessor_ignores_affinity_group_partition() {
+        let a = jid("00000000-0000-0000-0000-0000000000b1");
+        let b = jid("00000000-0000-0000-0000-0000000000b2");
+        let c = jid("00000000-0000-0000-0000-0000000000b3");
+        let ir = PipelineIR {
+            id: PipelineId::new(),
+            name: "p".to_string(),
+            source_file: None,
+            project_id: None,
+            triggers: vec![],
+            variables: Default::default(),
+            secret_refs: Default::default(),
+            jobs: vec![
+                minimal_job(a, "checkout", vec![], true, Some("ci")),
+                minimal_job(b, "lint", vec![a], true, Some("rust")),
+                minimal_job(c, "test", vec![a, b], true, None),
             ],
             default_pool_selector: None,
             expose_workflow_secret_outputs: false,

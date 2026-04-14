@@ -48,18 +48,18 @@ pub struct RawPipeline {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RawAgentAffinity {
-    /// When a workflow omits `affinity-group`, pin to this group for same-agent scheduling only.
-    /// Does **not** enable a shared workspace; set `affinity-group` on each invocation that should
-    /// share a workspace when [`Self::share_workspace`] is true.
+    /// When a workflow omits `affinity-group`, use this string as the effective affinity label for
+    /// scheduling and (in legacy shared-disk mode) workspace partitioning.
     #[serde(default)]
     pub default_group: Option<String>,
-    /// When true, invocations that **explicitly** set `affinity-group` share one workspace directory
-    /// for the run (serial-only within that group). Jobs using only `default-group` are not shared.
+    /// When true, expanded jobs participate in workspace snapshot restore/upload for the run (S3
+    /// passive mode when configured). Optional `affinity-group` / `default-group` partition jobs
+    /// for parser serial-order checks and legacy on-disk sharing when snapshots are disabled.
     #[serde(default)]
     pub share_workspace: bool,
-    /// When true, jobs in the same shared-workspace affinity group may run concurrently (e.g. passive
-    /// S3 snapshots with per-`job_run_id` dirs). Without this, the parser requires a total `depends-on`
-    /// order within each group (unsafe on a shared disk without snapshot isolation).
+    /// When true, jobs in the same workspace partition may run concurrently (e.g. passive S3
+    /// snapshots with per-`job_run_id` dirs). Without this, the parser requires a total `depends-on`
+    /// order within each partition (unsafe on a shared disk without snapshot isolation).
     #[serde(default)]
     pub allow_parallel_shared_workspace_jobs: bool,
 }

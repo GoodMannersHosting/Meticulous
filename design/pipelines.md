@@ -66,7 +66,7 @@ workflows:
 
 Pipeline-level **`agent-affinity`** with **`share-workspace: true`** lets a **chain** of workflow invocations (e.g. git checkout then docker build) share filesystem state. By default the parser enforces a **strict serial order** inside a shared-workspace group: every pair of jobs in the group must be ordered by **`depends-on`** (no parallel jobs in the same group). With **`allow-parallel-shared-workspace-jobs: true`**, that check is skipped so multiple jobs in the same group may run concurrently when each uses an isolated workspace directory and **passive S3 snapshots** carry state (see [ADR-014](adr/014-workspace-snapshots.md)).
 
-**`share_workspace` is only enabled** when each participating invocation sets an **explicit `affinity-group`** (using only `default-group` pins the agent but does **not** turn on shared workspace—see parser tests in `met-parser`).
+**`share_workspace`** is enabled on every expanded job when the pipeline sets **`agent-affinity.share-workspace: true`**. Optional **`affinity-group`** / **`default-group`** label jobs for legacy on-disk partitioning and for parser serial-order checks; they are **not** required for S3 passive snapshots.
 
 ### Two ways the workspace is carried across jobs
 
@@ -89,14 +89,16 @@ Presigned URLs are short-lived (on the order of **one hour**); the engine issues
 ### Authoring checklist
 
 1. Set **`agent-affinity.share-workspace: true`** on the pipeline when you need checkout → build style chaining.
-2. Give **every** job in the chain the **same** **`affinity-group`** string (not just `default-group`).
-3. Order jobs with **`depends-on`** so the DAG is a **total order** within that group (unless you intentionally set **`allow-parallel-shared-workspace-jobs`** and rely on snapshots).
+2. Optionally set **`affinity-group`** (or pipeline **`default-group`**) to partition jobs for legacy shared-disk mode or to document scheduling intent; it is **not** required for passive snapshots.
+3. Order jobs with **`depends-on`** so the DAG is a **total order** within each workspace partition (unless you intentionally set **`allow-parallel-shared-workspace-jobs`** and rely on snapshots).
 4. Use paths relative to **`METICULOUS_WORKSPACE`** (or checkout to `.`) so restore sees the same layout.
 5. Keep secrets out of the workspace tree when possible; snapshots can contain **any file** that was written under the workspace (`.gitignore` helps but is not a security boundary—see ADR-014 threat model).
 
 ### Scheduling expectations
 
-The engine **pins** an affinity group to the **first agent** that runs a job in that group. Later jobs target that agent. If the pinned agent later becomes unavailable, dispatch can fail with an affinity error—**snapshots do not automatically move work to another agent** in the current scheduler. They **do** make each job’s directory self-contained after restore.
+With **passive snapshots** (S3 + presigner, snapshots not disabled), jobs with **`share_workspace`** are **not** hard-pinned to one agent for affinity: any agent can restore the predecessor snapshot and upload after success.
+
+With **legacy shared-disk** mode (snapshots off), the engine **pins** a partition key (explicit **`affinity-group`**, or an internal default when unset) to the **first agent** that runs a job using that key; later jobs target that agent. If the pinned agent becomes unavailable, dispatch can fail with an affinity error.
 
 Ephemeral agents using **`MET_AGENT_EXIT_AFTER_JOBS=1`**: the engine sets **`suppress_exit_after_jobs_increment`** on dispatches until the last job in the affinity group completes, so the process stays up for the chained jobs.
 
