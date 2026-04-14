@@ -31,7 +31,7 @@ use tracing::{error, info, warn};
 #[command(name = "met-agent")]
 #[command(about = "Meticulous build agent")]
 #[command(
-    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNATS: `http://` and `https://` URLs are rewritten to `ws://` and `wss://` for WebSocket transports. For TLS to private CAs, set `MET_AGENT_NATS_CA_FILE` to a PEM bundle; for development only, `MET_AGENT_NATS_TLS_INSECURE=1` disables server certificate verification (MITM risk). Optional `MET_AGENT_NATS_REQUIRE_TLS=1` forces TLS.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones).\n\nEphemeral runners: set `MET_AGENT_EXIT_AFTER_JOBS` to a positive integer to shut down gracefully after that many **successful** jobs (exit 0)."
+    long_about = "Without --agent-config, searches (first hit wins): ./meticulous-agent.toml, ~/.met/agentconfig*, XDG agent.toml, /opt/met-agent/agentconfig*, /etc/meticulous/agent.toml. MET_CONFIG env is a deprecated alias for the config path. After successful enrollment with a token from the CLI or environment, the agent may write ~/.met/agentconfig.toml (mode 0600 on Unix); that file contains your join token—protect it like a credential.\n\nNATS: `http://` and `https://` URLs are rewritten to `ws://` and `wss://` for WebSocket transports. For TLS to private CAs, set `MET_AGENT_NATS_CA_FILE` to a PEM bundle; for development only, `MET_AGENT_NATS_TLS_INSECURE=1` disables server certificate verification (MITM risk). Optional `MET_AGENT_NATS_REQUIRE_TLS=1` forces TLS. If NATS connection fails or times out, errors include the effective connect URL; use `RUST_LOG=debug` (or a narrower filter like `nats_connect=debug`) for connect and TLS option fields.\n\nNative execution: optional `MET_AGENT_NATIVE_INHERIT_ENV` (comma-separated) copies those variables from the agent process into each step when the job did not set them (e.g. `GITHUB_TOKEN` for local git clones).\n\nEphemeral runners: set `MET_AGENT_EXIT_AFTER_JOBS` to a positive integer to shut down gracefully after that many **successful** jobs (exit 0)."
 )]
 #[command(version)]
 struct Args {
@@ -279,7 +279,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => return Err(e.into()),
     };
-    info!(url = %nats_url, "connected to NATS");
 
     // Create job executor
     let executor = JobExecutor::new(

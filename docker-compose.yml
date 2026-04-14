@@ -1,6 +1,7 @@
 services:
   postgres:
     image: docker.io/library/postgres:16-alpine
+    network_mode: host
     environment:
       POSTGRES_DB: meticulous
       POSTGRES_USER: meticulous
@@ -17,9 +18,11 @@ services:
 
   nats:
     image: docker.io/library/nats:2-alpine
+    network_mode: host
     entrypoint: ["/bin/sh", "/etc/nats/docker-entrypoint.sh"]
     ports:
-      - "4222:4222"   # Client connections
+      - "0.0.0.0:4222:4222"   # Client connections
+      - "6222:6222"   # Monitoring connections
       - "8222:8222"   # HTTP monitoring
     volumes:
       - natsdata:/data
@@ -28,13 +31,15 @@ services:
       - ./deploy/nats/nats-server-jwt.conf:/etc/nats/nats-server-jwt.conf:ro
       - ./deploy/nats/keys:/etc/nats/keys
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      # Use 127.0.0.1: BusyBox wget may resolve `localhost` to ::1 first; NATS monitor is IPv4.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   seaweedfs:
     image: docker.io/chrislusf/seaweedfs:4.17
+    network_mode: host
     # Static S3 identities (highest priority). Matches MET_STORAGE defaults (admin/admin) in .env.example.
     command: "server -s3 -dir=/data -s3.port=8333 -s3.config=/etc/seaweed/s3-dev.json"
     ports:
@@ -44,7 +49,8 @@ services:
       - seaweeddata:/data
       - ./deploy/seaweed/s3-dev.json:/etc/seaweed/s3-dev.json:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9333/cluster/status"]
+      # Use 127.0.0.1: `localhost` can prefer IPv6 (::1); master HTTP is IPv4-only here.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9333/cluster/status"]
       interval: 10s
       timeout: 5s
       retries: 5

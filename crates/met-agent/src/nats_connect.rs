@@ -17,12 +17,35 @@ use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 use url::Url;
 
 pub async fn connect_nats(identity: &AgentIdentity) -> Result<async_nats::Client, AgentError> {
+    let raw_url = identity.nats_url.trim();
     let url = normalize_nats_url(&identity.nats_url)?;
+    let has_jwt_auth = matches!(
+        (&identity.nats_user_jwt, &identity.nats_user_seed),
+        (Some(j), Some(s)) if !j.trim().is_empty() && !s.trim().is_empty()
+    );
+
+    tracing::debug!(
+        raw_url = %raw_url,
+        connect_url = %url,
+        url_was_normalized = raw_url != url.as_str(),
+        nats_user_jwt_auth = has_jwt_auth,
+        "NATS connect attempt"
+    );
+
     let opts = base_connect_options(identity)?;
     let opts = apply_nats_tls_env(opts, &url)?;
-    opts.connect(&url)
-        .await
-        .map_err(|e| AgentError::Internal(format!("NATS connect: {e}")))
+
+    tracing::debug!(connect_url = %url, "NATS connect: calling async_nats (handshake may take a while)");
+
+    match opts.connect(&url).await {
+        Ok(client) => {
+            tracing::info!(connect_url = %url, "connected to NATS");
+            Ok(client)
+        }
+        Err(e) => Err(AgentError::Internal(format!(
+            "NATS connect to {url}: {e} (raw enrollment URL was {raw_url:?}; set RUST_LOG=met_agent=debug for TLS and URL details)"
+        ))),
+    }
 }
 
 fn normalize_nats_url(raw: &str) -> Result<String, AgentError> {
@@ -96,7 +119,7 @@ fn apply_nats_tls_env(
 
     if tls_insecure {
         opts = opts.tls_client_config(nats_tls_insecure_client_config()?);
-    } else if let Some(path) = ca_file {
+    } else if let Some(path) = ca_file.as_ref() {
         opts = opts.add_root_certificates(PathBuf::from(path));
     }
 
@@ -104,9 +127,19 @@ fn apply_nats_tls_env(
         u.scheme().eq_ignore_ascii_case("tls") || u.scheme().eq_ignore_ascii_case("wss")
     });
 
-    if force_require_tls || scheme_requires_tls {
+    let client_require_tls = force_require_tls || scheme_requires_tls;
+    if client_require_tls {
         opts = opts.require_tls(true);
     }
+
+    tracing::debug!(
+        tls_insecure = tls_insecure,
+        tls_ca_file = ca_file.as_deref(),
+        env_require_tls = force_require_tls,
+        scheme_tls_or_wss = scheme_requires_tls,
+        client_require_tls,
+        "NATS TLS/connect options from environment"
+    );
 
     Ok(opts)
 }
