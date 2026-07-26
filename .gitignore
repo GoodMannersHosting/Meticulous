@@ -39,6 +39,9 @@ coverage/
 # Generated files
 *.generated.*
 
+# MkDocs built output
+docs/site/
+
 # Local NATS JWT material (`nsc` exports); keep `.gitkeep`
 deploy/nats/keys/*
 !deploy/nats/keys/.gitkeep

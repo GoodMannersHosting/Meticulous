@@ -688,3 +688,27 @@ operator-install-crds:
 # Run operator locally (for development)
 operator-run:
     cargo run --bin met-operator
+
+# ============================================================================
+# Docs Portal (MkDocs Material)
+# ============================================================================
+
+# Build the docs container image (SITE_URL sets canonical links; defaults to localhost:5000)
+docs-build site_url="http://localhost:5000/docs/":
+    podman build -t meticulous/docs:latest \
+        --build-arg SITE_URL="{{ site_url }}" \
+        -f Dockerfile.docs \
+        --platform linux/amd64 \
+        .
+
+# Run the docs container locally on port 5000 (http://localhost:5000/docs/)
+docs-run:
+    podman run --rm -p 5000:80 --name meticulous-docs meticulous/docs:latest
+
+# Build and immediately run the docs container locally
+docs-dev site_url="http://localhost:5000/docs/": (docs-build site_url)
+    podman run --rm -p 5000:80 --name meticulous-docs meticulous/docs:latest
+
+# Stop the local docs container if running
+docs-stop:
+    podman stop meticulous-docs 2>/dev/null || true

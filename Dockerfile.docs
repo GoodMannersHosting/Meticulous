@@ -1,0 +1,42 @@
+# Meticulous documentation portal (MkDocs Material, static site).
+#
+# Build:
+#   docker build -f Dockerfile.docs \
+#     --build-arg SITE_URL=https://ci.example.com/docs/ \
+#     -t meticulous/met-docs:latest .
+#
+# Run (local preview):
+#   docker run --rm -p 5000:80 meticulous/met-docs:latest
+#
+# The built site is served under /docs/ by nginx; the container listens on :80.
+# Behind the gateway, PathPrefix /docs routes to this service.
+
+FROM docker.io/library/python:3.14-slim AS builder
+
+# Install uv (fast Python package installer)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /build
+
+COPY docs/requirements.txt .
+RUN uv pip install --system --no-cache -r requirements.txt
+
+COPY docs/ .
+
+# SITE_URL controls canonical links and the sitemap; read by mkdocs.yml via !ENV.
+ARG SITE_URL=https://localhost/docs/
+ENV SITE_URL=${SITE_URL}
+RUN mkdocs build --strict
+
+# ---- runtime ----
+FROM docker.io/library/nginx:1.29-alpine
+
+# Remove default site; replace with docs-only config
+RUN rm -rf /usr/share/nginx/html/*
+COPY --from=builder /build/site /usr/share/nginx/html/docs
+
+COPY docs/nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
