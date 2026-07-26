@@ -224,8 +224,8 @@ fn xor_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn encrypt_with_public_key(_public_key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
-    Ok(data.to_vec())
+fn encrypt_with_public_key(_public_key: &[u8], _data: &[u8]) -> Result<Vec<u8>> {
+    Err(EngineError::internal("encrypt_with_public_key not yet implemented — ProductionSecretEncryption should not be used in production until this method implements actual RSA-OAEP or X25519 hybrid encryption; currently only MockSecretEncryption is safe for testing"))
 }
 
 mod hex {
