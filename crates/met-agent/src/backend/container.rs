@@ -13,6 +13,17 @@ use tracing::{debug, info, warn};
 use super::{ExecutionBackend, StepResult, StepSpec, poll_watcher_emit_telemetry};
 use crate::error::{AgentError, Result};
 use crate::process_watcher::ProcessWatcher;
+
+fn is_valid_env_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c @ ('A'..='Z' | 'a'..='z' | '_')) => true,
+        _ => false,
+    } && chars.all(|c| matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'))
+}
 use crate::step_log::StepLogPipe;
 
 /// Container runtime type.
@@ -134,9 +145,14 @@ impl ContainerBackend {
                     cmd.arg("-e").arg(format!("METICULOUS_OUTPUT_PATH={p}"));
                 }
 
-                // Set environment variables
+                // Set environment variables with validation to prevent argument injection
                 for (key, value) in &step.environment {
-                    cmd.arg("-e").arg(format!("{}={}", key, value));
+                    if !is_valid_env_name(key) {
+                        tracing::warn!(key = %key, "skipping invalid environment variable name (must match [A-Za-z_][A-Za-z0-9_]*)");
+                        continue;
+                    }
+                    let sanitized = value.chars().filter(|c| !c.is_control()).collect::<String>();
+                    cmd.arg("-e").arg(format!("{}={}", key, sanitized));
                 }
 
                 // Set working directory override
