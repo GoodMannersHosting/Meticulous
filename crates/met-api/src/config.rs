@@ -105,7 +105,7 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             pagination_default_limit: http.pagination_default_limit,
             pagination_max_limit: http.pagination_max_limit,
             public_base_url: http.public_base_url.clone(),
-            enable_hsts: http.enable_hsts,
+            enable_hsts: false, // controlled via MET_HTTP__ENABLE_HSTS env var in main.rs
             ci_mode: false,
             ci_bootstrap_password: None,
             ..Default::default()
