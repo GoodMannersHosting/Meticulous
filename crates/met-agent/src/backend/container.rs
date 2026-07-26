@@ -103,12 +103,28 @@ impl ContainerBackend {
                     .arg("--rm")
                     // Default bridge network (outbound NAT) — required for git clone, curl, etc.
                     // Opt-in isolation can be added later via pipeline/step settings.
+                    // Security hardening: drop all Linux capabilities and enforce no-new-privileges
+                    .arg("--cap-drop")
+                    .arg("ALL")
+                    .arg("--security-opt")
+                    .arg("no-new-privileges:true")
+                    // Read-only root filesystem; temp dirs mounted separately if needed
+                    .arg("--read-only")
                     .arg("-w")
                     .arg("/workspace");
 
-                // Mount workspace
+                // Note: workspace is mounted read-write for pipeline functionality; full isolation
+                // via per-step ephemeral directories would require larger architectural changes.
                 cmd.arg("-v")
                     .arg(format!("{}:/workspace", workspace.display()));
+
+                // Provide writable /tmp for common build patterns that assume it's writable
+                let tmp_dir = workspace.join(".meticulous").join("tmp");
+                if std::fs::create_dir_all(&tmp_dir).is_err() {
+                    tracing::warn!("failed to create container tmp dir; step may fail if /tmp writes required");
+                }
+                cmd.arg("-v")
+                    .arg(format!("{}:/tmp", tmp_dir.display()));
 
                 // Non-interactive git/SSH in CI (avoid credential-helper prompts blocking forever).
                 cmd.arg("-e").arg("GIT_TERMINAL_PROMPT=0");
@@ -140,9 +156,12 @@ impl ContainerBackend {
                 cmd.args([shell, "-c", &step.command]);
             }
             ContainerRuntime::Containerd => {
-                // containerd via ctr has different syntax
+                // containerd via ctr has different syntax; full capability dropping requires a
+                // runtime spec file (runc-style JSON). Using --security-opt where supported.
                 cmd.arg("run")
                     .arg("--rm")
+                    .arg("--security-opt")
+                    .arg("no-new-privileges=true")
                     .arg("--env")
                     .arg("GIT_TERMINAL_PROMPT=0")
                     .arg("--env")
