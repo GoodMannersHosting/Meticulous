@@ -91,13 +91,18 @@ impl JwtManager {
 
     /// Validate and decode a JWT.
     pub fn validate(&self, token: &str) -> Result<AgentClaims> {
-        let validation = Validation::default();
-        let token_data = decode::<AgentClaims>(token, &self.decoding_key, &validation)
-            .map_err(|e| ControllerError::InvalidJwt(e.to_string()))?;
+        let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = true;
+        validation.leeway = 30;
 
-        if token_data.claims.is_expired() {
-            return Err(ControllerError::JwtExpired);
-        }
+        let token_data = decode::<AgentClaims>(token, &self.decoding_key, &validation)
+            .map_err(|e| {
+                if e.kind() == &jsonwebtoken::errors::ErrorKind::ExpiredSignature {
+                    ControllerError::JwtExpired
+                } else {
+                    ControllerError::InvalidJwt(e.to_string())
+                }
+            })?;
 
         Ok(token_data.claims)
     }
