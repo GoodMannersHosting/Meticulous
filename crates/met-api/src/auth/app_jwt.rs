@@ -234,6 +234,7 @@ pub async fn verify_app_installation_jwt(
     validation.set_audience(&allowed_refs);
     validation.leeway = jwt_config.app_leeway_secs;
     validation.validate_exp = true;
+    validation.validate_nbf = true;
 
     let verified = decode::<AppJwtClaims>(token, &decoding_key, &validation)
         .map_err(|e| ApiError::unauthorized(e.to_string()))?
