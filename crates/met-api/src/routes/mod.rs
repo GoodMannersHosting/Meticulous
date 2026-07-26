@@ -102,7 +102,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(pipeline_matrix::router());
 
     let openapi_spec = ApiDoc::openapi();
-    let swagger_router: Router<()> = SwaggerUi::new("/docs")
+    let swagger_router: Router<()> = SwaggerUi::new("/api/docs")
         .url("/api/v1/openapi.json", openapi_spec)
         .into();
 
@@ -126,6 +126,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(swagger_router);
 
     router = router
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("SAMEORIGIN"),
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),

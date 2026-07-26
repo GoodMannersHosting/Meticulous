@@ -105,7 +105,7 @@ impl From<&met_core::config::HttpConfig> for ApiConfig {
             pagination_default_limit: http.pagination_default_limit,
             pagination_max_limit: http.pagination_max_limit,
             public_base_url: http.public_base_url.clone(),
-            enable_hsts: false,
+            enable_hsts: http.enable_hsts,
             ci_mode: false,
             ci_bootstrap_password: None,
             ..Default::default()
@@ -141,7 +141,7 @@ pub struct JwtConfig {
 impl Default for JwtConfig {
     fn default() -> Self {
         Self {
-            secret: "development-secret-change-in-production".to_string(),
+            secret: "dev-secret".to_string(), // MUST be overridden in production; see startup validation
             issuer: "meticulous".to_string(),
             audience: "meticulous-api".to_string(),
             expiration: Duration::from_secs(3600),

@@ -85,6 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_config.jwt.secret = secret;
     }
 
+    // Validate JWT secret length for security (HS256 requires ≥32 bytes / 256 bits)
+    if api_config.jwt.secret.len() < 32 {
+        tracing::warn!(
+            "JWT secret is only {} characters — recommend 32+ characters for HS256 security. Generate with: openssl rand -base64 32",
+            api_config.jwt.secret.len()
+        );
+    }
+
     if std::env::var("MET_HTTP__ENABLE_HSTS")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
         .unwrap_or(false)
