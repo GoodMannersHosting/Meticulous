@@ -720,7 +720,7 @@ docs-stop:
 harbor-build-api:
     podman build --target prod -f Dockerfile.met-api \
         -t harbor.cloud.danmanners.com/meticulous/met-api:latest \
-        --platform linux/amd64 \
+        --platform linux/amd64,linux/arm64 \
         .
     podman push harbor.cloud.danmanners.com/meticulous/met-api:latest
 
@@ -728,7 +728,7 @@ harbor-build-api:
 harbor-build-controller:
     podman build --target prod -f Dockerfile.met-controller \
         -t harbor.cloud.danmanners.com/meticulous/met-controller:latest \
-        --platform linux/amd64 \
+        --platform linux/amd64,linux/arm64 \
         .
     podman push harbor.cloud.danmanners.com/meticulous/met-controller:latest
 
@@ -736,7 +736,7 @@ harbor-build-controller:
 harbor-build-agent:
     podman build -f Dockerfile.agent \
         -t harbor.cloud.danmanners.com/meticulous/agent:latest \
-        --platform linux/amd64 \
+        --platform linux/amd64,linux/arm64 \
         .
     podman push harbor.cloud.danmanners.com/meticulous/agent:latest
 
@@ -745,7 +745,7 @@ harbor-build-frontend PUBLIC_API_URL="https://ci.cloud.danmanners.com":
     podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" \
         -f Dockerfile \
         -t harbor.cloud.danmanners.com/meticulous/met-frontend:latest \
-        --platform linux/amd64 \
+        --platform linux/amd64,linux/arm64 \
         frontend/.
     podman push harbor.cloud.danmanners.com/meticulous/met-frontend:latest
 
