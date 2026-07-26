@@ -743,10 +743,10 @@ harbor-build-agent:
 # Build frontend image and push to Harbor (requires PUBLIC_API_URL)
 harbor-build-frontend PUBLIC_API_URL="https://ci.cloud.danmanners.com":
     podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" \
-        -f frontend/Dockerfile \
+        -f Dockerfile \
         -t harbor.cloud.danmanners.com/meticulous/met-frontend:latest \
         --platform linux/amd64 \
-        .
+        frontend/.
     podman push harbor.cloud.danmanners.com/meticulous/met-frontend:latest
 
 # Build and push all images to Harbor (requires podman login first)
