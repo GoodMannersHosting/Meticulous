@@ -717,10 +717,6 @@ docs-stop:
 # Harbor Registry Build & Push
 # ============================================================================
 
-# Harbor registry settings (override via environment variables as needed)
-set dotenv-load = false
-
-# Build met-api image and push to Harbor
 harbor-build-api:
     podman build --target prod -f Dockerfile.met-api \
         -t harbor.cloud.danmanners.com/meticulous/met-api:latest \
