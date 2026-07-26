@@ -712,3 +712,46 @@ docs-dev site_url="http://localhost:5000/docs/": (docs-build site_url)
 # Stop the local docs container if running
 docs-stop:
     podman stop meticulous-docs 2>/dev/null || true
+
+# ============================================================================
+# Harbor Registry Build & Push
+# ============================================================================
+
+# Harbor registry settings (override via environment variables as needed)
+set dotenv-load = false
+
+# Build met-api image and push to Harbor
+harbor-build-api:
+    podman build --target prod -f Dockerfile.met-api \
+        -t harbor.cloud.danmanners.com/meticulous/met-api:latest \
+        --platform linux/amd64 \
+        .
+    podman push harbor.cloud.danmanners.com/meticulous/met-api:latest
+
+# Build met-controller image and push to Harbor
+harbor-build-controller:
+    podman build --target prod -f Dockerfile.met-controller \
+        -t harbor.cloud.danmanners.com/meticulous/met-controller:latest \
+        --platform linux/amd64 \
+        .
+    podman push harbor.cloud.danmanners.com/meticulous/met-controller:latest
+
+# Build agent image and push to Harbor (for reference; currently deployed as binary)
+harbor-build-agent:
+    podman build -f Dockerfile.agent \
+        -t harbor.cloud.danmanners.com/meticulous/agent:latest \
+        --platform linux/amd64 \
+        .
+    podman push harbor.cloud.danmanners.com/meticulous/agent:latest
+
+# Build frontend image and push to Harbor (requires PUBLIC_API_URL)
+harbor-build-frontend PUBLIC_API_URL="https://ci.cloud.danmanners.com":
+    podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" \
+        -f frontend/Dockerfile \
+        -t harbor.cloud.danmanners.com/meticulous/met-frontend:latest \
+        --platform linux/amd64 \
+        .
+    podman push harbor.cloud.danmanners.com/meticulous/met-frontend:latest
+
+# Build and push all images to Harbor (requires podman login first)
+harbor-build-all: harbor-build-api harbor-build-controller harbor-build-frontend
