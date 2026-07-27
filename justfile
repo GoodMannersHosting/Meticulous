@@ -717,12 +717,12 @@ docs-stop:
 # Harbor Registry Build & Push
 # ============================================================================
 
-BUILD_VERSION = {{ if is_env_set("BUILD_VERSION") }}{{ env_var("BUILD_VERSION") }}{{ else }}$(git rev-parse --short HEAD 2>/dev/null || echo "dev"){{ end }}
+export BUILD_VERSION := "dev"
 
 harbor-build-api:
     # Note: amd64-only due to lack of qemu-user-static/binfmt on build host.
     # For multi-arch manifests, run on a CI runner with podman --platform linux/amd64,linux/arm64.
-    BUILD_VERSION={{ BUILD_VERSION }} podman build --target prod --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.met-api \
+    podman build --target prod --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.met-api \
         -t harbor.cloud.danmanners.com/meticulous/met-api:latest \
         --platform linux/amd64 \
         .
@@ -730,7 +730,7 @@ harbor-build-api:
 
 # Build met-controller image and push to Harbor
 harbor-build-controller:
-    BUILD_VERSION={{ BUILD_VERSION }} podman build --target prod --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.met-controller \
+    podman build --target prod --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.met-controller \
         -t harbor.cloud.danmanners.com/meticulous/met-controller:latest \
         --platform linux/amd64 \
         .
@@ -738,7 +738,7 @@ harbor-build-controller:
 
 # Build agent image and push to Harbor (for reference; currently deployed as binary)
 harbor-build-agent:
-    BUILD_VERSION={{ BUILD_VERSION }} podman build --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.agent \
+    podman build --build-arg BUILD_VERSION={{ BUILD_VERSION }} -f Dockerfile.agent \
         -t harbor.cloud.danmanners.com/meticulous/agent:latest \
         --platform linux/amd64 \
         .
@@ -746,7 +746,7 @@ harbor-build-agent:
 
 # Build frontend image and push to Harbor (requires PUBLIC_API_URL)
 harbor-build-frontend PUBLIC_API_URL="https://ci.cloud.danmanners.com":
-    BUILD_VERSION={{ BUILD_VERSION }} podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" --build-arg PUBLIC_BUILD_VERSION={{ BUILD_VERSION }} \
+    podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" --build-arg PUBLIC_BUILD_VERSION={{ BUILD_VERSION }} \
         -f Dockerfile \
         -t harbor.cloud.danmanners.com/meticulous/met-frontend:latest \
         --platform linux/amd64 \
