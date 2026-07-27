@@ -5,10 +5,17 @@
 
 use kube::Client;
 use met_operator::reconciler::AgentPoolReconciler;
+use rustls::crypto::CryptoProvider;
 use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install rustls crypto provider before creating any TLS clients (kube needs this)
+    if CryptoProvider::get_default().is_none() {
+        let ring = rustls::crypto::ring::default_provider();
+        CryptoProvider::install_default(ring).expect("failed to install default rustls crypto provider");
+    }
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(

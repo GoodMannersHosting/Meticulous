@@ -744,6 +744,14 @@ harbor-build-agent:
         .
     podman push harbor.cloud.danmanners.com/meticulous/agent:latest
 
+# Build met-operator image and push to Harbor
+harbor-build-operator:
+    podman build -f Dockerfile.operator \
+        -t harbor.cloud.danmanners.com/meticulous/met-operator:latest \
+        --platform linux/amd64 \
+        .
+    podman push harbor.cloud.danmanners.com/meticulous/met-operator:latest
+
 # Build frontend image and push to Harbor (requires PUBLIC_API_URL)
 harbor-build-frontend PUBLIC_API_URL="https://ci.cloud.danmanners.com":
     podman build --build-arg PUBLIC_API_URL="{{ PUBLIC_API_URL }}" --build-arg PUBLIC_BUILD_VERSION={{ BUILD_VERSION }} \
