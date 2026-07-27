@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PUBLIC_BUILD_VERSION } from '$env/static/public';
 	import { sidebar } from '$stores';
 	import Sidebar from './Sidebar.svelte';
 	import TopBar from './TopBar.svelte';
@@ -28,6 +29,14 @@
 		>
 			{@render children?.()}
 		</main>
+
+		{#if PUBLIC_BUILD_VERSION}
+			<footer class="flex h-6 shrink-0 items-center justify-center border-t border-[var(--border-color)]">
+				<span class="text-[10px] text-[color:var(--text-muted)]">
+					Meticulous v{PUBLIC_BUILD_VERSION}
+				</span>
+			</footer>
+		{/if}
 	</div>
 
 	{#if sidebar.isMobile && sidebar.mobileOpen}

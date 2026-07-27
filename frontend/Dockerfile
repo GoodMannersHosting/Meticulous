@@ -1,10 +1,12 @@
 # Meticulous web UI (SvelteKit SSR, adapter-node). Node 24; builder uses trixie slim to match distroless nodejs24 (Debian 13 glibc).
 #
 # PUBLIC_API_URL is baked into the client at build time ($env/static/public).
+# PUBLIC_BUILD_VERSION shows version in UI footer (git commit or describe, set by CI via --build-arg).
 # Set ORIGIN at run time to the browser-facing origin (e.g. https://app.example.com) when behind a reverse proxy.
 #
 #   docker build -f Dockerfile \
 #     --build-arg PUBLIC_API_URL=https://api.example.com \
+#     --build-arg PUBLIC_BUILD_VERSION=0.1.0 \
 #     -t meticulous/frontend:latest .
 #
 #   docker run --rm -p 3000:3000 \
@@ -29,6 +31,10 @@ COPY . .
 # Local dev: set PUBLIC_API_URL in `.env` or pass --build-arg PUBLIC_API_URL=http://localhost:8080.
 ARG PUBLIC_API_URL=
 ENV PUBLIC_API_URL=${PUBLIC_API_URL}
+
+# Build version for UI footer (default unset; CI/justfile sets via git).
+ARG PUBLIC_BUILD_VERSION=dev
+ENV PUBLIC_BUILD_VERSION=${PUBLIC_BUILD_VERSION}
 
 RUN npm run build \
 	&& npm prune --omit=dev
