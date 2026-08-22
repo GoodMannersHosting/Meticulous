@@ -19,12 +19,16 @@
 FROM docker.io/rust:1.91.1-slim-bookworm AS builder
 
 # curl: utoipa-swagger-ui build script fetches Swagger UI (reqwest feature not enabled on this crate).
+# build-essential + cmake + perl: aws-lc-rs (via aws-sdk-s3/rustls) compiles C code and needs cmake.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
+    build-essential \
+    cmake \
+    perl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 builder
@@ -34,6 +38,11 @@ WORKDIR /app
 COPY --chown=builder:builder Cargo.toml Cargo.lock ./
 COPY --chown=builder:builder crates ./crates
 COPY --chown=builder:builder proto ./proto
+
+# /app is root-owned (WORKDIR), so pre-create writable dirs for the builder user.
+RUN mkdir -p /app/target /app/.cargo && chown -R builder:builder /app/target /app/.cargo
+
+ENV CARGO_HOME=/app/.cargo
 
 USER builder
 RUN cargo build --release --bin met-api \

@@ -123,11 +123,23 @@ impl SecurityBundleCollector {
     }
 
     fn sysinfo_resources(&self) -> (u32, u64) {
-        let mut sys = System::new();
+        let mut sys = System::new_all();
         sys.refresh_memory();
-        let memory_total_bytes = sys.total_memory();
+        let mut memory_total_bytes = sys.total_memory();
         sys.refresh_cpu_all();
-        let logical_cpus = sys.cpus().len() as u32;
+        let mut logical_cpus = sys.cpus().len() as u32;
+        #[cfg(target_os = "macos")]
+        {
+            if logical_cpus == 0 {
+                logical_cpus = darwin_sysctl_u32("hw.logicalcpu").unwrap_or(0);
+            }
+            if logical_cpus == 0 {
+                logical_cpus = darwin_sysctl_u32("hw.ncpu").unwrap_or(0);
+            }
+            if memory_total_bytes == 0 {
+                memory_total_bytes = darwin_sysctl_u64("hw.memsize").unwrap_or(0);
+            }
+        }
         (logical_cpus, memory_total_bytes)
     }
 
@@ -296,25 +308,55 @@ fn read_machine_id() -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn darwin_sysctl_u32(name: &str) -> Option<u32> {
+    let out = Command::new("sysctl").args(["-n", name]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_sysctl_u64(name: &str) -> Option<u64> {
+    let out = Command::new("sysctl").args(["-n", name]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+#[cfg(target_os = "macos")]
 fn machine_id_macos() -> String {
-    Command::new("system_profiler")
-        .args(["SPHardwareDataType"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| {
-            for line in s.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("Serial Number (system):") {
-                    let v = rest.trim();
-                    if !v.is_empty() && v != "Not Available" {
-                        return Some(v.to_string());
+    if let Ok(out) = Command::new("system_profiler").args(["SPHardwareDataType"]).output() {
+        if out.status.success() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                for line in s.lines() {
+                    let line = line.trim();
+                    for prefix in [
+                        "Serial Number (system):",
+                        "Serial Number:",
+                        "Hardware UUID:",
+                    ] {
+                        if let Some(rest) = line.strip_prefix(prefix) {
+                            let v = rest.trim();
+                            if !v.is_empty() && v != "Not Available" {
+                                return v.to_string();
+                            }
+                        }
                     }
                 }
             }
-            None
-        })
-        .unwrap_or_default()
+        }
+    }
+    if let Ok(out) = Command::new("sysctl").args(["-n", "hw.uuid"]).output() {
+        if out.status.success() {
+            let u = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !u.is_empty() && u != "(null)" {
+                return u;
+            }
+        }
+    }
+    String::new()
 }
 
 fn collect_interface_ips() -> (Vec<String>, Vec<String>) {
@@ -353,6 +395,12 @@ fn is_private_or_local_ip(ip: &std::net::IpAddr) -> bool {
 }
 
 async fn fetch_egress_public_ip() -> String {
+    if let Ok(v) = std::env::var("MET_AGENT_EGRESS_PUBLIC_IP") {
+        let t = v.trim().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
     let url = std::env::var("MET_AGENT_EGRESS_IP_URL")
         .unwrap_or_else(|_| "https://api.ipify.org".to_string());
     if url.is_empty() {

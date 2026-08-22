@@ -170,12 +170,6 @@ impl AgentRegistration {
             })?
             .into_inner();
 
-        info!(
-            agent_id = response.agent_id,
-            nats_subjects = ?response.nats_subjects,
-            "registration successful"
-        );
-
         let creds = response.nats_credentials.as_ref();
         let (nats_user_jwt, nats_user_seed) = creds
             .map(|c| {
@@ -203,10 +197,17 @@ impl AgentRegistration {
             nats_user_seed,
         };
 
-        // Persist identity
+        // Persist identity (must succeed locally: controller has already consumed the join token).
         let identity_path = self.config.identity_path();
         identity.save(&identity_path)?;
         debug!(path = %identity_path.display(), "saved agent identity");
+
+        info!(
+            agent_id = %identity.agent_id,
+            nats_subjects = ?identity.nats_subjects,
+            path = %identity_path.display(),
+            "registration successful; identity saved"
+        );
 
         Ok(identity)
     }

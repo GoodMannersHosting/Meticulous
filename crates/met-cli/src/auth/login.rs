@@ -60,6 +60,50 @@ async fn start_callback_server(
     })
 }
 
+#[derive(serde::Deserialize)]
+struct PublicAuthProvider {
+    id: String,
+    name: String,
+    #[serde(rename = "provider_type")]
+    provider_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct AuthProvidersResponse {
+    providers: Vec<PublicAuthProvider>,
+}
+
+/// Fetch the enabled auth provider ID from the public `/auth/providers` endpoint.
+async fn resolve_provider_id(server_url: &str) -> Result<String, ApiError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| ApiError::Other(format!("Failed to build HTTP client: {}", e)))?;
+
+    let resp: AuthProvidersResponse = client
+        .get(format!("{}/auth/providers", server_url))
+        .send()
+        .await
+        .map_err(ApiError::Http)?
+        .error_for_status()
+        .map_err(|e| ApiError::Other(format!("Failed to list auth providers: {}", e)))?
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(format!("Failed to parse auth providers: {}", e)))?;
+
+    resp.providers
+        .into_iter()
+        .next()
+        .map(|p| p.id)
+        .ok_or_else(|| {
+            ApiError::Other(
+                "No enabled auth providers found on the server. \
+                 Ask an admin to enable one before logging in."
+                    .into(),
+            )
+        })
+}
+
 pub async fn browser_login(server_url: &str) -> Result<String, ApiError> {
     let port = get_available_port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
@@ -67,8 +111,16 @@ pub async fn browser_login(server_url: &str) -> Result<String, ApiError> {
     let (tx, rx) = oneshot::channel();
     let handle = start_callback_server(port, tx).await;
 
-    let mut parsed_url = url::Url::parse(&format!("{}/auth/oauth/github/login", server_url))
-        .map_err(|e| ApiError::Other(format!("Failed to parse server URL: {}", e)))?;
+    // Resolve the enabled auth provider from the public /auth/providers endpoint.
+    // The login route expects a typed provider ID (auth_<uuid>), not the legacy
+    // "github" slug — so we must look up the real ID first.
+    let provider_id = resolve_provider_id(server_url).await?;
+
+    let mut parsed_url = url::Url::parse(&format!(
+        "{}/auth/oauth/{}/login",
+        server_url, provider_id
+    ))
+    .map_err(|e| ApiError::Other(format!("Failed to parse server URL: {}", e)))?;
     parsed_url
         .query_pairs_mut()
         .append_pair("redirect_uri", &redirect_uri);

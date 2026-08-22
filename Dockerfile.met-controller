@@ -22,10 +22,14 @@
 # ==============================================================================
 FROM docker.io/rust:1.91.1-slim-bookworm AS builder
 
+# build-essential + cmake + perl: aws-lc-rs (via rustls/aws) compiles C code and needs cmake.
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
+    build-essential \
+    cmake \
+    perl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 builder
@@ -35,6 +39,11 @@ WORKDIR /app
 COPY --chown=builder:builder Cargo.toml Cargo.lock ./
 COPY --chown=builder:builder crates ./crates
 COPY --chown=builder:builder proto ./proto
+
+# /app is root-owned (WORKDIR), so pre-create writable dirs for the builder user.
+RUN mkdir -p /app/target /app/.cargo && chown -R builder:builder /app/target /app/.cargo
+
+ENV CARGO_HOME=/app/.cargo
 
 USER builder
 RUN cargo build --release --bin met-controller \

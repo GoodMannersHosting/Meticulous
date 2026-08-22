@@ -472,10 +472,30 @@ impl AgentIdentity {
     /// Save identity to file.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AgentError::Config(format!(
+                    "cannot create agent data directory {}: {e} (set MET_AGENT_DATA_DIR to a writable path)",
+                    parent.display()
+                ))
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
         }
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, contents)?;
+        std::fs::write(path, &contents).map_err(|e| {
+            AgentError::Config(format!(
+                "cannot write agent identity to {}: {e} (check permissions or set MET_AGENT_DATA_DIR)",
+                path.display()
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 
